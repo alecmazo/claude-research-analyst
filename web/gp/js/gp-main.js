@@ -1,0 +1,17497 @@
+/* GP Terminal main SPA — extracted from portfolio-gp.html */
+// ════════════════════════════════════════════════════════════════════════
+// GP Terminal — fully wired SPA
+// ════════════════════════════════════════════════════════════════════════
+(function () {
+  'use strict';
+
+  // ── Formatters ──────────────────────────────────────────────────
+  const fmtPx = (v) => {
+    if (v == null || isNaN(v)) return '—';
+    const abs = Math.abs(v);
+    if (abs >= 10000) return v.toLocaleString('en-US', { maximumFractionDigits: 0 });
+    return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+  const fmtPct = (v) => {
+    if (v == null || isNaN(v)) return '—';
+    return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+  };
+  const fmtUSD = (v) => {
+    if (v == null || isNaN(v)) return '—';
+    const n = Number(v);
+    if (Math.abs(n) >= 1e9) return '$' + (n/1e9).toFixed(2) + 'B';
+    if (Math.abs(n) >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M';
+    if (Math.abs(n) >= 1e3) return '$' + (n/1e3).toFixed(0) + 'K';
+    return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  };
+  // Full dollar formatting — never abbreviates (used in positions gain/loss columns).
+  // Optional dp = decimal places (default 2; pass 0 for whole-dollar panel totals).
+  const fmtUSDFull = (v, dp) => {
+    if (v == null || isNaN(v)) return '—';
+    const d = (dp == null) ? 2 : dp;
+    const n = Number(v);
+    const abs = Math.abs(n);
+    const sign = n < 0 ? '-' : '';
+    return sign + '$' + abs.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+  };
+  const cssClass = (v) => v == null ? 'nc' : (v >= 0 ? 'up' : 'dn');
+  // All timestamps displayed in Pacific Time (US West Coast).
+  const _PT = { timeZone: 'America/Los_Angeles' };
+  // Server timestamps are UTC but are often emitted WITHOUT a 'Z' (naive). new
+  // Date() then parses them as LOCAL time, so the UTC wall-clock was shown as-is
+  // (e.g. 7:19 PM instead of 12:19 PM Pacific). Treat a bare
+  // 'YYYY-MM-DD[ T]HH:MM[:SS][.ffffff]' as UTC; anything already carrying a zone
+  // (Z or ±HH:MM) is parsed as-is.
+  function _parseServerDate(iso) {
+    if (iso == null) return null;
+    if (typeof iso !== 'string') return new Date(iso);
+    let s = iso.trim();
+    // Repair "...+00:00Z" double suffix from some API serializers
+    if (/\+00:00Z$/.test(s)) s = s.replace(/\+00:00Z$/, 'Z');
+    if (/\+00:00$/.test(s)) s = s.replace(/\+00:00$/, 'Z');
+    const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)$/.exec(s);
+    return m ? new Date(m[1] + 'T' + m[2] + 'Z') : new Date(s);
+  }
+  window._parseServerDate = _parseServerDate;
+  const fmtDate  = (iso) => {
+    if (!iso) return '—';
+    const d = _parseServerDate(iso);
+    return (d && !isNaN(d)) ? d.toLocaleString('en-US',
+      { ..._PT, month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
+  };
+  /** Support tickets / trails: always Bay Area (America/Los_Angeles) with PT label. */
+  const fmtDatePT = (iso) => {
+    if (!iso) return '—';
+    // Tolerate API quirk like "...+00:00Z"
+    const cleaned = String(iso).replace(/\+00:00Z$/, 'Z').replace(/\+00:00$/, 'Z');
+    const d = _parseServerDate(cleaned);
+    if (!d || isNaN(d)) return '—';
+    return d.toLocaleString('en-US', {
+      ..._PT,
+      month: 'short', day: 'numeric', year: 'numeric',
+      hour: 'numeric', minute: '2-digit',
+    }) + ' PT';
+  };
+  window.fmtDatePT = fmtDatePT;
+
+  // ── Debug-only UI gating (?debug=1 shows diagnostic buttons) ───
+  const DEBUG_UI = new URLSearchParams(location.search).has('debug');
+
+  // ── Reusable destructive-action confirm modal ──────────────────
+  // dgaConfirm({title, message, confirmLabel, danger}) -> Promise<boolean>.
+  // Styled like the memo modals; Esc / backdrop / Cancel resolve false.
+  function dgaConfirm(opts) {
+    opts = opts || {};
+    return new Promise(function (resolve) {
+      document.getElementById('dga-confirm-modal')?.remove();
+      const overlay = document.createElement('div');
+      overlay.id = 'dga-confirm-modal';
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(10,22,40,0.65);z-index:10000;display:flex;align-items:center;justify-content:center;';
+      const danger = opts.danger !== false;
+      overlay.innerHTML =
+        '<div style="background:var(--surface,#fff);border-radius:10px;max-width:460px;width:92%;padding:22px 24px;box-shadow:0 18px 48px rgba(0,0,0,0.3);">'
+        + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">'
+        +   '<span style="font-size:17px;">' + (danger ? '⚠️' : 'ℹ️') + '</span>'
+        +   '<h3 style="margin:0;font-size:14.5px;color:var(--text-primary);">' + _cfEsc(opts.title || 'Are you sure?') + '</h3>'
+        + '</div>'
+        + '<div style="font-size:12.5px;color:var(--text-secondary);line-height:1.6;margin-bottom:18px;white-space:pre-line;">' + _cfEsc(opts.message || '') + '</div>'
+        + '<div style="display:flex;gap:10px;justify-content:flex-end;">'
+        +   '<button data-cf="cancel" type="button" style="background:var(--surface,#fff);border:1px solid var(--panel-edge,#cbd5e1);color:var(--text-secondary);padding:8px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Cancel</button>'
+        +   '<button data-cf="ok" type="button" style="background:' + (danger ? '#dc2626' : '#0A1628') + ';border:1px solid ' + (danger ? '#b91c1c' : '#0A1628') + ';color:#fff;padding:8px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">'
+        +     _cfEsc(opts.confirmLabel || (danger ? 'Delete' : 'Confirm')) + '</button>'
+        + '</div></div>';
+      function done(v) {
+        overlay.remove();
+        document.removeEventListener('keydown', onKey);
+        resolve(v);
+      }
+      function onKey(e) { if (e.key === 'Escape') done(false); }
+      overlay.addEventListener('click', function (e) { if (e.target === overlay) done(false); });
+      overlay.querySelector('[data-cf="cancel"]').addEventListener('click', function () { done(false); });
+      overlay.querySelector('[data-cf="ok"]').addEventListener('click', function () { done(true); });
+      document.addEventListener('keydown', onKey);
+      document.body.appendChild(overlay);
+      overlay.querySelector('[data-cf="ok"]').focus();
+    });
+  }
+  function _cfEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g,
+      c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+  window.dgaConfirm = dgaConfirm;
+
+  // ── Simple markdown → HTML ───────────────────────────────────
+  function renderMd(el, md) {
+    if (!md) { el.innerHTML = '<div class="tab-empty">No content.</div>'; return; }
+
+    // 1) Escape HTML
+    let text = md.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+    // 2) Parse markdown tables BEFORE other transforms (line-based)
+    //    Match: header row | --- row | one or more body rows
+    const lines = text.split('\n');
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      const next = lines[i+1] || '';
+      const isHdr = /^\s*\|.+\|\s*$/.test(line);
+      const isSep = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(next);
+      if (isHdr && isSep) {
+        const parseRow = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+        const headers = parseRow(line);
+        i += 2;
+        const rows = [];
+        while (i < lines.length && /^\s*\|.+\|\s*$/.test(lines[i])) {
+          rows.push(parseRow(lines[i]));
+          i++;
+        }
+        let html = '<table class="md-table"><thead><tr>';
+        for (const h of headers) html += `<th>${h}</th>`;
+        html += '</tr></thead><tbody>';
+        for (const r of rows) {
+          html += '<tr>';
+          for (const c of r) html += `<td>${c}</td>`;
+          html += '</tr>';
+        }
+        html += '</tbody></table>';
+        out.push(html);
+      } else {
+        out.push(line);
+        i++;
+      }
+    }
+    text = out.join('\n');
+
+    // 3) Apply other markdown transforms
+    let h = text
+      // Convert [[n]](url) AI citation syntax → [n](url) first
+      .replace(/\[\[([^\]]+)\]\]\(([^)]+)\)/g, '[$1]($2)')
+      // Convert [text](url) → <a> with target=_blank
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+      .replace(/^---+$/gm,'<hr>')
+      .replace(/^#### (.+)$/gm,'<h4>$1</h4>')
+      .replace(/^### (.+)$/gm,'<h3>$1</h3>')
+      .replace(/^## (.+)$/gm,'<h2>$1</h2>')
+      .replace(/^# (.+)$/gm,'<h2>$1</h2>')
+      .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+      .replace(/(?<!\*)\*(?!\*)([^*\n]+?)\*(?!\*)/g,'<em>$1</em>')
+      .replace(/`([^`]+)`/g,'<code>$1</code>')
+      .replace(/^[-*] (.+)$/gm,'<li>$1</li>')
+      .replace(/(<li>.*?<\/li>\n?)+/gs, s => '<ul>' + s + '</ul>');
+
+    // 4) Wrap paragraphs (split on blank lines, skip block elements)
+    const paragraphs = h.split(/\n{2,}/).map(p => {
+      const t = p.trim();
+      if (!t) return '';
+      if (/^<(h\d|ul|ol|table|hr|pre|blockquote|div)/i.test(t)) return t;
+      return '<p>' + t.replace(/\n/g, '<br>') + '</p>';
+    });
+    el.innerHTML = '<div class="md-body">' + paragraphs.join('\n') + '</div>';
+  }
+
+  // ── Generic job poller ────────────────────────────────────────
+  // onCanceled (optional): called when the job reports status 'canceled'
+  // (user hit a Cancel button — server discards the result, nothing saved).
+  function pollJob(jobId, pollPath, btn, idleLabel, onDone, onFail, onProgress, onCanceled) {
+    async function tick() {
+      try {
+        const r = await window.dgaFetch(pollPath + jobId);
+        const job = await r.json();
+        const pct = job.progress?.pct;
+        const lbl = job.progress?.label || '';
+        // Surface model/provider from job result while running when available
+        const res = job.result || {};
+        const modelHint = res.model || res.provider || job.model || job.provider || '';
+        if (pct != null) {
+          const pctInt = Math.round(pct * 100);
+          // If a progress renderer is supplied, use it (keeps the button clean).
+          // Otherwise fall back to writing into the button text.
+          if (typeof onProgress === 'function') onProgress(pctInt, lbl, job);
+          else {
+            const m = modelHint ? ' · ' + String(modelHint).slice(0, 22) : '';
+            btn.textContent = pctInt + '% — ' + (lbl || '…') + m;
+          }
+        } else if (typeof onProgress === 'function') {
+          onProgress(null, lbl, job);
+        } else if (modelHint && btn && btn.disabled) {
+          btn.textContent = '⏳ ' + String(modelHint).slice(0, 28) + '…';
+        }
+        if (job.status === 'done')   { clearInterval(iv); btn.disabled=false; btn.textContent=idleLabel; onDone(job); }
+        if (job.status === 'failed') { clearInterval(iv); btn.disabled=false; btn.textContent='❌ Failed'; setTimeout(()=>btn.textContent=idleLabel,3000); if(onFail) onFail(job); }
+        if (job.status === 'canceled' || job.status === 'cancelled') {
+          clearInterval(iv); btn.disabled = false; btn.textContent = idleLabel;
+          if (typeof onCanceled === 'function') onCanceled(job);
+        }
+      } catch { clearInterval(iv); btn.disabled=false; btn.textContent=idleLabel; }
+    }
+    tick(); // immediate first check
+    const iv = setInterval(tick, 3000);
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // LLM ACTION CATALOG — which model + est. cost for every paid click
+  // ══════════════════════════════════════════════════════════════
+  // Populated by /api/config/models. Used for button titles, run banners,
+  // and progress labels so you always know what's running and ~how much.
+  window.DGA_LLM = window.DGA_LLM || {
+    grok: 'grok',
+    claude: 'claude',
+    volume: { enabled: false, model: '—', configured: false },
+    est: {},
+  };
+
+  function _llmRng(arr, fallback) {
+    if (Array.isArray(arr) && arr.length >= 2 && arr[0] != null)
+      return '≈ $' + Number(arr[0]).toFixed(arr[0] < 0.1 ? 3 : 2)
+        + '–' + Number(arr[1]).toFixed(arr[1] < 0.1 ? 3 : 2);
+    return fallback || '≈ cost varies';
+  }
+
+  /** Describe an LLM action for UI. Keys: report_grok|report_claude|report_both|
+   *  daily_brief|intelligence|prioritize|pulse|agentic|strategist|lab_claude|podcast */
+  function llmDescribe(action) {
+    const cfg = window.DGA_LLM || {};
+    const est = cfg.est || {};
+    const vol = cfg.volume || {};
+    const volMaster = !!(vol.enabled && vol.configured);
+    const volRoutes = vol.routes || {};
+    const volJobs = vol.jobs || {};
+    /** Per-feature: master on AND job toggle on (or route says volume). */
+    function volFor(jobId) {
+      if (!volMaster) return false;
+      if (volRoutes[jobId]) return volRoutes[jobId] === 'volume';
+      if (jobId in volJobs) return volJobs[jobId] !== false;
+      return true;
+    }
+    const volModel = vol.model || 'volume';
+    const g = cfg.grok || 'grok';
+    const c = cfg.claude || 'claude';
+    const map = {
+      report_grok: {
+        action: 'Full equity report',
+        provider: 'grok',
+        model: g,
+        cost: _llmRng(est.grok_report, '≈ $0.30–0.60'),
+        paid: true,
+      },
+      report_claude: {
+        action: 'Full equity report',
+        provider: 'claude',
+        model: c,
+        cost: _llmRng(est.claude_report, '≈ $0.50–1.00'),
+        paid: true,
+      },
+      report_both: {
+        action: 'Full equity report (both engines)',
+        provider: 'grok+claude',
+        model: g + ' + ' + c,
+        cost: _llmRng(est.both_report, '≈ $0.80–1.60'),
+        paid: true,
+      },
+      daily_brief: volFor('daily_brief') ? {
+        action: 'Daily brief (volume)',
+        provider: 'volume',
+        model: volModel,
+        cost: _llmRng(est.daily_brief_volume, '≈ $0.01–0.05'),
+        paid: true,
+        note: 'Cheap volume model + free evidence pack',
+      } : {
+        action: 'Daily brief',
+        provider: 'grok',
+        model: g + ' + live X/web',
+        cost: _llmRng(est.daily_brief_grok, '≈ $0.15–0.50'),
+        paid: true,
+      },
+      intelligence: volFor('intelligence') ? {
+        action: 'Sector intelligence',
+        provider: 'volume',
+        model: volModel,
+        cost: _llmRng(est.intel_volume, '≈ $0.02–0.08'),
+        paid: true,
+      } : {
+        action: 'Sector intelligence',
+        provider: 'grok',
+        model: g + ' + live search',
+        cost: _llmRng(est.intel_grok, '≈ $0.20–0.60'),
+        paid: true,
+      },
+      prioritize: volFor('prioritize') ? {
+        action: 'Prioritize (Idea Generator)',
+        provider: 'volume',
+        model: volModel,
+        cost: _llmRng(est.prioritize_volume, '≈ $0.005–0.03'),
+        paid: true,
+      } : {
+        action: 'Prioritize (Idea Generator)',
+        provider: 'grok',
+        model: g,
+        cost: _llmRng(est.prioritize_grok, '≈ $0.02–0.08'),
+        paid: true,
+      },
+      pulse: volFor('market_pulse') ? {
+        action: 'Market pulse / ticker scan (volume)',
+        provider: 'volume',
+        model: volModel,
+        cost: _llmRng(est.pulse_volume || [0.002, 0.015], '≈ $0.002–0.015') + ' / ticker',
+        paid: true,
+        note: 'Cheap volume model + free Yahoo/Google headlines (no Grok live search)',
+      } : {
+        action: 'Market pulse / ticker scan',
+        provider: 'grok',
+        model: g + ' + live search',
+        cost: '≈ $' + Number(est.pulse_per_ticker || 0.03).toFixed(3) + ' / ticker',
+        paid: true,
+      },
+      agentic: {
+        action: 'DGA Capital Analyst (agentic)',
+        provider: 'claude',
+        model: cfg.agentic || c,
+        cost: _llmRng(est.agentic, '≈ $0.05–0.30'),
+        paid: true,
+      },
+      strategist: {
+        action: 'Portfolio Strategist',
+        provider: 'claude',
+        model: cfg.agentic || c,
+        cost: _llmRng(est.strategist, '≈ $0.30–1.00'),
+        paid: true,
+      },
+      lab_claude: {
+        action: 'LLM Lab · Claude compare report',
+        provider: 'claude',
+        model: c,
+        cost: _llmRng(est.claude_report, '≈ $0.50–1.00'),
+        paid: true,
+      },
+      podcast: {
+        action: 'Podcast script / audio',
+        provider: 'claude/grok',
+        model: 'Claude (script) + TTS',
+        cost: '≈ $0.20+ script · TTS extra',
+        paid: true,
+      },
+    };
+    // Fix prioritize model label when not volume
+    if (action === 'prioritize' && !volFor('prioritize')) {
+      map.prioritize.model = g; // screen uses GROK_SCREEN default via same Grok family
+    }
+    return map[action] || {
+      action: action || 'LLM job',
+      provider: '?',
+      model: '—',
+      cost: 'cost unknown',
+      paid: true,
+    };
+  }
+
+  function llmLabel(meta) {
+    if (!meta) return '';
+    return meta.provider.toUpperCase() + ' · ' + meta.model + ' · ' + meta.cost;
+  }
+
+  /** Short line for buttons / banners while a job runs. */
+  function llmRunningText(action, phase) {
+    const m = llmDescribe(action);
+    const ph = phase || 'Running';
+    return ph + ' · ' + m.model + ' · ' + m.cost;
+  }
+
+  /** Apply title + optional data attributes on a control so hover shows model/cost. */
+  function llmStampControl(el, action) {
+    if (!el) return;
+    const m = llmDescribe(action);
+    el.dataset.llmAction = action;
+    el.title = m.action + '\nModel: ' + m.model + '\nEst. cost: ' + m.cost
+      + (m.note ? '\n' + m.note : '')
+      + '\n(Actual $ shown when the job finishes, if available)';
+  }
+
+  /** Inject/update a small status line under a container. */
+  function llmSetStatus(el, action, phase, extra) {
+    if (!el) return;
+    const m = llmDescribe(action);
+    let line = el.querySelector('.llm-run-status');
+    if (!line) {
+      line = document.createElement('div');
+      line.className = 'llm-run-status';
+      el.appendChild(line);
+    }
+    const phaseTxt = phase || 'Ready';
+    line.innerHTML =
+      '<span class="llm-run-pill ' + (m.provider === 'volume' ? 'vol' : (m.provider === 'claude' || String(m.provider).indexOf('claude') >= 0 ? 'claude' : 'grok')) + '">'
+      + (m.provider || '').toString().toUpperCase() + '</span> '
+      + '<strong>' + phaseTxt + '</strong> · '
+      + '<span class="llm-mono">' + (m.model || '—') + '</span> · '
+      + '<span>' + (m.cost || '') + '</span>'
+      + (extra ? ' · <span>' + extra + '</span>' : '');
+    line.style.display = '';
+  }
+
+  function llmToast(action, phase) {
+    const m = llmDescribe(action);
+    const msg = (phase || 'Starting') + ': ' + m.model + ' · ' + m.cost;
+    try {
+      if (window.toast) window.toast(msg, { type: 'info', ttl: 3200 });
+    } catch (_) {}
+  }
+
+  /** Re-stamp all known LLM controls after config load / volume toggle. */
+  function llmRefreshAllStamps() {
+    const pairs = [
+      ['#hero-run-btn', 'report_grok'], // refined below by engine
+      ['#run-brief-btn', 'daily_brief'],
+      ['#ideas-brief-run', 'daily_brief'],
+      ['#trending-run-brief', 'daily_brief'],
+      ['#run-intel-btn', 'intelligence'],
+      ['#idea-gen-prioritize', 'prioritize'],
+      ['#agentic-run-btn', 'agentic'],
+      ['#strat-run-btn', 'strategist'],
+      ['#lab-runclaude-btn', 'lab_claude'],
+      ['#tr-agentic-run-btn', 'agentic'],
+      ['#rpulse-run', 'pulse'],
+      ['#ipulse-run', 'pulse'],
+      ['#reports-scan-btn', 'pulse'],
+      ['#reports-scan-all-btn', 'pulse'],
+    ];
+    pairs.forEach(function (p) {
+      const el = document.querySelector(p[0]);
+      if (!el) return;
+      let act = p[1];
+      if (p[0] === '#hero-run-btn') {
+        const eng = (document.getElementById('hero-llm') || {}).value || 'grok';
+        act = eng === 'claude' ? 'report_claude' : eng === 'both' ? 'report_both' : 'report_grok';
+      }
+      llmStampControl(el, act);
+    });
+    // Static chips near brief/intel if present
+    const briefMeta = document.getElementById('brief-meta');
+    if (briefMeta && !briefMeta.dataset.llmStamped) {
+      briefMeta.dataset.llmStamped = '1';
+    }
+  }
+
+
+  // ══════════════════════════════════════════════════════════════
+  // BOOK SNAPSHOT — right-rail card on Desk (research shell)
+  // ══════════════════════════════════════════════════════════════
+  function _deskEsc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function _deskRel(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    const min = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (min < 1) return 'just now';
+    if (min < 60) return min + 'm ago';
+    const hrs = Math.floor(min / 60);
+    if (hrs < 24) return hrs + 'h ago';
+    const days = Math.floor(hrs / 24);
+    if (days < 7) return days + 'd ago';
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+  // ── Desk free feeds: Market Wire + Fund Filings (zero LLM tokens) ──
+  function _feedEsc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function _feedRel(pubTs, filed) {
+    let ts = pubTs;
+    if (ts == null && filed) {
+      const d = new Date(filed + 'T12:00:00Z');
+      if (!isNaN(d.getTime())) ts = d.getTime() / 1000;
+    }
+    if (ts == null) return '';
+    const sec = Math.max(0, Date.now() / 1000 - Number(ts));
+    if (sec < 3600) return Math.max(1, Math.floor(sec / 60)) + 'm';
+    if (sec < 86400) return Math.floor(sec / 3600) + 'h';
+    return Math.floor(sec / 86400) + 'd';
+  }
+  function _formChipClass(form) {
+    const f = String(form || '').toUpperCase();
+    if (f.indexOf('8-K') === 0) return 'form-8k';
+    if (f.indexOf('10-Q') === 0 || f.indexOf('10-K') === 0 || f.indexOf('20-F') === 0) return 'form-10q';
+    if (f.indexOf('13') >= 0) return 'form-13';
+    return '';
+  }
+  function _renderMarketWire(body, data) {
+    if (!body) return;
+    const items = (data && data.items) || [];
+    if (!items.length) {
+      body.innerHTML = '<div class="feed-empty">No high-signal macro items in the last 48h '
+        + '(or RSS sources were quiet). Filings for your book are in <strong>Fund Filings</strong> below.</div>';
+      return;
+    }
+    const rows = items.map(function (it) {
+      const href = it.url || '#';
+      const age = _feedRel(it.pub_ts);
+      const feed = it.feed || it.publisher || 'Wire';
+      return '<a class="feed-row" href="' + _feedEsc(href) + '" target="_blank" rel="noopener">'
+        + '<div class="feed-row-main">'
+        + '<div class="feed-row-title">' + _feedEsc(it.title || '') + '</div>'
+        + '<div class="feed-row-meta">'
+        + '<span class="feed-chip signal">' + _feedEsc(feed) + '</span>'
+        + (age ? '<span>' + age + ' ago</span>' : '')
+        + '</div></div></a>';
+    }).join('');
+    const foot = '<div class="feed-foot">Macro/policy only · free RSS · no tokens'
+      + (data.deduped_vs_filings ? ' · stripped ' + data.deduped_vs_filings + ' filing-like headlines' : '')
+      + '</div>';
+    body.innerHTML = rows + foot;
+  }
+  function _renderFundFilings(body, data) {
+    if (!body) return;
+    const items = (data && data.items) || [];
+    if (data && data.ok === false) {
+      body.innerHTML = '<div class="feed-empty">' + _feedEsc(data.error || 'Filings unavailable') + '</div>';
+      return;
+    }
+    if (!items.length) {
+      body.innerHTML = '<div class="feed-empty">No high-signal SEC filings in the last '
+        + (data.lookback_days || 30) + ' days for your saved-report universe'
+        + (data.universe_size != null ? ' (' + data.universe_size + ' tickers)' : '')
+        + '. Form 4 noise is excluded. Try refresh after reports load.</div>';
+      return;
+    }
+    // Sticky-ish list: rows only in scroll area; footer outside scroll feels better
+    // but keep footer inside for one container — pin via sticky CSS
+    const rows = items.map(function (it) {
+      const href = it.url || '#';
+      const age = _feedRel(it.pub_ts, it.filed);
+      const form = it.form || '';
+      const chip = _formChipClass(form);
+      const itemsNote = it.items ? (' · items ' + it.items) : '';
+      const ageCls = (it.age_days != null && it.age_days <= 3) ? ' style="color:#15803d;font-weight:700;"' : '';
+      return '<a class="feed-row" href="' + _feedEsc(href) + '" target="_blank" rel="noopener">'
+        + '<span class="feed-tk">' + _feedEsc(it.ticker || '') + '</span>'
+        + '<div class="feed-row-main">'
+        + '<div class="feed-row-title">' + _feedEsc(form + itemsNote) + '</div>'
+        + '<div class="feed-row-meta">'
+        + '<span class="feed-chip ' + chip + '">' + _feedEsc(form) + '</span>'
+        + (it.filed ? '<span>filed ' + _feedEsc(it.filed) + '</span>' : '')
+        + (age ? '<span' + ageCls + '>' + age + ' ago</span>' : '')
+        + '</div></div></a>';
+    }).join('');
+    const n = data.universe_size != null ? data.universe_size : '—';
+    const matched = data.total_matched != null ? data.total_matched : items.length;
+    const shown = items.length;
+    const foot = '<div class="feed-foot" style="position:sticky;bottom:0;">EDGAR · saved reports '
+      + n + ' · showing ' + shown + (matched > shown ? ' of ' + matched : '')
+      + ' · last ' + (data.lookback_days || 30) + 'd · newest first · no Form 4</div>';
+    body.innerHTML = rows + foot;
+    // Ensure scroll starts at top (newest)
+    body.scrollTop = 0;
+  }
+  async function loadDeskFeeds(force) {
+    const mwBody = document.getElementById('mw-body');
+    const ffBody = document.getElementById('ff-body');
+    const mwAsOf = document.getElementById('mw-asof');
+    const ffAsOf = document.getElementById('ff-asof');
+    const mwBadge = document.getElementById('mw-badge');
+    const ffBadge = document.getElementById('ff-badge');
+    if (!mwBody && !ffBody) return;
+
+    if (!window._deskFeedsWired) {
+      window._deskFeedsWired = true;
+      const mwr = document.getElementById('mw-refresh');
+      const ffr = document.getElementById('ff-refresh');
+      if (mwr) mwr.addEventListener('click', function (e) {
+        e.stopPropagation();
+        _tabLoadedAt.research = 0;
+        loadDeskFeeds(true);
+      });
+      if (ffr) ffr.addEventListener('click', function (e) {
+        e.stopPropagation();
+        _tabLoadedAt.research = 0;
+        loadDeskFeeds(true);
+      });
+    }
+
+    if (mwBody) mwBody.innerHTML = '<div class="feed-empty">Loading macro wire…</div>';
+    if (ffBody) ffBody.innerHTML = '<div class="feed-empty">Scanning SEC for saved-report universe (newest first)…</div>';
+
+    try {
+      // force=1 only for client UX note — server cache is short; refresh bumps tab stale timer
+      const r = await window.dgaFetch(
+        '/api/v2/news/desk-feeds?market_limit=12&filings_limit=50&days=30'
+        + (force ? '&_=' + Date.now() : '')
+      );
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      const market = d.market_wire || {};
+      const filings = d.fund_filings || {};
+      _renderMarketWire(mwBody, market);
+      _renderFundFilings(ffBody, filings);
+      if (mwAsOf) mwAsOf.textContent = market.as_of || d.as_of || '—';
+      if (ffAsOf) {
+        const u = filings.universe_size != null ? filings.universe_size + ' tk · ' : '';
+        ffAsOf.textContent = u + (filings.as_of || d.as_of || '—');
+      }
+      if (mwBadge) mwBadge.textContent = ((market.items || []).length || 0) + ' items';
+      if (ffBadge) {
+        const n = (filings.items || []).length || 0;
+        const tot = filings.total_matched;
+        ffBadge.textContent = tot && tot > n ? (n + '/' + tot) : (n + ' filings');
+        ffBadge.title = filings.note || 'SEC EDGAR · saved reports · newest first';
+      }
+    } catch (e) {
+      if (mwBody) mwBody.innerHTML = '<div class="feed-empty">Market wire unavailable: ' + _feedEsc(e.message) + '</div>';
+      if (ffBody) ffBody.innerHTML = '<div class="feed-empty">Fund filings unavailable.</div>';
+    }
+  }
+
+  async function loadBookSnapshot() {
+    const bookBody = document.getElementById('desk-book-body');
+    const bookMeta = document.getElementById('desk-book-meta');
+    const openBtn = document.getElementById('desk-book-open');
+    if (openBtn && !openBtn._wired) {
+      openBtn._wired = true;
+      openBtn.addEventListener('click', function () { showTab('positions'); });
+    }
+    if (!bookBody) return;
+
+    async function safeJson(url) {
+      try {
+        const r = await window.dgaFetch(url);
+        if (!r.ok) return null;
+        return await r.json();
+      } catch (e) { return null; }
+    }
+
+    let pos = await safeJson('/api/v2/lp/me/positions');
+    if (!pos) pos = await safeJson('/api/watchlist');
+
+    try {
+      let totalMV = null, dayAbs = null, count = 0, asOf = '';
+      if (pos && Array.isArray(pos.positions)) {
+        totalMV = pos.total_market_value != null ? Number(pos.total_market_value) : null;
+        count = pos.positions.length;
+        asOf = pos.as_of || '';
+        let daySum = 0, ok = false;
+        pos.positions.forEach(function (p) {
+          if (p.day_change_abs != null && p.total_qty != null) {
+            daySum += Number(p.day_change_abs) * Number(p.total_qty || 0);
+            ok = true;
+          }
+        });
+        if (ok) dayAbs = daySum;
+      } else if (Array.isArray(pos)) {
+        count = pos.length;
+      } else if (pos && Array.isArray(pos.tickers)) {
+        count = pos.tickers.length;
+      }
+
+      if (bookMeta) bookMeta.textContent = asOf ? _deskRel(asOf) : (count ? (count + ' names') : '—');
+
+      if (totalMV != null) {
+        const dayCls = dayAbs == null ? '' : (dayAbs >= 0 ? 'up' : 'dn');
+        const dayStr = dayAbs == null ? '—' : ((dayAbs >= 0 ? '+' : '') + fmtUSD(dayAbs));
+        // Top 5 contributors by market value
+        let topHtml = '';
+        if (pos.positions && pos.positions.length) {
+          const top = pos.positions.slice().sort(function (a, b) {
+            return (b.market_value || 0) - (a.market_value || 0);
+          }).slice(0, 5);
+          topHtml = '<ul class="desk-list" style="margin-top:10px;">' + top.map(function (p) {
+            const tk = p.symbol || p.ticker || '—';
+            const mv = p.market_value != null ? fmtUSD(p.market_value) : '—';
+            const dp = p.day_change_pct != null ? Number(p.day_change_pct)
+                     : (p.pct_change != null ? Number(p.pct_change) : null);
+            const cls = dp == null ? '' : (dp >= 0 ? 'up' : 'dn');
+            const dps = dp == null ? '' : ('<span class="desk-chip ' + cls + '">' + (dp >= 0 ? '+' : '') + dp.toFixed(1) + '%</span>');
+            return '<li style="cursor:default;"><span class="desk-tk">' + _deskEsc(tk) + '</span>'
+              + dps + '<span class="desk-muted" style="margin-left:auto;">' + _deskEsc(mv) + '</span></li>';
+          }).join('') + '</ul>';
+        }
+        bookBody.innerHTML =
+          '<div class="desk-stat-row">'
+          + '<div><div class="desk-stat-lbl">Total MV</div>'
+          + '<div class="desk-stat-val" style="font-size:22px;">' + _deskEsc(fmtUSD(totalMV)) + '</div></div>'
+          + '<div><div class="desk-stat-lbl">Today</div>'
+          + '<div class="desk-stat-val" style="font-size:16px;"><span class="desk-chip ' + dayCls + '">' + _deskEsc(dayStr) + '</span></div></div>'
+          + '<div><div class="desk-stat-lbl">Positions</div>'
+          + '<div class="desk-stat-val" style="font-size:16px;">' + count + '</div></div>'
+          + '</div>'
+          + topHtml;
+      } else {
+        bookBody.innerHTML =
+          '<div class="desk-muted">Book detail loads when positions are available. '
+          + (count ? (count + ' watchlist names ready.') : 'Open Positions after a SnapTrade sync or YTD upload.')
+          + '</div>';
+      }
+    } catch (e) {
+      bookBody.innerHTML = '<div class="desk-muted">Book snapshot unavailable.</div>';
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // TAB ROUTING
+  // ══════════════════════════════════════════════════════════════
+  const TAB_LOADERS = {
+    positions: () => loadGPPositions(),
+    options:   () => loadOptionsTab(),
+    research:  () => {
+      loadBrief(); loadIdeaFeed(true);
+      // Market Pulse card (ui377): mount once, then only GET the latest
+      // persisted results — a scan NEVER auto-runs from tab activation.
+      _pulseMount('rpulse-panel', 'rpulse');
+      _pulseLoadLatest();
+      loadBookSnapshot();
+      loadDeskFeeds();
+    },
+    builder:   () => _initBuilderTab(),
+    lab:       () => _initLabTab(),
+    ideas:     () => loadIdeasTab(),
+    tracker:   () => loadTrackerTab(),
+    fund:      () => loadFundTab(),
+    settings:  () => loadSettingsTab(),
+    // reports tab removed (ui339) — superseded by the Quarterly Letter
+    // pipeline in Memos (AI-drafted sections, publish to LP portal + email).
+    memos:     () => loadMemosTab(),
+    transcripts: () => _initTranscriptsTab(),
+    financials: () => _initFinancialsTab(),
+  };
+
+  // Per-tab last-load timestamps: loaders run on first visit AND re-run
+  // automatically when the tab is revisited after its data has gone stale.
+  const TAB_STALE_MS = 5 * 60 * 1000;
+  const _tabLoadedAt = {};
+  function showTab(name) {
+    document.querySelectorAll('.topbar-link[data-tab]').forEach(l => {
+      l.classList.toggle('active', l.dataset.tab === name);
+    });
+    document.querySelectorAll('.tab-panel').forEach(p => {
+      p.classList.toggle('active', p.id === 'tab-' + name);
+    });
+    if (TAB_LOADERS[name]) {
+      const last = _tabLoadedAt[name] || 0;
+      if (Date.now() - last >= TAB_STALE_MS) {
+        _tabLoadedAt[name] = Date.now();
+        TAB_LOADERS[name]();
+      }
+    }
+  }
+  document.querySelectorAll('.topbar-link[data-tab]').forEach(l => {
+    l.addEventListener('click', () => showTab(l.dataset.tab));
+  });
+
+  // ── Options Wheel tab ──────────────────────────────────────────────────
+  let _optPoll = null;
+  function loadOptionsTab() {
+    const btn = document.getElementById('opt-scan-btn');
+    if (btn && !btn._wired) { btn._wired = true; btn.addEventListener('click', _optRunScan); }
+    const det = document.getElementById('opt-csp-details');
+    if (det && !det._wired) {
+      det._wired = true;
+      det.addEventListener('toggle', () => {
+        const c = document.getElementById('opt-csp-caret');
+        if (c) c.textContent = det.open ? '▾' : '▸';
+      });
+    }
+  }
+  async function _optRunScan() {
+    const btn = document.getElementById('opt-scan-btn');
+    const status = document.getElementById('opt-status');
+    let delta = parseFloat(document.getElementById('opt-delta').value);
+    if (!(delta > 0)) delta = 0.30;
+    delta = Math.max(0.05, Math.min(delta, 0.95));
+    if (_optPoll) { clearInterval(_optPoll); _optPoll = null; }
+    btn.disabled = true;
+    status.textContent = 'Queuing scan…';
+    document.getElementById('opt-cc').innerHTML = '';
+    document.getElementById('opt-csp').innerHTML = '';
+    try {
+      const r = await window.dgaFetch('/api/options/scan', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ delta_max: delta }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      status.textContent = `Scanning ${j.universe.length} names (holdings + watchlist + saved reports)${j.truncated ? ' — capped at ' + (j.cap || j.universe.length) : ''}…`;
+      _optPoll = setInterval(async () => {
+        try {
+          const pr = await window.dgaFetch('/api/options/scan/' + j.job_id);
+          const pj = await pr.json();
+          if (pj.label) status.textContent = pj.label;
+          if (pj.status === 'done') {
+            clearInterval(_optPoll); _optPoll = null; btn.disabled = false;
+            _optRenderResult(pj.result);
+          } else if (pj.status === 'error') {
+            clearInterval(_optPoll); _optPoll = null; btn.disabled = false;
+            status.textContent = '❌ ' + (pj.error || pj.label || 'scan failed');
+          }
+        } catch (e) { /* transient poll error — keep waiting */ }
+      }, 1500);
+    } catch (e) {
+      status.textContent = '❌ ' + e.message; btn.disabled = false;
+    }
+  }
+  function _optExpDate(iso) {
+    // 'YYYY-MM-DD' → 'Jun 11'. Parse at local midnight to avoid a UTC day-shift.
+    if (!iso) return '';
+    try {
+      const d = new Date(iso + 'T00:00:00');
+      if (isNaN(d)) return iso;
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    } catch (e) { return iso; }
+  }
+  function _optBucketCell(c, kind, sharesHeld) {
+    if (!c) return '<td style="color:#cbd5e1;text-align:center;">—</td>';
+    const yld = kind === 'cc' ? c.static_return_annualized : c.yield_on_cash_annualized;
+    const extra = kind === 'cc'
+      ? `cushion ${(c.downside_cushion * 100).toFixed(1)}%`
+      : `buy $${c.effective_buy_price}`;
+    const dateLbl = _optExpDate(c.expiration) || (c.dte + 'd');
+    // Covered-call premium $ you'd actually collect against the shares you hold:
+    // contracts = floor(shares / 100), income = contracts × premium × 100.
+    let incomeLine = '';
+    if (kind === 'cc' && sharesHeld && sharesHeld >= 100 && c.premium) {
+      const contracts = Math.floor(sharesHeld / 100);
+      const income = contracts * c.premium * 100;
+      incomeLine = `<div style="font-size:10.5px;color:#16a34a;font-weight:800;margin-top:3px;" title="${contracts} contracts (${(contracts*100).toLocaleString()} shares) × $${c.premium} premium">💰 ${fmtUSDFull(income, 0)} · ${contracts} contract${contracts !== 1 ? 's' : ''}</div>`;
+    }
+    return `<td style="font-variant-numeric:tabular-nums;">
+      <div style="font-weight:700;">$${c.strike} · ${dateLbl}<span style="font-weight:400;color:#94a3b8;font-size:10px;"> (${c.dte}d)</span></div>
+      <div style="font-size:11px;color:#64748b;">$${c.premium} · ${(yld * 100).toFixed(0)}% ann · Δ${c.assignment_prob}</div>
+      <div style="font-size:10px;color:#94a3b8;">${extra}</div>
+      ${incomeLine}
+    </td>`;
+  }
+  function _optTable(rows, kind) {
+    const key = kind === 'cc' ? 'covered_calls' : 'cash_secured_puts';
+    const ok = (rows || []).filter(r => r.ok && r[key]);
+    if (!ok.length) return '<div style="padding:16px;color:#94a3b8;font-size:12px;">No candidates found (no liquid strikes within your Δ cap, or no positions in this universe).</div>';
+    let html = `<table class="builder-result-table" style="width:100%;"><thead><tr>
+      <th>Ticker</th><th>Spot</th><th>IV/HV</th><th>Weekly</th><th>Monthly</th><th>Quarterly</th></tr></thead><tbody>`;
+    for (const r of ok) {
+      const m = r[key];
+      const rich = (r.iv_hv_ratio != null && r.iv_hv_ratio >= 1) ? '#16a34a' : '#64748b';
+      html += `<tr>
+        <td class="tk">${r.ticker}${r.held ? ' <span title="You hold this — covered call is actionable" style="font-size:9px;font-weight:700;letter-spacing:0.5px;color:#16a34a;border:1px solid #16a34a;border-radius:4px;padding:1px 4px;vertical-align:middle;">HELD</span>' : ''}</td>
+        <td style="font-variant-numeric:tabular-nums;">$${r.spot}</td>
+        <td style="color:${rich};font-weight:700;">${r.iv_hv_ratio != null ? r.iv_hv_ratio : '—'}</td>
+        ${_optBucketCell(m.weekly, kind, r.shares_held)}
+        ${_optBucketCell(m.monthly, kind, r.shares_held)}
+        ${_optBucketCell(m.quarterly, kind, r.shares_held)}
+      </tr>`;
+    }
+    return html + '</tbody></table>';
+  }
+  // Sum the covered-call premium $ across every HELD name (max contracts =
+  // shares//100) per tenor — the portfolio-wide income if you wrote them all.
+  function _optHeldPremiumTotals(rows) {
+    const tot = { weekly: 0, monthly: 0, quarterly: 0 };
+    (rows || []).forEach(function(r) {
+      if (!r.ok || !r.held || !r.shares_held || r.shares_held < 100) return;
+      const cc = r.covered_calls || {};
+      ['weekly', 'monthly', 'quarterly'].forEach(function(b) {
+        const c = cc[b];
+        if (c && c.premium) tot[b] += Math.floor(r.shares_held / 100) * c.premium * 100;
+      });
+    });
+    return tot;
+  }
+  function _optRenderResult(res) {
+    if (!res) return;
+    const tot = _optHeldPremiumTotals(res.covered_calls);
+    const totBanner = (tot.weekly || tot.monthly || tot.quarterly)
+      ? '<div style="padding:9px 13px;margin-bottom:10px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;font-size:12px;color:#166534;">'
+        + '💰 <strong>Premium on your full holdings</strong> if you write every covered call below — '
+        + 'weekly <strong>' + fmtUSDFull(tot.weekly, 0) + '</strong> · monthly <strong>' + fmtUSDFull(tot.monthly, 0) + '</strong> · quarterly <strong>' + fmtUSDFull(tot.quarterly, 0) + '</strong>'
+        + '<span style="color:#15803d;opacity:0.7;"> (max contracts = shares ÷ 100, across all accounts)</span>'
+        + '</div>'
+      : '';
+    document.getElementById('opt-cc').innerHTML = totBanner + _optTable(res.covered_calls, 'cc');
+    document.getElementById('opt-csp').innerHTML = _optTable(res.cash_secured_puts, 'csp');
+    document.getElementById('opt-status').textContent =
+      `Δ ≤ ${res.delta_max} · ${res.universe_size} names scanned · ${fmtDate(res.scanned_at)} · ranked by weekly annualized yield`;
+  }
+
+  // ── Quick Actions (panel removed — kept for any remaining data-action buttons) ──
+  document.querySelectorAll('.quick-btn[data-action]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const a = btn.dataset.action;
+      if (a === 'rebalance') { showTab('tracker'); }
+      else if (a === 'download')  { downloadPortfolio(); }
+      else if (a === 'intelligence') { showTab('ideas'); setTimeout(triggerIntel, 300); }
+      else if (a === 'tracker')   { showTab('tracker'); }
+    });
+  });
+
+  async function downloadPortfolio() {
+    try {
+      const r = await window.dgaFetch('/api/portfolio/summary');
+      if (!r.ok) { alert('No portfolio summary available yet.'); return; }
+      const d = await r.json();
+      const blob = new Blob([d.summary_md], { type: 'text/markdown' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'DGA_Portfolio_Summary.md';
+      a.click();
+    } catch { alert('Could not download portfolio summary.'); }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // RESEARCH TAB
+  // ══════════════════════════════════════════════════════════════
+
+  // ── Index ribbon ────────────────────────────────────────────────
+  // Track the last successful refresh so a failing/backgrounded feed shows a
+  // "stale" chip instead of silently freezing yesterday's prices.
+  let _idxLastOk = null;
+  const IDX_STALE_MS = 5 * 60 * 1000;
+  function _idxStaleChip() {
+    const wrap = document.querySelector('.ribbon-wrap');
+    if (!wrap) return;
+    let chip = document.getElementById('idx-stale-chip');
+    const stale = _idxLastOk == null || (Date.now() - _idxLastOk) > IDX_STALE_MS;
+    if (!stale) { if (chip) chip.remove(); return; }
+    const asOf = _idxLastOk
+      ? new Date(_idxLastOk).toLocaleTimeString('en-US', { ..._PT, hour: '2-digit', minute: '2-digit' })
+      : null;
+    if (!chip) {
+      chip = document.createElement('div');
+      chip.id = 'idx-stale-chip';
+      chip.style.cssText = 'position:absolute;top:4px;right:8px;display:inline-flex;align-items:center;gap:5px;'
+        + 'font-size:9.5px;font-weight:700;color:var(--warn-700,#92400e);background:var(--warn-50,#fffbeb);'
+        + 'border:1px solid var(--warn-500,#d97706);border-radius:9px;padding:1px 8px;z-index:5;pointer-events:none;';
+      wrap.style.position = 'relative';
+      wrap.appendChild(chip);
+    }
+    chip.innerHTML = '<span style="width:6px;height:6px;border-radius:50%;background:var(--warn-500,#d97706);display:inline-block;"></span>'
+      + (asOf ? ('stale ' + _cfEsc(asOf)) : 'quotes unavailable');
+    chip.title = asOf ? ('Index quotes last refreshed ' + asOf + ' PT') : 'Index quotes have not loaded yet';
+  }
+  async function loadIndices() {
+    try {
+      const r = await window.dgaFetch('/api/market/indices');
+      if (!r.ok) throw new Error('indices ' + r.status);
+      const data = await r.json();
+      const ribbon = document.getElementById('ribbon');
+      ribbon.innerHTML = (data.indices || []).map(idx => `
+        <div class="idx" data-symbol="${idx.symbol}">
+          <div class="idx-name">${idx.label}</div>
+          <div class="idx-row">
+            <div class="idx-px">${idx.price != null ? fmtPx(idx.price) : '—'}</div>
+            <div class="idx-chg ${cssClass(idx.pct)}">${fmtPct(idx.pct)}</div>
+          </div>
+        </div>
+      `).join('');
+      _idxLastOk = Date.now();
+    } catch (e) {
+      console.warn('[indices]', e);
+    }
+    _idxStaleChip();
+  }
+
+  // ── Quote staleness chip ────────────────────────────────────────
+  // /api/quotes rows carry `as_of` when the price is a stale store fallback
+  // (live source unavailable). Render a small amber chip so the user knows.
+  function _quoteStaleChip(q) {
+    if (!q || !q.as_of) return '';
+    const d = _parseServerDate(q.as_of);
+    const when = (d && !isNaN(d))
+      ? d.toLocaleString('en-US', { ..._PT, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      : String(q.as_of);
+    return ' <span class="q-stale" title="Store fallback price — as of ' + _cfEsc(when) + ' PT">stale</span>';
+  }
+
+  // ── Watchlist ───────────────────────────────────────────────────
+  async function loadWatchlist() {
+    try {
+      const r = await window.dgaFetch('/api/watchlist');
+      if (!r.ok) throw new Error('watchlist ' + r.status);
+      const data = await r.json();
+      renderWatchlist(data.tickers || [], data.quotes || {});
+    } catch (e) {
+      console.warn('[watchlist]', e);
+      document.getElementById('wl-rows').innerHTML =
+        '<div class="wl-row" style="opacity:0.6"><div><div class="wl-tk">—</div></div></div>';
+    }
+  }
+
+  function renderWatchlist(tickers, quotes) {
+    const rows = document.getElementById('wl-rows');
+    document.getElementById('wl-count').textContent = String(tickers.length);
+    if (!tickers.length) {
+      rows.innerHTML = `<div style="padding:14px; font-size:12px; color:var(--dim); text-align:center;">
+        No tickers yet. Add one below.
+      </div>`;
+      return;
+    }
+    rows.innerHTML = tickers.map(tk => {
+      const q = quotes[tk] || {};
+      return `
+        <div class="wl-row" data-ticker="${tk}">
+          <div>
+            <div class="wl-tk">${tk}${_quoteStaleChip(q)}</div>
+          </div>
+          <div class="wl-right">
+            <div class="wl-px">${q.price != null ? '$' + fmtPx(q.price) : '—'}</div>
+            <div class="wl-chg ${cssClass(q.pct)}">${fmtPct(q.pct)}</div>
+          </div>
+          <button class="wl-remove" data-remove="${tk}" title="Remove">×</button>
+        </div>
+      `;
+    }).join('');
+
+    rows.querySelectorAll('[data-remove]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const tk = btn.getAttribute('data-remove');
+        await window.dgaFetch(`/api/watchlist/${encodeURIComponent(tk)}`, { method: 'DELETE' });
+        loadWatchlist();
+      });
+    });
+    rows.querySelectorAll('.wl-row').forEach(row => {
+      row.addEventListener('click', (e) => {
+        if (e.target.closest('[data-remove]')) return;
+        const tk = row.getAttribute('data-ticker');
+        if (tk) openGuruFocus(tk);
+      });
+    });
+  }
+
+  // Add ticker handler
+  const $wlInput = document.getElementById('wl-input');
+  const $wlAdd = document.getElementById('wl-add-btn');
+  async function addWatchlist() {
+    const tk = ($wlInput.value || '').trim().toUpperCase();
+    if (!tk) return;
+    $wlAdd.disabled = true;
+    try {
+      const r = await window.dgaFetch('/api/watchlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker: tk }),
+      });
+      if (r.ok) {
+        $wlInput.value = '';
+        loadWatchlist();
+      }
+    } finally {
+      $wlAdd.disabled = false;
+    }
+  }
+  $wlAdd.addEventListener('click', addWatchlist);
+  $wlInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') addWatchlist(); });
+
+  // ── Saved Reports ───────────────────────────────────────────────
+  // Set of tickers that have a generated podcast audio episode — used to
+  // decide whether to render the 🎙️ button next to 🔬 in each row.
+  // Refreshed alongside the reports list.
+  window._podcastEpisodeTickers = new Set();
+
+  // ── 📈 Live Markets (TradingView Symbol Overview widget) ─────────
+  // Free widget — no API key, no token cost. Renders an inline area chart
+  // with a tab switcher across S&P/Nasdaq/Dow/VIX/10Y/DXY. Auto-themes
+  // to match light/dark mode via data-theme attribute.
+  function initLiveMarkets() {
+    const host = document.getElementById('tv-symbol-overview');
+    if (!host || host.dataset.loaded === '1') return;
+    host.dataset.loaded = '1';
+    // Clear any prior content (toggling themes re-mounts)
+    host.innerHTML = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'tradingview-widget-container';
+    wrap.style.cssText = 'height:100%;width:100%;';
+    const inner = document.createElement('div');
+    inner.className = 'tradingview-widget-container__widget';
+    inner.style.cssText = 'height:calc(100% - 32px);width:100%;';
+    wrap.appendChild(inner);
+    host.appendChild(wrap);
+
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const s = document.createElement('script');
+    s.type = 'text/javascript';
+    s.async = true;
+    s.src = 'https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js';
+    s.innerHTML = JSON.stringify({
+      symbols: [
+        // Licensing note: TradingView's free embed can't render licensed
+        // index/derivative feeds (SP:SPX, NASDAQ:NDX, DJ:DJI, CBOE:VIX,
+        // TVC:US10Y, TVC:DXY all show a "ghost" placeholder for free users).
+        // Use ETF proxies which are real-time + free and track the
+        // underlying instruments tightly.
+        ['S&P 500',     'AMEX:SPY|1D'],   // SPDR S&P 500 ETF
+        ['Nasdaq 100',  'NASDAQ:QQQ|1D'], // Invesco QQQ Trust
+        ['Dow Jones',   'AMEX:DIA|1D'],   // SPDR Dow Industrial ETF
+        ['Russell 2000','AMEX:IWM|1D'],   // iShares Russell 2000 ETF
+        ['VIX',         'AMEX:VIXY|1D'],  // ProShares VIX Short-Term Futures ETF
+        ['10Y Treasury','AMEX:IEF|1D'],   // iShares 7-10 Year Treasury Bond ETF (proxies 10Y; bond PRICE so inverse of yield)
+        ['Long Treasury','AMEX:TLT|1D'],  // iShares 20+ Year Treasury Bond ETF
+        ['US Dollar',   'AMEX:UUP|1D'],   // Invesco DB US Dollar Index Bullish Fund
+        ['Gold',        'TVC:GOLD|1D'],   // Free TVC continuous-CFD
+        ['Crude WTI',   'TVC:USOIL|1D'],  // Free TVC continuous-CFD
+        ['Bitcoin',     'BITSTAMP:BTCUSD|1D'],
+      ],
+      chartOnly: false,
+      width: '100%',
+      height: 400,
+      locale: 'en',
+      colorTheme: isDark ? 'dark' : 'light',
+      autoSize: true,
+      showVolume: false,
+      showMA: false,
+      hideDateRanges: false,
+      hideMarketStatus: false,
+      hideSymbolLogo: false,
+      scalePosition: 'right',
+      scaleMode: 'Normal',
+      fontFamily: 'Inter, -apple-system, sans-serif',
+      fontSize: '12',
+      noTimeScale: false,
+      valuesTracking: '1',
+      changeMode: 'price-and-percent',
+      chartType: 'area',
+      headerFontSize: 'medium',
+      lineWidth: 2,
+      lineType: 0,
+      maLineColor: '#5BB8D4',
+      maLineWidth: 1,
+      maLength: 9,
+      backgroundColor: isDark ? 'rgba(24, 34, 58, 0)' : 'rgba(255,255,255,0)',
+      lineColor: 'rgba(91, 184, 212, 1)',
+      topColor:  'rgba(91, 184, 212, 0.35)',
+      bottomColor: 'rgba(91, 184, 212, 0)',
+      // Date ranges shown as tabs. 'ytd|1D' is accepted by the TV widget
+      // and renders a "YTD" tab between 6M and 1Y.
+      dateRanges: ['1d|1','5d|5','1m|30','3m|60','6m|120','ytd|1D','12m|1D','60m|1W','all|1M'],
+    });
+    wrap.appendChild(s);
+  }
+  // Re-init the widget on theme change so colors swap.
+  document.addEventListener('DOMContentLoaded', function() {
+    const btn = document.getElementById('theme-toggle');
+    if (!btn) return;
+    btn.addEventListener('click', function() {
+      const host = document.getElementById('tv-symbol-overview');
+      if (host) { host.dataset.loaded = ''; setTimeout(initLiveMarkets, 80); }
+    });
+  });
+  window.initLiveMarkets = initLiveMarkets;
+
+  // ── 📰 Per-ticker news headlines (saved reports table) ──────────
+  // Pulls /api/news?tickers=A,B,C (server caches yfinance per-ticker
+  // for 15 min) — ZERO LLM token cost. Injects a 1-line clickable
+  // headline into the Ticker cell of every saved-report row.
+  async function loadNewsForReports() {
+    const tbody = document.getElementById('reports-tbody');
+    if (!tbody) return;
+    const rows = Array.from(tbody.querySelectorAll('tr[data-ticker]'));
+    if (!rows.length) { console.log('[news] no report rows yet'); return; }
+    const tickers = rows.map(r => r.getAttribute('data-ticker')).filter(Boolean);
+    if (!tickers.length) return;
+    // Tear down any previous rotation timer before rebuilding (re-render or
+    // refresh would otherwise leave orphaned intervals stacking up).
+    if (window._repNewsRotator) { clearInterval(window._repNewsRotator); window._repNewsRotator = null; }
+    try {
+      const r = await window.dgaFetch(
+        '/api/news?tickers=' + encodeURIComponent(tickers.join(',')) + '&limit=3'
+      );
+      if (!r.ok) { console.warn('[news] HTTP', r.status); return; }
+      const j = await r.json();
+      const newsMap = (j && j.news) || {};
+      const counts = {};
+      Object.keys(newsMap).forEach(k => counts[k] = (newsMap[k] || []).length);
+      console.log('[news] response counts', counts);
+      const rotating = [];   // lines that have >1 item to cycle through
+      let injected = 0;
+      const paint = function(line, item) {
+        // Wider column → show more of the headline (was 90 chars / 320px cap)
+        const title = (item.title || '').slice(0, 160);
+        const pub   = item.publisher ? ' · ' + item.publisher : '';
+        line.href = item.url || '#';
+        line.textContent = title + pub;
+        line.title = (item.title || '') + (item.publisher ? '  (' + item.publisher + ')' : '');
+      };
+      rows.forEach(row => {
+        const tk = row.getAttribute('data-ticker');
+        const items = (newsMap[tk] || []).filter(it => it && it.title);
+        if (!items.length) return;
+        const cell = row.querySelector('td:first-child');
+        if (!cell) return;
+        let line = cell.querySelector('.rep-news-line');
+        if (!line) {
+          line = document.createElement('a');
+          line.className = 'rep-news-line';
+          line.target = '_blank';
+          line.rel = 'noopener';
+          // Stop the row's "open report" click handler from firing
+          line.addEventListener('click', e => e.stopPropagation());
+          cell.appendChild(line);
+        }
+        paint(line, items[0]);
+        if (items.length > 1) {
+          line._items = items; line._idx = 0;
+          // Pause rotation while the user is reading (hovering) this headline.
+          line.addEventListener('mouseenter', () => { line._paused = true; });
+          line.addEventListener('mouseleave', () => { line._paused = false; });
+          rotating.push(line);
+        }
+        injected++;
+      });
+      console.log('[news] injected', injected, 'of', rows.length, 'rows;', rotating.length, 'rotating');
+      // One shared timer advances every rotating headline every 5s, fading
+      // out → swap → fade in so it reads like a ticker, not a flicker.
+      if (rotating.length) {
+        window._repNewsRotator = setInterval(() => {
+          rotating.forEach(line => {
+            if (line._paused || !line.isConnected) return;
+            line._idx = (line._idx + 1) % line._items.length;
+            line.style.opacity = '0';
+            setTimeout(() => { paint(line, line._items[line._idx]); line.style.opacity = ''; }, 220);
+          });
+        }, 5000);
+      }
+    } catch (e) {
+      console.warn('[news]', e);
+    }
+  }
+  window.loadNewsForReports = loadNewsForReports;
+
+  // ══════════════════════════════════════════════════════════════
+  // TRANSCRIPTS TAB — ingest YouTube, earnings sync, transcript-scoped AI
+  // ══════════════════════════════════════════════════════════════
+  // ── Shared markdown → HTML (used by every agentic answer renderer) ──
+  // Handles headings, bold/italic/code, bullet & numbered lists, horizontal
+  // rules, links, and GFM pipe TABLES. Wrap output in a .md-rendered div.
+  function _dgaEscHtml(s){ return (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+  function _dgaInline(s){
+    s = _dgaEscHtml(s);
+    s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/__(.+?)__/g, '<strong>$1</strong>');
+    s = s.replace(/(^|[^*\w])\*(?!\s)([^*]+?)\*(?![*\w])/g, '$1<em>$2</em>');
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    return s;
+  }
+  function _dgaMarkdown(md){
+    const lines = (md||'').replace(/\r\n/g, '\n').split('\n');
+    let html = '', i = 0, listType = null, listItems = [], para = [];
+    const flushList = () => { if (listItems.length){ html += '<'+listType+' class="md-list">'+listItems.map(x=>'<li>'+_dgaInline(x)+'</li>').join('')+'</'+listType+'>'; listItems=[]; listType=null; } };
+    const flushPara = () => { if (para.length){ html += '<p>'+_dgaInline(para.join(' '))+'</p>'; para=[]; } };
+    const flushAll  = () => { flushPara(); flushList(); };
+    const splitRow  = r => r.replace(/^\s*\|/,'').replace(/\|\s*$/,'').split('|').map(c=>c.trim());
+    while (i < lines.length){
+      const raw = lines[i], st = raw.trim();
+      // GFM table: header row with |, next line is the |---|---| separator
+      if (st.indexOf('|') >= 0 && i+1 < lines.length &&
+          /^\s*\|?[\s:|-]*-[\s:|-]*\|[\s:|-]*$/.test(lines[i+1])){
+        flushAll();
+        const heads = splitRow(st); i += 2; const rows = [];
+        while (i < lines.length && lines[i].indexOf('|') >= 0 && lines[i].trim()){ rows.push(lines[i]); i++; }
+        let t = '<table class="md-table"><thead><tr>'+heads.map(h=>'<th>'+_dgaInline(h)+'</th>').join('')+'</tr></thead><tbody>';
+        rows.forEach(r => { const c = splitRow(r); t += '<tr>'+c.map(x=>'<td>'+_dgaInline(x)+'</td>').join('')+'</tr>'; });
+        html += t + '</tbody></table>'; continue;
+      }
+      if (!st){ flushAll(); i++; continue; }
+      if (/^([-*_])\1{2,}$/.test(st)){ flushAll(); html += '<hr class="md-hr">'; i++; continue; }
+      let m = st.match(/^(#{1,4})\s+(.*)$/);
+      if (m){ flushAll(); html += '<div class="md-h md-h'+m[1].length+'">'+_dgaInline(m[2].replace(/#+$/,'').trim())+'</div>'; i++; continue; }
+      m = st.match(/^[-*•]\s+(.*)$/);
+      if (m){ flushPara(); if (listType && listType!=='ul') flushList(); listType='ul'; listItems.push(m[1]); i++; continue; }
+      m = st.match(/^\d+[.)]\s+(.*)$/);
+      if (m){ flushPara(); if (listType && listType!=='ol') flushList(); listType='ol'; listItems.push(m[1]); i++; continue; }
+      flushList(); para.push(st); i++;
+    }
+    flushAll();
+    return html || '<p>'+_dgaInline(md||'')+'</p>';
+  }
+  window._dgaMarkdown = _dgaMarkdown;
+
+  let _trWired = false;
+  function _trEsc(s){ return (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]); }
+  const _TR_TOOL_ICON = { get_quote:'💹', get_sector:'🏷', read_saved_report:'📄',
+    get_recent_news:'📰', list_saved_reports:'📚', get_financials:'📊', compute:'🧮',
+    get_ytd_attribution:'📈', web_search:'🌐', list_transcripts:'🎙️',
+    read_transcript:'📜', search_transcripts:'🔎', search_call_transcripts:'📞' };
+
+  function _initTranscriptsTab() {
+    if (!_trWired) { _wireTranscripts(); _trWired = true; }
+    _loadTranscriptList();
+    _loadCallCoverage();
+    loadTranscriptLog();   // refresh the saved Q&A log on each tab visit
+  }
+
+  function _wireTranscripts() {
+    const ingestBtn = document.getElementById('tr-ingest-btn');
+    if (ingestBtn) ingestBtn.addEventListener('click', _ingestYouTube);
+    const syncBtn = document.getElementById('tr-sync-btn');
+    if (syncBtn) syncBtn.addEventListener('click', _syncEarningsCalls);
+    const backfillBtn = document.getElementById('tr-backfill-btn');
+    if (backfillBtn) backfillBtn.addEventListener('click', () => _backfillCalls(false));
+    const restoreBtn = document.getElementById('tr-restore-btn');
+    if (restoreBtn) restoreBtn.addEventListener('click', () => _backfillCalls(true));
+    document.querySelectorAll('.tr-agentic-ex').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const q = document.getElementById('tr-agentic-q');
+        if (q) { q.value = chip.textContent.trim(); q.focus(); }
+      });
+    });
+    const aBtn = document.getElementById('tr-agentic-run-btn');
+    if (aBtn) aBtn.addEventListener('click', _runTranscriptAgentic);
+    const logRefresh = document.getElementById('tr-log-refresh');
+    if (logRefresh) logRefresh.addEventListener('click', () => loadTranscriptLog());
+  }
+
+  // ── Ingest a YouTube transcript ──
+  let _trIngestPoll = null;
+  async function _ingestYouTube() {
+    const url = (document.getElementById('tr-url').value || '').trim();
+    const person = (document.getElementById('tr-person').value || '').trim();
+    const status = document.getElementById('tr-ingest-status');
+    if (!url) { window.toast('Paste a YouTube URL first.', {type:'warn'}); return; }
+    const btn = document.getElementById('tr-ingest-btn');
+    btn.disabled = true; btn.textContent = '⏳ …';
+    if (_trIngestPoll) { clearInterval(_trIngestPoll); _trIngestPoll = null; }
+    const box = h => { status.innerHTML = h; };
+    try {
+      const r = await window.dgaFetch('/api/transcripts/youtube', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ url, person }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
+      const jobId = j.job_id;
+      const spin = (label) => box('<div style="background:var(--bg-subtle);border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:9px;"><span style="width:9px;height:9px;border-radius:50%;background:#9333ea;animation:spin 1.4s linear infinite;display:inline-block;"></span><span style="font-size:12px;font-weight:600;color:var(--text-primary);">'+_trEsc(label)+'</span></div>');
+      spin('Queued…');
+      const t0 = Date.now();
+      _trIngestPoll = setInterval(async () => {
+        if (Date.now() - t0 > 180000) { clearInterval(_trIngestPoll); _trIngestPoll=null; box('<div style="font-size:12px;color:var(--warn-700);">⚠ Timed out after 3 min.</div>'); btn.disabled=false; btn.textContent='Ingest ▶'; return; }
+        try {
+          const s = await (await window.dgaFetch('/api/transcripts/jobs/' + encodeURIComponent(jobId))).json();
+          if (s.status === 'done' && s.result) {
+            clearInterval(_trIngestPoll); _trIngestPoll=null;
+            const ents = (s.result.entities || []);
+            const chips = ents.map(e => '<span style="font-size:10.5px;background:'+(e.sentiment==='bull'?'#dcfce7':e.sentiment==='bear'?'#fee2e2':'var(--gray-100)')+';border:1px solid var(--border-subtle);padding:2px 8px;border-radius:11px;margin:0 4px 4px 0;display:inline-block;">'+(e.sentiment==='bull'?'▲ ':e.sentiment==='bear'?'▼ ':'')+_trEsc(e.company)+(e.ticker?' ('+_trEsc(e.ticker)+')':'')+'</span>').join('');
+            box('<div style="background:var(--success-50);border:1px solid #bbf7d0;border-radius:8px;padding:11px 13px;"><div style="font-size:12.5px;font-weight:700;color:var(--success-700);margin-bottom:6px;">✓ '+_trEsc(s.result.title||'Transcript')+' — '+(s.result.word_count||0).toLocaleString()+' words, '+ents.length+' companies</div>'+(chips?'<div style="margin-top:6px;">'+chips+'</div>':'<div style="font-size:11px;color:var(--text-tertiary);">No public companies extracted.</div>')+'</div>');
+            document.getElementById('tr-url').value = ''; document.getElementById('tr-person').value = '';
+            btn.disabled=false; btn.textContent='Ingest ▶';
+            _loadTranscriptList();
+            window.toast('✓ Transcript ingested.', {type:'success'});
+          } else if (s.status === 'error') {
+            clearInterval(_trIngestPoll); _trIngestPoll=null;
+            box('<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 12px;font-size:12px;color:#b91c1c;">❌ '+_trEsc(s.error||s.label||'failed')+'</div>');
+            btn.disabled=false; btn.textContent='Ingest ▶';
+          } else {
+            spin(s.label || 'Working…');
+          }
+        } catch(_) {}
+      }, 1800);
+    } catch (e) {
+      box('<div style="font-size:12px;color:#b91c1c;">❌ '+_trEsc(e.message)+'</div>');
+      btn.disabled=false; btn.textContent='Ingest ▶';
+    }
+  }
+
+  // ── Sync earnings calls ──
+  let _trSyncPoll = null;
+  async function _syncEarningsCalls() {
+    const status = document.getElementById('tr-sync-status');
+    const q = parseInt(document.getElementById('tr-sync-quarters').value || '4', 10);
+    const btn = document.getElementById('tr-sync-btn');
+    btn.disabled = true; btn.textContent = '⏳ Queuing…';
+    if (_trSyncPoll) { clearInterval(_trSyncPoll); _trSyncPoll=null; }
+    const box = h => { status.innerHTML = h; };
+    try {
+      const r = await window.dgaFetch('/api/transcripts/calls/sync', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ max_quarters: q }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
+      const jobId = j.job_id;
+      box('<div style="font-size:12px;color:var(--text-secondary);">📞 Indexing '+(j.tickers||[]).length+' tickers…</div>');
+      const t0 = Date.now();
+      _trSyncPoll = setInterval(async () => {
+        if (Date.now() - t0 > 1500000) { clearInterval(_trSyncPoll); _trSyncPoll=null; box('<div style="font-size:12px;color:var(--text-secondary);">Still indexing in the background — check coverage in a few minutes.</div>'); btn.disabled=false; btn.textContent='⚡ Latest calls (Grok)'; return; }
+        try {
+          const s = await (await window.dgaFetch('/api/transcripts/calls/sync/' + encodeURIComponent(jobId))).json();
+          if (s.status === 'done') {
+            clearInterval(_trSyncPoll); _trSyncPoll=null;
+            const n = (s.result && s.result.chunks_indexed) || 0;
+            const errs = (s.result && s.result.errors) || [];
+            if (n > 0) {
+              box('<div style="background:var(--success-50);border:1px solid #bbf7d0;border-radius:8px;padding:9px 12px;font-size:12px;color:var(--success-700);">✓ '+_trEsc(s.label||'Done')+'</div>');
+              window.toast('✓ Earnings calls indexed.', {type:'success'});
+            } else {
+              // 0 indexed — show WHY, with sample errors from the sync.
+              const errHtml = errs.length ? '<div style="margin-top:6px;font-family:\'SF Mono\',monospace;font-size:10.5px;color:#92400e;max-height:120px;overflow:auto;">'+errs.map(e=>_trEsc(e)).join('<br>')+'</div>' : '';
+              box('<div style="background:var(--warn-50);border:1px solid #fde68a;border-radius:8px;padding:10px 12px;font-size:12px;color:var(--warn-700);"><strong>'+_trEsc(s.label||'Indexed 0')+'</strong>'+errHtml+'<div style="margin-top:8px;"><button id="tr-probe-btn" style="font-size:11px;background:#fff;border:1px solid #fde68a;color:#92400e;padding:3px 9px;border-radius:5px;cursor:pointer;">Run diagnostic probe</button></div></div>');
+              const pb = document.getElementById('tr-probe-btn');
+              if (pb) pb.addEventListener('click', _probeApiNinjas);
+            }
+            btn.disabled=false; btn.textContent='⚡ Latest calls (Grok)';
+            _loadCallCoverage();
+          } else if (s.status === 'error') {
+            clearInterval(_trSyncPoll); _trSyncPoll=null;
+            box('<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:9px 12px;font-size:12px;color:#b91c1c;">❌ '+_trEsc(s.error||s.label||'failed')+'</div>');
+            btn.disabled=false; btn.textContent='⚡ Latest calls (Grok)';
+          } else {
+            box('<div style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#0ea5e9;animation:spin 1.4s linear infinite;display:inline-block;"></span>'+_trEsc(s.label||'Working…')+'</div>');
+          }
+        } catch(_) {}
+      }, 2500);
+    } catch (e) {
+      box('<div style="font-size:12px;color:#b91c1c;">❌ '+_trEsc(e.message)+'</div>');
+      btn.disabled=false; btn.textContent='⚡ Latest calls (Grok)';
+    }
+  }
+
+  // ── Backfill history from Hugging Face (or restore from Dropbox) ──
+  let _trBackfillPoll = null;
+  async function _backfillCalls(restore) {
+    const status = document.getElementById('tr-sync-status');
+    const years = parseInt(document.getElementById('tr-backfill-years').value || '3', 10);
+    const btn = document.getElementById(restore ? 'tr-restore-btn' : 'tr-backfill-btn');
+    const origLabel = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = restore ? '⏳ Restoring…' : '⏳ Pulling…'; }
+    if (_trBackfillPoll) { clearInterval(_trBackfillPoll); _trBackfillPoll = null; }
+    const box = h => { status.innerHTML = h; };
+    try {
+      const r = await window.dgaFetch('/api/transcripts/calls/backfill', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ years_back: years, restore_from_dropbox: !!restore }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
+      const jobId = j.job_id;
+      box('<div style="font-size:12px;color:var(--text-secondary);">'+(restore?'♻ Restoring from Dropbox…':'📚 Pulling years of calls from the dataset (first scan ~1 min)…')+'</div>');
+      const t0 = Date.now();
+      _trBackfillPoll = setInterval(async () => {
+        if (Date.now() - t0 > 1500000) { clearInterval(_trBackfillPoll); _trBackfillPoll=null; box('<div style="font-size:12px;color:var(--text-secondary);">Still indexing in the background — check coverage shortly.</div>'); if(btn){btn.disabled=false;btn.textContent=origLabel;} return; }
+        try {
+          const s = await (await window.dgaFetch('/api/transcripts/calls/sync/' + encodeURIComponent(jobId))).json();
+          if (s.status === 'done') {
+            clearInterval(_trBackfillPoll); _trBackfillPoll=null;
+            const n = (s.result && s.result.chunks_indexed) || 0;
+            // "0 new but calls found" = already up to date → treat as success.
+            const ok = n > 0 || ((s.result && s.result.transcripts) || 0) > 0;
+            box('<div style="background:'+(ok?'var(--success-50);border:1px solid #bbf7d0;color:var(--success-700)':'var(--warn-50);border:1px solid #fde68a;color:var(--warn-700)')+';border-radius:8px;padding:9px 12px;font-size:12px;">'+(ok?'✓ ':'⚠ ')+_trEsc(s.label||'Done')+'</div>');
+            if(btn){btn.disabled=false;btn.textContent=origLabel;}
+            _loadCallCoverage();
+            if (ok) window.toast(n>0?'✓ Earnings-call history indexed.':'✓ History already up to date.', {type:'success'});
+          } else if (s.status === 'error') {
+            clearInterval(_trBackfillPoll); _trBackfillPoll=null;
+            box('<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:9px 12px;font-size:12px;color:#b91c1c;">❌ '+_trEsc(s.error||s.label||'failed')+'</div>');
+            if(btn){btn.disabled=false;btn.textContent=origLabel;}
+          } else {
+            box('<div style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#9333ea;animation:spin 1.4s linear infinite;display:inline-block;"></span>'+_trEsc(s.label||'Working…')+'</div>');
+          }
+        } catch(_) {}
+      }, 2500);
+    } catch (e) {
+      box('<div style="font-size:12px;color:#b91c1c;">❌ '+_trEsc(e.message)+'</div>');
+      if(btn){btn.disabled=false;btn.textContent=origLabel;}
+    }
+  }
+
+  async function _probeApiNinjas() {
+    const status = document.getElementById('tr-sync-status');
+    const tk = (prompt('Probe API Ninjas earnings transcript for which ticker?', 'AAPL') || '').trim();
+    if (!tk) return;
+    status.innerHTML += '<div id="tr-probe-out" style="margin-top:8px;font-size:11px;color:var(--text-secondary);">Probing ' + _trEsc(tk) + '…</div>';
+    try {
+      const d = await (await window.dgaFetch('/api/transcripts/calls/probe?ticker=' + encodeURIComponent(tk))).json();
+      const rows = (d.attempts || []).map(a =>
+        '<div style="font-family:\'SF Mono\',monospace;font-size:10.5px;">' + _trEsc(a.quarter) + ': status ' + a.status +
+        (a.ok ? ' ✓ ' + a.transcript_chars + ' chars' : ' ✗ ' + _trEsc(String(a.error || '').slice(0,140)) + (a.keys ? ' keys=' + _trEsc(JSON.stringify(a.keys)) : '')) +
+        '</div>').join('');
+      document.getElementById('tr-probe-out').innerHTML =
+        '<div style="margin-top:6px;padding:8px 10px;background:var(--bg-subtle);border:1px solid var(--border-subtle);border-radius:6px;">' +
+        '<div style="font-size:11px;font-weight:700;margin-bottom:4px;">API Ninjas probe · key set: ' + (d.api_ninjas_key_set ? 'yes' : 'NO') + '</div>' + rows + '</div>';
+    } catch (e) {
+      document.getElementById('tr-probe-out').innerHTML = '<div style="color:#b91c1c;font-size:11px;">Probe failed: ' + _trEsc(e.message) + '</div>';
+    }
+  }
+
+  async function _loadCallCoverage() {
+    try {
+      const d = await (await window.dgaFetch('/api/transcripts/calls/coverage')).json();
+      const cov = (d && d.coverage) || [];
+      const badge = document.getElementById('tr-coverage-badge');
+      const el = document.getElementById('tr-coverage');
+      if (badge) badge.textContent = cov.length ? (cov.length + ' names') : 'empty';
+      if (el) el.innerHTML = cov.length
+        ? cov.map(c => '<span style="display:inline-block;margin:0 6px 4px 0;font-family:\'SF Mono\',monospace;font-size:10.5px;background:var(--gray-100);border:1px solid var(--border-subtle);padding:1px 7px;border-radius:9px;">'+_trEsc(c.ticker)+' · '+c.quarters+'q</span>').join('')
+        : 'No earnings calls indexed yet.';
+    } catch(_) {}
+  }
+
+  // ══ Financials tab ═══════════════════════════════════════════════
+  let _finWired = false;
+  function _finSyncUniverseUI() {
+    const sel = document.getElementById('fin-universe');
+    const row = document.getElementById('fin-custom-row');
+    const tickers = document.getElementById('fin-tickers');
+    if (!sel || !row) return;
+    const isCustom = sel.value === 'custom';
+    row.style.display = isCustom ? 'block' : 'none';
+    if (isCustom && tickers) {
+      tickers.placeholder = 'e.g. NVDA, AMD, INTC';
+      setTimeout(() => { try { tickers.focus(); } catch (_) {} }, 30);
+    }
+  }
+  function _initFinancialsTab() {
+    if (!_finWired) {
+      const sb = document.getElementById('fin-sync-btn');
+      if (sb) sb.addEventListener('click', _syncFinancials);
+      const cpb = document.getElementById('fin-custom-pull-btn');
+      if (cpb) cpb.addEventListener('click', () => {
+        const sel = document.getElementById('fin-universe');
+        if (sel) sel.value = 'custom';
+        _finSyncUniverseUI();
+        _syncFinancials();
+      });
+      const uni = document.getElementById('fin-universe');
+      if (uni) uni.addEventListener('change', _finSyncUniverseUI);
+      const ft = document.getElementById('fin-tickers');
+      if (ft) {
+        ft.addEventListener('input', function() { this.value = this.value.toUpperCase(); });
+        ft.addEventListener('keydown', e => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            const sel = document.getElementById('fin-universe');
+            if (sel && sel.value !== 'custom') sel.value = 'custom';
+            _finSyncUniverseUI();
+            _syncFinancials();
+          }
+        });
+      }
+      const ob = document.getElementById('fin-overnight-btn');
+      if (ob) ob.addEventListener('click', _runFinOvernightNow);
+      const bb = document.getElementById('fin-backup-btn');
+      if (bb) bb.addEventListener('click', _runFinBackupNow);
+      const nt = document.getElementById('fin-nightly-toggle');
+      if (nt) nt.addEventListener('change', () => _saveFinAutoSettings());
+      const mt = document.getElementById('fin-monthly-toggle');
+      if (mt) mt.addEventListener('change', () => _saveFinAutoSettings());
+      const ut = document.getElementById('fin-us-backfill-toggle');
+      if (ut) ut.addEventListener('change', () => _saveFinAutoSettings());
+      const cb = document.getElementById('fin-co-btn');
+      if (cb) cb.addEventListener('click', _viewFinCompany);
+      const ct = document.getElementById('fin-co-ticker');
+      if (ct) ct.addEventListener('keydown', e => { if (e.key === 'Enter') _viewFinCompany(); });
+      const rb = document.getElementById('fin-scr-btn');
+      if (rb) rb.addEventListener('click', _runFinScreen);
+      // ── Company dashboard wiring ──
+      const dl = document.getElementById('fin-dash-load');
+      if (dl) dl.addEventListener('click', () => _finDashLoad());
+      const dt = document.getElementById('fin-dash-ticker');
+      if (dt) {
+        dt.addEventListener('keydown', e => { if (e.key === 'Enter') _finDashLoad(); });
+        dt.addEventListener('input', function() { this.value = this.value.toUpperCase(); });
+      }
+      document.querySelectorAll('.fin-dash-seg').forEach(b => {
+        b.addEventListener('click', () => {
+          _finDashPeriod = b.dataset.p;
+          document.querySelectorAll('.fin-dash-seg').forEach(x => {
+            const on = x.dataset.p === _finDashPeriod;
+            x.style.background = on ? 'var(--blue)' : 'var(--bg-elevated)';
+            x.style.color = on ? '#fff' : 'var(--text-secondary)';
+          });
+          if (_finDashLast) _finDashLoad(_finDashLast);
+        });
+      });
+      // Value Line sheet
+      const vlo = document.getElementById('fin-vl-open');
+      if (vlo) vlo.addEventListener('click', () => {
+        const t = ((document.getElementById('fin-vl-ticker') || {}).value || '').trim().toUpperCase();
+        // One ticker fills both dashboard + Value Line sheet
+        if (t) _finDashLoad(t);
+      });
+      const vlt = document.getElementById('fin-vl-ticker');
+      if (vlt) {
+        vlt.addEventListener('input', function() { this.value = this.value.toUpperCase(); });
+        vlt.addEventListener('keydown', e => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            const t = (vlt.value || '').trim().toUpperCase();
+            if (t) _finDashLoad(t);
+          }
+        });
+      }
+      const vlp = document.getElementById('fin-vl-print');
+      if (vlp) vlp.addEventListener('click', () => {
+        if (!document.getElementById('fin-vl-sheet') || document.getElementById('fin-vl-sheet').style.display === 'none') {
+          if (window.toast) window.toast('Open a company sheet first', { type: 'warn' });
+          return;
+        }
+        window.print();
+      });
+      const vlpdf = document.getElementById('fin-vl-pdf');
+      if (vlpdf) vlpdf.addEventListener('click', () => _downloadFinVlPdf());
+      _finWired = true;
+      _finSyncUniverseUI();
+    }
+    _loadFinCoverage();
+    _loadFinSettings();
+    _loadFinVlLinks();
+    // Fill the dashboard's ticker datalist from store coverage (cheap DB call).
+    window.dgaFetch('/api/financials/coverage').then(r => r.json()).then(d => {
+      const list = document.getElementById('fin-dash-list');
+      if (list && d && d.coverage) {
+        list.innerHTML = d.coverage.map(c =>
+          '<option value="' + c.ticker + '">' + (c.entity_name || '') + '</option>').join('');
+      }
+    }).catch(() => {});
+    // Restore the last viewed company so the dashboard isn't blank on every visit.
+    if (!_finDashLast) {
+      let _last = null;
+      try { _last = localStorage.getItem('dga_fin_dash_last'); } catch (e) {}
+      const head = document.getElementById('fin-dash-head');
+      if (_last && head && head.style.display === 'none') {
+        const inp = document.getElementById('fin-dash-ticker');
+        if (inp) inp.value = _last;
+        _finDashLoad(_last);
+      }
+    }
+  }
+
+  // ══ Company Dashboard (GuruFocus-style — SVG, no chart lib, no LLM) ══
+  let _finDashPeriod = 'annual';
+  let _finDashLast = null;
+
+  const _GF = { blue:'#3b82f6', green:'#16a34a', orange:'#f59e0b', red:'#dc2626',
+                purple:'#8b5cf6', pink:'#ec4899', slate:'#64748b', gold:'#eab308' };
+  const _gfEsc = s => String(s == null ? '' : s).replace(/[&<>"]/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+  const _gfMoney = v => {
+    const n = v / 1e6, a = Math.abs(n);
+    return (n < 0 ? '-' : '') + (a >= 1000
+      ? (a/1000).toLocaleString('en-US', {maximumFractionDigits:1}) + 'B'
+      : a.toLocaleString('en-US', {maximumFractionDigits:0}) + 'M');
+  };
+  const _gfCount = v => {
+    const a = Math.abs(v);
+    return (v < 0 ? '-' : '') + (a >= 1e9 ? (a/1e9).toFixed(1)+'B'
+      : a >= 1e6 ? (a/1e6).toFixed(0)+'M' : a.toLocaleString('en-US'));
+  };
+  const _gfPctF = v => v.toFixed(Math.abs(v) < 3 ? 1 : 0) + '%';
+  // Market-cap / EV formatter — trillions aware (e.g. $5.04T), for the header card.
+  const _gfCap = v => {
+    if (v == null) return '—';
+    const a = Math.abs(v), s = v < 0 ? '-' : '';
+    if (a >= 1e12) return s + '$' + (a/1e12).toFixed(2) + 'T';
+    if (a >= 1e9)  return s + '$' + (a/1e9).toFixed(2) + 'B';
+    if (a >= 1e6)  return s + '$' + (a/1e6).toFixed(0) + 'M';
+    return s + '$' + a.toLocaleString('en-US', {maximumFractionDigits:0});
+  };
+
+  // Generic grouped-bar (+optional line, dual-axis) SVG chart panel.
+  // cfg = { labels:[], series:[{name,nameNeg?,color,colorNeg?,values,axis:'L'|'R',type:'bar'|'line'}],
+  //         fmtL, fmtR, clampL?:{lo,hi}, clampR?:{lo,hi} }
+  // clamp*: caps the AXIS range so one outlier period (e.g. a 400% dilution
+  // year) can't flatten every other bar — clipped bars draw to the edge, and
+  // the HTML hover tooltip always shows the true (unclipped) value.
+  function _gfChart(cfg) {
+    const W = 560, H = 268, padL = 82, padR = (cfg.series.some(s => s.axis === 'R') ? 74 : 14),
+          padT = 12, padB = 44, n = cfg.labels.length;
+    if (!n) return '<div style="padding:20px;font-size:12px;color:var(--text-tertiary);">No data.</div>';
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    // Chart text size in viewBox units — the SVG scales DOWN to its container
+    // (560 units ≈ 400-450 css px in the 2-col grid), so 17 units ≈ 12-13 real
+    // px. Smaller values render unreadably tiny.
+    const FS = 17;
+    const rng = (axis, clamp) => {
+      let lo = 0, hi = 0;
+      cfg.series.filter(s => (s.axis || 'L') === axis).forEach(s =>
+        s.values.forEach(v => { if (v != null && isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }));
+      if (clamp) { lo = Math.max(lo, clamp.lo); hi = Math.min(hi, clamp.hi); }
+      if (hi === lo) hi = lo + 1;
+      hi *= 1.06; if (lo < 0) lo *= 1.06;
+      return { lo, hi };
+    };
+    const L = rng('L', cfg.clampL), R = rng('R', cfg.clampR);
+    // Dual-axis zero ALIGNMENT (the GuruFocus look): both axes must put 0 at
+    // the same pixel, or a mostly-negative right series (dilution years) ends
+    // up hanging from the top of the plot. Pick a shared zero fraction z
+    // (≤0.38 from the bottom) and EXTEND each axis — never shrink data — so
+    // e.g. shares 0→4B becomes −2.3B→4B while ratio −26% gains +43% headroom.
+    if (padR > 20) {
+      const pref = r => { const neg = Math.max(0, -r.lo), pos = Math.max(0, r.hi);
+                          return (neg + pos) ? neg / (neg + pos) : 0; };
+      const z = Math.min(0.38, Math.max(pref(L), pref(R)));
+      if (z > 0.001) [L, R].forEach(r => {
+        const neg = Math.max(0, -r.lo), pos = Math.max(0, r.hi);
+        const T = Math.max(neg / z, pos / (1 - z));
+        r.lo = -z * T; r.hi = (1 - z) * T;
+      });
+    }
+    const yOf = (v, a) => { const r = a === 'R' ? R : L;
+      const vv = Math.max(r.lo, Math.min(r.hi, v));     // clip into axis range
+      return padT + plotH * (1 - (vv - r.lo) / (r.hi - r.lo)); };
+    const slotW = plotW / n;
+    const barSeries = cfg.series.filter(s => (s.type || 'bar') === 'bar');
+    const bw = Math.max(2, Math.min(14, (slotW * 0.72) / Math.max(1, barSeries.length)));
+    let svg = '';
+    // gridlines + left ticks
+    const fmtL = cfg.fmtL || _gfMoney, fmtR = cfg.fmtR || _gfPctF;
+    const fmtVal = (v, a) => (a === 'R' ? fmtR : fmtL)(v);
+    for (let i = 0; i <= 4; i++) {
+      const v = L.lo + (L.hi - L.lo) * i / 4, y = yOf(v, 'L');
+      svg += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="var(--border-subtle,#e2e8f0)" stroke-width="1"/>`
+           + `<text x="${padL - 8}" y="${(y + 6).toFixed(1)}" text-anchor="end" font-size="${FS}" fill="var(--text-secondary,#64748b)">${_gfEsc(fmtL(v))}</text>`;
+    }
+    if (padR > 20) for (let i = 0; i <= 4; i++) {
+      const v = R.lo + (R.hi - R.lo) * i / 4, y = yOf(v, 'R');
+      svg += `<text x="${W - padR + 8}" y="${(y + 6).toFixed(1)}" font-size="${FS}" fill="var(--text-secondary,#64748b)">${_gfEsc(fmtR(v))}</text>`;
+    }
+    // zero line
+    if (L.lo < 0) svg += `<line x1="${padL}" y1="${yOf(0,'L').toFixed(1)}" x2="${W - padR}" y2="${yOf(0,'L').toFixed(1)}" stroke="var(--text-tertiary,#94a3b8)" stroke-width="1"/>`;
+
+    // Full-height period hit zones (under bars) — hover a year/quarter to see every series for that period.
+    for (let i = 0; i < n; i++) {
+      const lines = [];
+      cfg.series.forEach(s => {
+        const v = (s.values || [])[i];
+        if (v == null || !isFinite(v)) return;
+        const a = s.axis || 'L';
+        const nm = (v < 0 && s.nameNeg) ? s.nameNeg : s.name;
+        const col = (v < 0 && s.colorNeg) ? s.colorNeg : s.color;
+        lines.push({ name: nm, val: fmtVal(v, a), color: col });
+      });
+      if (!lines.length) continue;
+      const tipHtml = `<div style="font-weight:700;margin-bottom:4px;opacity:.9;">${_gfEsc(cfg.labels[i])}</div>` +
+        lines.map(l =>
+          `<div style="display:flex;align-items:center;gap:6px;margin:2px 0;">` +
+          `<span style="width:8px;height:8px;border-radius:50%;background:${l.color};flex-shrink:0;"></span>` +
+          `<span style="flex:1;opacity:.85;">${_gfEsc(l.name)}</span>` +
+          `<span style="font-weight:700;font-variant-numeric:tabular-nums;">${_gfEsc(l.val)}</span></div>`
+        ).join('');
+      const hx = padL + slotW * i;
+      svg += `<rect class="gf-hit" data-tip="${_gfEsc(tipHtml)}" x="${hx.toFixed(1)}" y="${padT}" width="${slotW.toFixed(1)}" height="${plotH.toFixed(1)}" fill="transparent" style="cursor:crosshair;"/>`;
+    }
+
+    // bars — visible fill + slightly wider hit target for short bars
+    barSeries.forEach((s, si) => {
+      const a = s.axis || 'L', y0 = yOf(0, a);
+      s.values.forEach((v, i) => {
+        if (v == null || !isFinite(v)) return;
+        const x = padL + slotW * i + slotW / 2 - (barSeries.length * bw) / 2 + si * bw;
+        const y = yOf(v, a);
+        const col = (v < 0 && s.colorNeg) ? s.colorNeg : s.color;
+        const nm = (v < 0 && s.nameNeg) ? s.nameNeg : s.name;
+        const barY = Math.min(y, y0);
+        const barH = Math.max(1, Math.abs(y0 - y));
+        const tipHtml =
+          `<div style="font-weight:700;margin-bottom:3px;opacity:.9;">${_gfEsc(cfg.labels[i])}</div>` +
+          `<div style="display:flex;align-items:center;gap:6px;">` +
+          `<span style="width:8px;height:8px;border-radius:50%;background:${col};flex-shrink:0;"></span>` +
+          `<span style="opacity:.85;">${_gfEsc(nm)}</span>` +
+          `<span style="font-weight:800;font-variant-numeric:tabular-nums;margin-left:4px;">${_gfEsc(fmtVal(v, a))}</span></div>`;
+        // Visible bar
+        svg += `<rect x="${x.toFixed(1)}" y="${barY.toFixed(1)}" width="${(bw - 1).toFixed(1)}" height="${barH.toFixed(1)}" fill="${col}" rx="1" pointer-events="none"/>`;
+        // Hover target (min ~10px tall so short bars are easy to hit)
+        const hitPad = 3;
+        const hitH = Math.max(10, barH + hitPad * 2);
+        const hitY = Math.min(barY - hitPad, y0 - hitH / 2);
+        svg += `<rect class="gf-hit" data-tip="${_gfEsc(tipHtml)}" x="${(x - 2).toFixed(1)}" y="${hitY.toFixed(1)}" width="${(bw + 3).toFixed(1)}" height="${hitH.toFixed(1)}" fill="transparent" style="cursor:pointer;"/>`;
+      });
+    });
+    // lines + hover dots
+    cfg.series.filter(s => s.type === 'line').forEach(s => {
+      const a = s.axis || 'L';
+      let d = '', started = false;
+      s.values.forEach((v, i) => {
+        if (v == null || !isFinite(v)) { return; }
+        const x = padL + slotW * i + slotW / 2, y = yOf(v, a);
+        d += (started ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
+        started = true;
+        const tipHtml =
+          `<div style="font-weight:700;margin-bottom:3px;opacity:.9;">${_gfEsc(cfg.labels[i])}</div>` +
+          `<div style="display:flex;align-items:center;gap:6px;">` +
+          `<span style="width:10px;height:2.5px;background:${s.color};flex-shrink:0;"></span>` +
+          `<span style="opacity:.85;">${_gfEsc(s.name)}</span>` +
+          `<span style="font-weight:800;font-variant-numeric:tabular-nums;margin-left:4px;">${_gfEsc(fmtVal(v, a))}</span></div>`;
+        svg += `<circle class="gf-hit" data-tip="${_gfEsc(tipHtml)}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="7" fill="transparent" style="cursor:pointer;"/>`;
+        svg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="${s.color}" stroke="#fff" stroke-width="1" pointer-events="none"/>`;
+      });
+      if (d) svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2.5" pointer-events="none"/>`;
+    });
+    // x labels (thin out when crowded — wider text at FS 17 needs fewer labels)
+    const step = Math.ceil(n / 6);
+    cfg.labels.forEach((lb, i) => {
+      if (i % step) return;
+      svg += `<text x="${(padL + slotW * i + slotW / 2).toFixed(1)}" y="${H - 12}" text-anchor="middle" font-size="${FS}" fill="var(--text-secondary,#64748b)">${_gfEsc(lb)}</text>`;
+    });
+    // legend — a sign-colored series (colorNeg) gets BOTH chips so the legend
+    // never lies about what a red bar means.
+    const legend = cfg.series.map(s => {
+      const chip = (name, color, line) =>
+        `<span style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--text-secondary);margin-right:12px;">` +
+        (line ? `<span style="width:16px;height:2.5px;background:${color};display:inline-block;"></span>`
+              : `<span style="width:9px;height:9px;border-radius:50%;background:${color};display:inline-block;"></span>`) +
+        `${_gfEsc(name)}</span>`;
+      let h = chip(s.name, s.color, s.type === 'line');
+      if (s.colorNeg) h += chip(s.nameNeg || (s.name + ' (negative)'), s.colorNeg, false);
+      return h;
+    }).join('');
+    return `<div class="gf-chart-wrap" style="position:relative;border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;background:var(--bg-elevated);">`
+      + `<div style="margin-bottom:5px;">${legend}</div>`
+      + `<div style="position:relative;">`
+      + `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;overflow:visible;">${svg}</svg>`
+      + `<div class="gf-chart-tip" style="display:none;position:absolute;z-index:20;pointer-events:none;`
+      + `background:rgba(15,23,42,0.94);color:#fff;font-size:11.5px;line-height:1.35;`
+      + `padding:8px 10px;border-radius:7px;box-shadow:0 6px 18px rgba(0,0,0,0.22);`
+      + `white-space:nowrap;min-width:120px;max-width:280px;"></div>`
+      + `</div></div>`;
+  }
+
+  // Wire HTML tooltips for fundaments bar/line charts (native <title> is too flaky).
+  function _gfChartWireTips(root) {
+    (root || document).querySelectorAll('.gf-chart-wrap').forEach(wrap => {
+      if (wrap.dataset.tipWired === '1') return;
+      wrap.dataset.tipWired = '1';
+      const tip = wrap.querySelector('.gf-chart-tip');
+      if (!tip) return;
+      const plot = tip.parentElement;
+      const show = (el, ev) => {
+        const html = el.getAttribute('data-tip');
+        if (!html) return;
+        tip.innerHTML = html;
+        tip.style.display = 'block';
+        move(ev);
+      };
+      const move = (ev) => {
+        if (tip.style.display === 'none') return;
+        const rect = plot.getBoundingClientRect();
+        const cx = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
+        const cy = (ev.touches ? ev.touches[0].clientY : ev.clientY) - rect.top;
+        const tw = tip.offsetWidth || 140, th = tip.offsetHeight || 40;
+        let left = cx + 14, top = cy - th - 10;
+        if (left + tw > rect.width - 4) left = cx - tw - 10;
+        if (top < 4) top = cy + 16;
+        if (left < 4) left = 4;
+        tip.style.left = left + 'px';
+        tip.style.top = top + 'px';
+      };
+      const hide = () => { tip.style.display = 'none'; };
+      wrap.querySelectorAll('.gf-hit').forEach(el => {
+        el.addEventListener('mouseenter', e => show(el, e));
+        el.addEventListener('mousemove', move);
+        el.addEventListener('mouseleave', hide);
+        el.addEventListener('touchstart', e => { show(el, e); }, { passive: true });
+        el.addEventListener('touchmove', e => { move(e); }, { passive: true });
+        el.addEventListener('touchend', hide);
+      });
+    });
+  }
+
+  async function _finDashLoad(tkOverride) {
+    const inp = document.getElementById('fin-dash-ticker');
+    const tk = (tkOverride || (inp && inp.value) || '').trim().toUpperCase();
+    if (!tk) return;
+    _finDashLast = tk;
+    if (inp) inp.value = tk;
+    // Keep Value Line sheet ticker in sync (one ticker fills both panels)
+    const vlInp = document.getElementById('fin-vl-ticker');
+    if (vlInp) vlInp.value = tk;
+    const head = document.getElementById('fin-dash-head');
+    const grid = document.getElementById('fin-dash-grid');
+    const empty = document.getElementById('fin-dash-empty');
+    if (empty) empty.style.display = 'none';
+    if (head) { head.style.display = 'block'; head.innerHTML =
+      '<div style="font-size:12px;color:var(--text-tertiary);"><span class="spin" style="display:inline-block;">⟳</span> Loading ' + _gfEsc(tk) + ' from the store…</div>'; }
+    if (grid) grid.style.display = 'none';
+    const _rk = document.getElementById('fin-dash-ranks'); if (_rk) _rk.style.display = 'none';
+    const _ph = document.getElementById('fin-dash-price'); if (_ph) _ph.style.display = 'none';
+    const _tt = document.getElementById('fin-dash-ttm'); if (_tt) _tt.style.display = 'none';
+    const _pr = document.getElementById('fin-dash-peers'); if (_pr) _pr.style.display = 'none';
+    const _nt = document.getElementById('fin-dash-notes'); if (_nt) _nt.style.display = 'none';
+    // Fire dashboard + Value Line sheet in parallel (same ticker, two free DB endpoints)
+    const dashP = (async () => {
+      const r = await window.dgaFetch('/api/financials/' + encodeURIComponent(tk) + '/dashboard?period_type=' + _finDashPeriod);
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+      _finDashRender(d);
+      try { localStorage.setItem('dga_fin_dash_last', tk); } catch (e) {}
+    })();
+    const sheetP = (typeof _loadFinVlSheet === 'function')
+      ? _loadFinVlSheet(tk).catch(() => {})
+      : Promise.resolve();
+    try {
+      await dashP;
+    } catch (e) {
+      if (head) head.innerHTML = '<div style="font-size:12px;color:var(--red,#dc2626);">' + _gfEsc(e.message) + '</div>';
+    }
+    try { await sheetP; } catch (_) {}
+  }
+
+  // ── GuruFocus-style ranking cards (Financial Strength / Profitability / DGA Value) ──
+  function _rkFmt(v, fmt) {
+    if (v == null) return '—';
+    if (fmt === 'pct')     return v.toFixed(2) + '%';
+    if (fmt === 'int')     return String(Math.round(v));
+    if (fmt === 'score10') return Math.round(v) + '/10';
+    if (fmt === 'spread')  return (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+    return v.toFixed(2);                       // 'x' ratios
+  }
+  function _finRankCard(c, peerMeta) {
+    if (!c || !(c.metrics || []).length) return '';
+    const rank = c.rank;
+    const rc = rank == null ? 'var(--text-tertiary)' : rank >= 7 ? _GF.green : rank >= 4 ? _GF.orange : _GF.red;
+    const peerN = (c.peer_count != null ? c.peer_count : (peerMeta && peerMeta.peer_count));
+    const peerScope = c.peer_scope || (peerMeta && peerMeta.peer_scope);
+    const peerNote = peerN
+      ? ('Vs Industry uses ' + peerN + ' ' + (peerScope || 'peer') + ' names in the store (≥3 required per metric; blank if not).')
+      : 'Vs Industry blank — no industry/sector peers with financials in the store yet.';
+    const head =
+      `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">` +
+        `<span style="font-size:15px;font-weight:800;color:var(--text-primary);">${_gfEsc(c.title)}</span>` +
+        `<span style="flex:1;"></span>` +
+        `<div style="width:110px;height:8px;border-radius:99px;background:var(--gray-100,#f1f5f9);overflow:hidden;">` +
+          `<div style="height:100%;width:${rank == null ? 0 : Math.min(100, rank * 10)}%;background:${rc};border-radius:99px;"></div></div>` +
+        `<span style="font-size:15px;font-weight:800;color:${rc};" title="Mean of available Rating (own-history) percentiles">${rank == null ? '—' : rank}` +
+          `<span style="font-size:11px;color:var(--text-tertiary);font-weight:600;">/10</span></span>` +
+      `</div>` +
+      `<div style="font-size:10px;color:var(--text-tertiary);margin-bottom:8px;line-height:1.35;">` +
+        `Rating = vs this company's own history · Vs Industry = vs store peers · ${ _gfEsc(peerNote) }` +
+      `</div>`;
+    const GC = '1.4fr 0.7fr 1fr 1fr';
+    const colhead =
+      `<div style="display:grid;grid-template-columns:${GC};gap:8px;font-size:9px;font-weight:800;` +
+        `letter-spacing:.5px;text-transform:uppercase;color:var(--text-tertiary);padding-bottom:3px;">` +
+        `<span>Name</span><span style="text-align:right;">Current</span>` +
+        `<span title="Percentile vs this company's ≤12 fiscal years">Rating</span>` +
+        `<span title="Percentile vs industry/sector peers in the store — blank if &lt;3 peers">Vs Industry</span></div>`;
+    // Continuous 0–100 bars. Null → blank (do not invent a stub bar).
+    const bar = (pct, col, title) => pct == null
+      ? `<div style="height:9px;" title="${_gfEsc(title || 'No comparison data')}"></div>`
+      : `<div style="height:9px;border-radius:3px;background:var(--gray-100,#f1f5f9);overflow:hidden;" title="${_gfEsc((title || '') + ' · ' + pct + 'th pct')}">` +
+          `<div style="height:100%;width:${Math.max(3, Math.min(100, pct))}%;background:${col || '#94a3b8'};border-radius:3px;"></div></div>`;
+    const rows = (c.metrics || []).map(m => {
+      // Rating = own-history percentile ONLY. Never fall back to quality/industry —
+      // quality often equals ind_pct when multi-year prices are missing (value multiples),
+      // which made Rating and Vs Industry look identical (MSFT Value Rank ticket).
+      const ratePct = m.hist_pct != null ? m.hist_pct : null;
+      const rateCol = m.hist_color || '#94a3b8';
+      // Vs Industry = ind_pct only — never fall back to history.
+      const indPct = m.ind_pct != null ? m.ind_pct : null;
+      const indCol = m.ind_color || '#94a3b8';
+      const tip = [m.note,
+        ratePct != null ? ('Rating: ' + ratePct + 'th pct of own history') : 'Rating: blank (need multi-year history for this metric)',
+        indPct != null ? ('Industry: ' + indPct + 'th pct of peers') : 'Industry: blank (need ≥3 peers with this metric)',
+      ].filter(Boolean).join(' · ');
+      return `<div style="display:grid;grid-template-columns:${GC};gap:8px;align-items:center;` +
+          `padding:5px 0;border-top:1px solid var(--border-subtle);" title="${_gfEsc(tip)}">` +
+          `<span style="font-size:11.5px;color:var(--text-secondary);">${_gfEsc(m.name)}</span>` +
+          `<span style="font-size:12px;font-weight:700;color:var(--text-primary);text-align:right;` +
+            `font-variant-numeric:tabular-nums;">${_rkFmt(m.value, m.fmt)}</span>` +
+          bar(ratePct, rateCol, 'Own-history rating') +
+          bar(indPct, indCol, 'Vs industry peers') +
+        `</div>`;
+    }).join('');
+    return `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;` +
+      `background:var(--bg-elevated);">${head}${colhead}${rows}</div>`;
+  }
+  function _finRankCards(rc) {
+    if (!rc) return '';
+    const meta = { peer_scope: rc.peer_scope, peer_count: rc.peer_count };
+    const fs = _finRankCard(rc.financial_strength, meta);
+    const pr = _finRankCard(rc.profitability, meta);
+    const va = _finRankCard(rc.value, meta);
+    if (!fs && !pr && !va) return '';
+    return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start;">` +
+      `<div>${fs}</div>` +
+      `<div style="grid-row:span 2;">${va}</div>` +
+      `<div>${pr}</div></div>`;
+  }
+
+  function _finDashRender(d) {
+    const head = document.getElementById('fin-dash-head');
+    const grid = document.getElementById('fin-dash-grid');
+    const S = d.series || [], labels = S.map(x => x.label);
+    const col = k => S.map(x => x[k]);
+    const isAnnual = (d.period_type || 'annual') === 'annual';
+    const shareDeltaName = isAnnual ? 'Share Δ % (YoY)' : 'Share Δ % (QoQ)';
+    const shareDeltaNeg  = isAnnual ? 'Dilution % (YoY)' : 'Dilution % (QoQ)';
+
+    // ── Header: identity · DGA Score · DGA Value + valuation anchors ──
+    const sc = (d.dga_score || {}), comps = sc.components || {};
+    const grade = v => v == null ? 'var(--text-tertiary)'
+      : v >= 80 ? _GF.green : v >= 60 ? '#65a30d' : v >= 40 ? _GF.orange : _GF.red;
+    const compRow = (name, v) =>
+      `<div style="display:flex;align-items:center;gap:6px;margin:4px 0;">` +
+      `<span style="font-size:11.5px;color:var(--text-secondary);width:104px;">${name}</span>` +
+      `<div style="flex:1;height:6px;border-radius:99px;background:var(--gray-100,#f1f5f9);overflow:hidden;">` +
+      `<div style="height:100%;width:${v==null?0:v}%;background:${grade(v)};border-radius:99px;"></div></div>` +
+      `<span style="font-size:11.5px;font-weight:700;color:${grade(v)};width:26px;text-align:right;">${v==null?'—':v}</span></div>`;
+
+    const verdictCol = { 'Significantly Undervalued': _GF.green, 'Undervalued': '#65a30d',
+      'Fairly Valued': _GF.orange, 'Overvalued': '#ea580c', 'Significantly Overvalued': _GF.red };
+    const tg = d.targets || {};
+    // Key valuation ratios — TTM PE preferred; pure store data.
+    const km = d.key_metrics || {};
+    const _sgn = v => v == null ? 'var(--text-primary)' : v >= 0 ? _GF.green : _GF.red;
+    const _kmCell = (lbl, val, colr) =>
+      `<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;">` +
+      `<span style="font-size:11px;color:var(--text-tertiary);">${lbl}</span>` +
+      `<span style="font-size:12px;font-weight:700;color:${colr || 'var(--text-primary)'};font-variant-numeric:tabular-nums;">${val}</span></div>`;
+    const peLbl = 'P/E' + (km.pe_basis ? ' (' + km.pe_basis + ')' : '');
+    const kmGrid =
+      `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border-subtle);">` +
+        _kmCell(peLbl,          km.pe != null ? km.pe.toFixed(2) : '—') +
+        _kmCell('Market Cap',   _gfCap(km.market_cap)) +
+        _kmCell('EV / EBITDA',  km.ev_ebitda != null ? km.ev_ebitda.toFixed(2) + '×' : '—') +
+        _kmCell('Enterprise V', _gfCap(km.enterprise_value)) +
+        _kmCell('P/B',          km.pb != null ? km.pb.toFixed(2) : '—') +
+        _kmCell('FCF Yield',    km.fcf_yield_pct != null ? km.fcf_yield_pct.toFixed(1) + '%' : '—') +
+        _kmCell('Rev YoY',      km.rev_yoy_pct != null ? ((km.rev_yoy_pct>=0?'+':'') + km.rev_yoy_pct.toFixed(1) + '%') : '—', _sgn(km.rev_yoy_pct)) +
+        _kmCell('ROIC',         km.roic_pct != null ? km.roic_pct.toFixed(1) + '%' : '—') +
+      `</div>`;
+    const anchors = (d.valuation || []);
+    const maxAbs = Math.max(d.price || 0, ...anchors.map(a => Math.abs(a.value)), 1);
+    const aColor = k => k === 'dga' ? _GF.gold : k === 'target' ? _GF.blue : _GF.slate;
+    const anchorRows = anchors.map(a => {
+      const w = Math.min(100, Math.abs(a.value) / maxAbs * 100);
+      return `<div style="display:flex;align-items:center;gap:6px;margin:3px 0;">` +
+        `<span style="font-size:11px;color:var(--text-secondary);width:168px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_gfEsc(a.label)}</span>` +
+        `<div style="flex:1;position:relative;height:12px;background:var(--gray-100,#f1f5f9);border-radius:3px;">` +
+        `<div style="position:absolute;left:0;top:0;height:100%;width:${w}%;background:${a.value < 0 ? _GF.red : aColor(a.kind)};border-radius:3px;opacity:0.85;"></div>` +
+        (d.price ? `<div style="position:absolute;left:${Math.min(100, d.price / maxAbs * 100)}%;top:-2px;height:16px;border-left:2px dashed var(--text-primary);"></div>` : '') +
+        `</div><span style="font-size:11px;font-weight:700;color:var(--text-primary);width:66px;font-variant-numeric:tabular-nums;">$${a.value.toLocaleString('en-US',{maximumFractionDigits:2})}</span></div>`;
+    }).join('');
+
+    const sectorLine = [d.sector, d.industry].filter(Boolean).map(_gfEsc).join(' · ');
+    head.innerHTML =
+      `<div style="display:grid;grid-template-columns:1.1fr 1fr 1.4fr;gap:14px;align-items:stretch;">` +
+      // identity
+      `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;background:var(--bg-elevated);">` +
+        `<div style="font-size:15px;font-weight:800;color:var(--text-primary);">${_gfEsc(d.entity_name)} <span style="color:var(--text-tertiary);font-weight:600;">· ${_gfEsc(d.ticker)}</span></div>` +
+        (sectorLine ? `<div style="font-size:11px;color:var(--text-tertiary);margin-top:2px;">${sectorLine}</div>` : '') +
+        `<div style="font-size:22px;font-weight:800;color:var(--text-primary);margin-top:4px;font-variant-numeric:tabular-nums;">${d.price ? '$' + d.price.toLocaleString('en-US',{maximumFractionDigits:2}) : '—'}` +
+        (d.rating ? ` <span style="font-size:10px;font-weight:800;letter-spacing:0.5px;color:${_GF.green};border:1px solid ${_GF.green};border-radius:4px;padding:1px 6px;vertical-align:middle;">${_gfEsc(d.rating).toUpperCase()}</span>` : '') + `</div>` +
+        kmGrid +
+        `<div style="font-size:11.5px;color:var(--text-tertiary);margin-top:8px;">Targets — Grok: ${tg.grok ? '$'+tg.grok : '—'} · Claude: ${tg.claude ? '$'+tg.claude : '—'}${tg.as_of ? '<br>as of ' + _gfEsc(String(tg.as_of).slice(0,10)) : ''}</div>` +
+        `<div style="font-size:10px;color:var(--text-tertiary);margin-top:8px;">SEC XBRL store · ${_gfEsc(d.period_type)} · zero LLM tokens</div>` +
+      `</div>` +
+      // DGA score
+      `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;background:var(--bg-elevated);">` +
+        `<div style="font-size:10px;font-weight:800;letter-spacing:1px;color:var(--text-secondary);">DGA SCORE™</div>` +
+        `<div style="font-size:30px;font-weight:800;color:${grade(sc.total)};line-height:1.1;">${sc.total == null ? '—' : sc.total}<span style="font-size:13px;color:var(--text-tertiary);font-weight:600;"> /100</span></div>` +
+        compRow('Profitability', comps.profitability) + compRow('Growth', comps.growth) +
+        compRow('Fin. Strength', comps.financial_strength) + compRow('Predictability', comps.predictability) +
+        compRow('Value', comps.value) +
+        `<div style="font-size:10px;color:var(--text-tertiary);margin-top:6px;">30% profit · 25% growth · 20% strength · 15% pred · 10% value</div>` +
+      `</div>` +
+      // DGA value + anchors
+      `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;background:var(--bg-elevated);">` +
+        `<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">` +
+          `<span style="font-size:10px;font-weight:800;letter-spacing:1px;color:var(--text-secondary);">DGA VALUE™</span>` +
+          `<span style="font-size:20px;font-weight:800;color:var(--text-primary);">${d.dga_value ? '$' + d.dga_value.toLocaleString('en-US',{maximumFractionDigits:2}) : '—'}</span>` +
+          (d.verdict ? `<span style="font-size:10px;font-weight:800;background:#fef3c7;border:1px solid #fde68a;border-radius:5px;padding:2px 8px;color:${verdictCol[d.verdict]||'#7c5e00'};">${_gfEsc(d.verdict)}</span>` : '') +
+        `</div>` +
+        `<div style="margin-top:8px;">${anchorRows || '<span style="font-size:11px;color:var(--text-tertiary);">No valuation anchors (need a saved report + financials).</span>'}</div>` +
+        (d.price ? `<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:5px;">┆ dashed line = current price ($${d.price.toLocaleString('en-US',{maximumFractionDigits:2})})</div>` : '') +
+      `</div></div>`;
+    head.style.display = 'block';
+
+    // ── TTM strip (PM desk snapshot) ──
+    const ttmEl = document.getElementById('fin-dash-ttm');
+    const ttm = d.ttm || {};
+    if (ttmEl) {
+      if (ttm.periods) {
+        const cell = (lbl, val) =>
+          `<div style="flex:1;min-width:100px;"><div style="font-size:10px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--text-tertiary);">${lbl}</div>` +
+          `<div style="font-size:14px;font-weight:800;color:var(--text-primary);font-variant-numeric:tabular-nums;margin-top:2px;">${val}</div></div>`;
+        ttmEl.innerHTML =
+          `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:10px 14px;background:var(--bg-elevated);">` +
+          `<div style="font-size:10px;font-weight:800;letter-spacing:.6px;color:var(--text-secondary);margin-bottom:8px;">TTM SNAPSHOT · last ${ttm.periods} quarters${ttm.period_end ? ' through ' + _gfEsc(String(ttm.period_end).slice(0,10)) : ''}</div>` +
+          `<div style="display:flex;flex-wrap:wrap;gap:12px 20px;">` +
+            cell('Revenue', ttm.revenue != null ? '$' + _gfMoney(ttm.revenue) : '—') +
+            cell('Net Income', ttm.net_income != null ? '$' + _gfMoney(ttm.net_income) : '—') +
+            cell('FCF', ttm.free_cash_flow != null ? '$' + _gfMoney(ttm.free_cash_flow) : '—') +
+            cell('EPS', ttm.eps != null ? '$' + Number(ttm.eps).toFixed(2) : '—') +
+            cell('Net Margin', ttm.net_margin != null ? (ttm.net_margin * 100).toFixed(1) + '%' : '—') +
+            cell('FCF Margin', ttm.fcf_margin != null ? (ttm.fcf_margin * 100).toFixed(1) + '%' : '—') +
+          `</div></div>`;
+        ttmEl.style.display = 'block';
+      } else {
+        ttmEl.style.display = 'none';
+      }
+    }
+
+    // ── Chart panels (fundamentals + margins + ROIC) ──
+    grid.innerHTML = [
+      _gfChart({ labels, series: [
+        { name:'Revenue', color:_GF.blue,  values: col('revenue') },
+        { name:'Net Income', color:_GF.green, colorNeg:_GF.red, nameNeg:'Net Loss', values: col('net_income') },
+        { name:'EBITDA', color:_GF.orange, colorNeg:_GF.red, nameNeg:'EBITDA (neg)', values: col('ebitda') }] }),
+      _gfChart({ labels, fmtL:_gfPctF, series: [
+        { name:'Gross Margin %', color:_GF.blue, values: col('gross_margin_pct') },
+        { name:'Op. Margin %', color:_GF.orange, values: col('operating_margin_pct') },
+        { name:'Net Margin %', color:_GF.green, colorNeg:_GF.red, nameNeg:'Net Margin % (neg)', values: col('net_margin_pct') }] }),
+      _gfChart({ labels, series: [
+        { name:'Cash + STI', color:_GF.green, values: col('cash') },
+        { name:'Total Debt', color:_GF.red,   values: col('debt') }] }),
+      _gfChart({ labels, series: [
+        { name:'Operating CF', color:_GF.orange, colorNeg:_GF.red, nameNeg:'OCF (neg)', values: col('ocf') },
+        { name:'Free CF', color:_GF.blue, colorNeg:_GF.red, nameNeg:'FCF (neg)', values: col('fcf') },
+        { name:'Net Income', color:_GF.green, colorNeg:_GF.red, nameNeg:'Net Loss', values: col('net_income') },
+        { name:'Dividends', color:_GF.purple, values: col('dividends') },
+        { name:'Buybacks', color:_GF.pink, values: col('buybacks') }] }),
+      _gfChart({ labels, fmtL:_gfPctF, series: [
+        { name:'ROIC %', color:_GF.green, colorNeg:_GF.red, nameNeg:'ROIC % (neg)', values: col('roic_pct') },
+        { name:'WACC % (est.)', color:_GF.red, values: col('wacc_pct') },
+        { name:'ROIC − WACC', color:'var(--text-primary)', type:'line', values:
+          S.map(x => (x.roic_pct != null && x.wacc_pct != null) ? x.roic_pct - x.wacc_pct : null) }] }),
+      _gfChart({ labels, fmtL:_gfCount, fmtR:_gfPctF, clampR:{lo:-25, hi:25}, series: [
+        { name:'Shares Outstanding', color:_GF.blue, values: col('shares') },
+        { name: shareDeltaName, nameNeg: shareDeltaNeg, color:_GF.green, colorNeg:_GF.red,
+          axis:'R', values: col('buyback_ratio_pct') }] }),
+      _gfChart({ labels, series: [
+        { name:'Stockholders Equity', color:_GF.green, colorNeg:_GF.red, nameNeg:'Equity (neg)', values: col('equity') },
+        { name:'Total Assets', color:_GF.blue, values: col('assets') }] }),
+    ].join('');
+    grid.style.display = 'grid';
+    grid.style.gridTemplateColumns = 'repeat(auto-fit, minmax(380px, 1fr))';
+    grid.style.gap = '12px';
+    _gfChartWireTips(grid);   // hover tooltips with exact bar / period values
+
+    // ── Peer comps (sector/industry from free store) ──
+    const peersHost = document.getElementById('fin-dash-peers');
+    if (peersHost) {
+      const pc = d.peers || {};
+      const peers = pc.peers || [];
+      if (peers.length) {
+        const fmtX = v => v == null ? '—' : Number(v).toFixed(1) + '×';
+        const fmtPE = p => {
+          if (p.pe != null) return Number(p.pe).toFixed(1) + '×';
+          if (p.pe_nm) return '<span title="Not meaningful — negative or zero EPS">n/m</span>';
+          return '—';
+        };
+        const fmtP = v => v == null ? '—' : ((v >= 0 ? '+' : '') + Number(v).toFixed(1) + '%');
+        const fmtM = v => v == null ? '—' : _gfCap(v);
+        const headRow = `<tr style="font-size:9px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;color:var(--text-tertiary);">` +
+          `<th style="text-align:left;padding:4px 8px 6px 0;">Ticker</th>` +
+          `<th style="text-align:right;padding:4px 6px;">Price</th>` +
+          `<th style="text-align:right;padding:4px 6px;">Mkt Cap</th>` +
+          `<th style="text-align:right;padding:4px 6px;">P/E</th>` +
+          `<th style="text-align:right;padding:4px 6px;">EV/EBITDA</th>` +
+          `<th style="text-align:right;padding:4px 6px;">Net Mgn</th>` +
+          `<th style="text-align:right;padding:4px 0;">Rev YoY</th></tr>`;
+        const body = peers.map(p => {
+          const sub = p.is_subject;
+          const tkBtn = sub
+            ? `<strong style="color:var(--text-primary);">${_gfEsc(p.ticker)}</strong>`
+            : `<a href="#" data-fin-peer="${_gfEsc(p.ticker)}" style="color:var(--blue);font-weight:700;text-decoration:none;">${_gfEsc(p.ticker)}</a>`;
+          return `<tr style="border-top:1px solid var(--border-subtle);${sub ? 'background:rgba(91,184,212,0.08);' : ''}">` +
+            `<td style="padding:6px 8px 6px 0;font-family:'SF Mono',monospace;font-size:12px;">${tkBtn}` +
+              (p.name && p.name !== p.ticker ? `<span style="display:block;font-size:10px;color:var(--text-tertiary);font-family:inherit;font-weight:400;">${_gfEsc(String(p.name).slice(0,36))}</span>` : '') +
+            `</td>` +
+            `<td style="text-align:right;padding:6px;font-variant-numeric:tabular-nums;font-size:12px;">${p.price != null ? '$' + Number(p.price).toLocaleString('en-US',{maximumFractionDigits:2}) : '—'}</td>` +
+            `<td style="text-align:right;padding:6px;font-variant-numeric:tabular-nums;font-size:12px;">${fmtM(p.market_cap)}</td>` +
+            `<td style="text-align:right;padding:6px;font-variant-numeric:tabular-nums;font-size:12px;color:${p.pe_nm ? 'var(--text-tertiary)' : 'inherit'};">${fmtPE(p)}</td>` +
+            `<td style="text-align:right;padding:6px;font-variant-numeric:tabular-nums;font-size:12px;">${fmtX(p.ev_ebitda)}</td>` +
+            `<td style="text-align:right;padding:6px;font-variant-numeric:tabular-nums;font-size:12px;">${p.net_margin_pct != null ? Number(p.net_margin_pct).toFixed(1) + '%' : '—'}</td>` +
+            `<td style="text-align:right;padding:6px 0;font-variant-numeric:tabular-nums;font-size:12px;color:${_sgn(p.rev_yoy_pct)};">${fmtP(p.rev_yoy_pct)}</td></tr>`;
+        }).join('');
+        const scope = [pc.industry || pc.group_id, pc.sector].filter(Boolean).join(' · ') || 'covered names';
+        const methodNote = pc.note || 'Sell-side style: same industry / business model + similar market-cap band (not whole-sector mega-caps).';
+        const nWithPx = peers.filter(p => p.price != null).length;
+        const priceHint = nWithPx < peers.length
+          ? ' · prices filled free for comps when missing from store'
+          : '';
+        peersHost.innerHTML =
+          `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;background:var(--bg-elevated);">` +
+          `<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px;flex-wrap:wrap;">` +
+            `<span style="font-size:13px;font-weight:800;color:var(--text-primary);">Comparable companies</span>` +
+            `<span style="font-size:11px;color:var(--text-tertiary);">${_gfEsc(scope)} · free store${priceHint}</span>` +
+          `</div>` +
+          `<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;">${headRow}${body}</table></div>` +
+          `<div style="font-size:10px;color:var(--text-tertiary);margin-top:8px;">${_gfEsc(methodNote)} Click a ticker to load its dashboard. Pull SEC data for more names to fill multiples.</div>` +
+          `</div>`;
+        peersHost.style.display = 'block';
+        peersHost.querySelectorAll('[data-fin-peer]').forEach(a => {
+          a.addEventListener('click', e => {
+            e.preventDefault();
+            const t = a.getAttribute('data-fin-peer');
+            const inp = document.getElementById('fin-dash-ticker');
+            if (inp) inp.value = t;
+            _finDashLoad(t);
+          });
+        });
+      } else {
+        peersHost.style.display = 'none';
+      }
+    }
+
+    // ── Ranking cards (Financial Strength / Profitability / DGA Value) ──
+    const ranks = document.getElementById('fin-dash-ranks');
+    if (ranks) {
+      const html = _finRankCards(d.rank_cards);
+      ranks.innerHTML = html;
+      ranks.style.display = html ? 'block' : 'none';
+    }
+
+    // ── Methodology footnotes ──
+    const notesEl = document.getElementById('fin-dash-notes');
+    if (notesEl && d.notes) {
+      const n = d.notes;
+      notesEl.innerHTML =
+        `<strong style="color:var(--text-secondary);">Methodology</strong> · ` +
+        [n.pe, n.roic, n.wacc, n.share_delta, n.peers, n.tokens]
+          .filter(Boolean).map(_gfEsc).join(' · ');
+      notesEl.style.display = 'block';
+    }
+
+    // Interactive price chart (Tradier/Yahoo history) — defaults to YTD on each load.
+    _finPriceLoad(d.ticker, _finPriceRange);
+  }
+
+  // ══ Interactive price chart (GuruFocus-style — SVG, Tradier history) ══
+  const _FIN_PRICE_RANGES = ['5D','1M','3M','YTD','1Y','3Y','5Y','10Y','All'];
+  let _finPriceRange = 'YTD';
+  let _finPriceTk = null;
+
+  async function _finPriceLoad(tk, rng) {
+    tk = (tk || _finPriceTk || '').toUpperCase();
+    if (!tk) return;
+    _finPriceTk = tk; _finPriceRange = rng || _finPriceRange;
+    const host = document.getElementById('fin-dash-price');
+    if (!host) return;
+    host.style.display = 'block';
+    // Keep the range bar responsive: render shell immediately, then fill the plot.
+    host.innerHTML = _finPriceShell('<div style="height:300px;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary);font-size:12px;"><span class="spin" style="display:inline-block;margin-right:6px;">⟳</span> Loading ' + _gfEsc(tk) + ' ' + _gfEsc(_finPriceRange) + '…</div>');
+    _finPriceWireRanges();
+    try {
+      const r = await window.dgaFetch('/api/financials/' + encodeURIComponent(tk) + '/price-history?range=' + encodeURIComponent(_finPriceRange));
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+      host.innerHTML = _finPriceShell(_priceChart(d.points || [], d.stats || {}, _finPriceRange));
+      _finPriceWireRanges();
+      _priceWireHover();
+    } catch (e) {
+      host.innerHTML = _finPriceShell('<div style="height:120px;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary);font-size:12px;text-align:center;padding:0 12px;">' + _gfEsc(e.message) + '</div>');
+      _finPriceWireRanges();
+    }
+  }
+
+  // Range-button bar + stat line wrapper around the SVG plot.
+  function _finPriceShell(inner) {
+    const segs = _FIN_PRICE_RANGES.map(r => {
+      const on = r.toUpperCase() === _finPriceRange.toUpperCase();
+      return '<button class="fin-price-seg" data-r="' + r + '" style="border:none;padding:5px 11px;font-size:11px;font-weight:700;cursor:pointer;border-radius:6px;' +
+        (on ? 'background:var(--blue);color:#fff;' : 'background:var(--bg-elevated);color:var(--text-secondary);') + '">' + r + '</button>';
+    }).join('');
+    return '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;">' + segs + '</div>' +
+      '<div id="fin-price-stats" style="font-size:12px;margin-bottom:6px;min-height:16px;"></div>' +
+      '<div style="position:relative;">' + inner + '</div>';
+  }
+
+  function _finPriceWireRanges() {
+    document.querySelectorAll('.fin-price-seg').forEach(b => {
+      b.addEventListener('click', () => _finPriceLoad(_finPriceTk, b.dataset.r));
+    });
+  }
+
+  // Build the interactive SVG line/area chart + stat line. Returns HTML; call
+  // _priceWireHover() after injection to attach the crosshair.
+  function _priceChart(points, stats, rng) {
+    const pts = (points || []).filter(p => p && p.c != null);
+    if (pts.length < 2)
+      return '<div style="height:300px;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary);font-size:12px;">Not enough data to plot.</div>';
+    const W = 920, H = 320, padL = 8, padR = 64, padT = 14, padB = 26;
+    const n = pts.length;
+    const ys = pts.map(p => p.c);
+    let lo = Math.min(...ys), hi = Math.max(...ys);
+    const pad = (hi - lo) * 0.08 || (hi * 0.02) || 1;
+    lo -= pad; hi += pad;
+    const xOf = i => padL + (i / (n - 1)) * (W - padL - padR);
+    const yOf = v => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
+    const up = ys[n - 1] >= ys[0];
+    const lineCol = up ? '#16a34a' : '#dc2626';
+    const areaCol = up ? 'rgba(22,163,74,0.13)' : 'rgba(220,38,38,0.12)';
+
+    let dLine = '', dArea = '';
+    pts.forEach((p, i) => {
+      const x = xOf(i).toFixed(1), y = yOf(p.c).toFixed(1);
+      dLine += (i ? 'L' : 'M') + x + ' ' + y + ' ';
+      dArea += (i ? 'L' : 'M') + x + ' ' + y + ' ';
+    });
+    dArea += 'L' + xOf(n - 1).toFixed(1) + ' ' + (H - padB) + ' L' + xOf(0).toFixed(1) + ' ' + (H - padB) + ' Z';
+
+    // Y gridlines + right-axis price labels (5 ticks)
+    let grid = '', last = ys[n - 1];
+    for (let k = 0; k <= 4; k++) {
+      const v = lo + (hi - lo) * k / 4, y = yOf(v).toFixed(1);
+      grid += '<line x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y + '" y2="' + y + '" stroke="var(--border-subtle,#e2e8f0)" stroke-width="1" stroke-dasharray="2 4"/>' +
+        '<text x="' + (W - padR + 6) + '" y="' + (parseFloat(y) + 4) + '" font-size="12" fill="var(--text-tertiary,#94a3b8)">' + v.toFixed(v < 5 ? 2 : v < 1000 ? 1 : 0) + '</text>';
+    }
+    // X date labels (first / mid / last)
+    const fmtT = t => { const s = String(t); return s.length > 10 ? s.slice(5, 10) : s.slice(0, 10).slice(5) || s; };
+    let xlab = '';
+    [0, Math.floor((n - 1) / 2), n - 1].forEach(i => {
+      const x = xOf(i), anch = i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle';
+      xlab += '<text x="' + x.toFixed(1) + '" y="' + (H - 6) + '" font-size="12" fill="var(--text-tertiary,#94a3b8)" text-anchor="' + anch + '">' + _gfEsc(String(pts[i].t).slice(0, 10)) + '</text>';
+    });
+    // Dashed high/low guides
+    const guide = (v, col) => '<line x1="' + padL + '" x2="' + (W - padR) + '" y1="' + yOf(v).toFixed(1) + '" y2="' + yOf(v).toFixed(1) + '" stroke="' + col + '" stroke-width="1" stroke-dasharray="3 3" opacity="0.5"/>';
+    // Last-price pill on the right edge
+    const lpY = yOf(last);
+    const pill = '<rect x="' + (W - padR + 2) + '" y="' + (lpY - 11).toFixed(1) + '" width="' + (padR - 4) + '" height="22" rx="4" fill="' + lineCol + '"/>' +
+      '<text x="' + (W - padR / 2) + '" y="' + (lpY + 4).toFixed(1) + '" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">' + last.toFixed(last < 1000 ? 1 : 0) + '</text>';
+
+    // Serialize point coords for the hover handler (data attributes on the svg)
+    const xsAttr = pts.map((p, i) => xOf(i).toFixed(1)).join(',');
+    const csAttr = pts.map(p => p.c).join(',');
+    const tsAttr = pts.map(p => String(p.t).slice(0, 16)).join('|');
+
+    const svg = '<svg id="fin-price-svg" viewBox="0 0 ' + W + ' ' + H + '" width="100%" preserveAspectRatio="none" style="display:block;max-height:340px;cursor:crosshair;overflow:visible;"' +
+      ' data-xs="' + xsAttr + '" data-cs="' + csAttr + '" data-lo="' + lo + '" data-hi="' + hi + '" data-padt="' + padT + '" data-h="' + H + '" data-padb="' + padB + '" data-ts="' + _gfEsc(tsAttr) + '">' +
+      grid +
+      guide(Math.max(...ys), '#16a34a') + guide(Math.min(...ys), '#dc2626') +
+      '<path d="' + dArea + '" fill="' + areaCol + '" stroke="none"/>' +
+      '<path d="' + dLine + '" fill="none" stroke="' + lineCol + '" stroke-width="1.8" stroke-linejoin="round"/>' +
+      xlab + pill +
+      '<line id="fin-price-cross" x1="0" x2="0" y1="' + padT + '" y2="' + (H - padB) + '" stroke="var(--text-secondary,#64748b)" stroke-width="1" opacity="0"/>' +
+      '<circle id="fin-price-dot" r="3.5" fill="' + lineCol + '" stroke="#fff" stroke-width="1.5" opacity="0"/>' +
+      '</svg>' +
+      '<div id="fin-price-tip" style="position:absolute;pointer-events:none;display:none;background:var(--text-primary,#0f172a);color:#fff;font-size:11px;font-weight:600;padding:4px 8px;border-radius:5px;white-space:nowrap;transform:translate(-50%,-130%);z-index:5;"></div>';
+
+    // Stat line is filled after injection (so it can also colorize), but render
+    // the markup inline here and patch #fin-price-stats from the wire step.
+    setTimeout(() => _priceFillStats(stats, rng), 0);
+    return svg;
+  }
+
+  function _priceFillStats(stats, rng) {
+    const el = document.getElementById('fin-price-stats');
+    if (!el || !stats) return;
+    const sgn = v => v == null ? 'var(--text-secondary)' : v >= 0 ? '#16a34a' : '#dc2626';
+    const pf = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+    const item = (lbl, v, col) => '<span style="margin-right:18px;"><span style="color:var(--text-tertiary);">' + lbl + ':</span> <strong style="color:' + (col || sgn(v)) + ';">' + (typeof v === 'number' ? pf(v) : v) + '</strong></span>';
+    el.innerHTML =
+      item((stats.change_label || rng) + ' change', stats.change_pct) +
+      item('Above Low', stats.above_low_pct) +
+      item('Below High', stats.below_high_pct) +
+      (stats.last != null ? '<span style="float:right;color:var(--text-primary);font-weight:800;font-variant-numeric:tabular-nums;">$' + stats.last.toLocaleString('en-US', {maximumFractionDigits:2}) + '</span>' : '');
+  }
+
+  // Attach the crosshair / tooltip to the rendered SVG (re-wired on each load).
+  function _priceWireHover() {
+    const svg = document.getElementById('fin-price-svg');
+    const cross = document.getElementById('fin-price-cross');
+    const dot = document.getElementById('fin-price-dot');
+    const tip = document.getElementById('fin-price-tip');
+    if (!svg || !cross || !dot || !tip) return;
+    const xs = svg.dataset.xs.split(',').map(Number);
+    const cs = svg.dataset.cs.split(',').map(Number);
+    const ts = svg.dataset.ts.split('|');
+    const lo = +svg.dataset.lo, hi = +svg.dataset.hi;
+    const padT = +svg.dataset.padt, padB = +svg.dataset.padb, Hh = +svg.dataset.h;
+    const yOf = v => padT + (1 - (v - lo) / (hi - lo)) * (Hh - padT - padB);
+    const vbW = 920;
+    function move(ev) {
+      const rect = svg.getBoundingClientRect();
+      const px = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
+      const vx = px / rect.width * vbW;                 // → viewBox x
+      // nearest sample
+      let best = 0, bd = Infinity;
+      for (let i = 0; i < xs.length; i++) { const dd = Math.abs(xs[i] - vx); if (dd < bd) { bd = dd; best = i; } }
+      const x = xs[best], y = yOf(cs[best]);
+      cross.setAttribute('x1', x); cross.setAttribute('x2', x); cross.setAttribute('opacity', '0.55');
+      dot.setAttribute('cx', x); dot.setAttribute('cy', y.toFixed(1)); dot.setAttribute('opacity', '1');
+      tip.style.display = 'block';
+      tip.style.left = (x / vbW * rect.width) + 'px';
+      tip.style.top = (y / Hh * rect.height) + 'px';
+      tip.innerHTML = '<span style="opacity:.7;">' + _gfEsc(ts[best].replace('T', ' ')) + '</span><br>$' + cs[best].toLocaleString('en-US', {maximumFractionDigits:2});
+    }
+    function leave() { cross.setAttribute('opacity', '0'); dot.setAttribute('opacity', '0'); tip.style.display = 'none'; }
+    svg.addEventListener('mousemove', move);
+    svg.addEventListener('mouseleave', leave);
+    svg.addEventListener('touchmove', move, {passive: true});
+    svg.addEventListener('touchend', leave);
+  }
+
+  // millions, with commas; handles negatives and nulls
+  function _finM(v) {
+    if (v === null || v === undefined || v === '') return '—';
+    const n = Number(v) / 1e6;
+    if (!isFinite(n)) return '—';
+    return n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  }
+  function _finPct(v) {
+    if (v === null || v === undefined || v === '') return '—';
+    return (Number(v) * 100).toFixed(1) + '%';
+  }
+  function _finEps(v) {
+    if (v === null || v === undefined || v === '') return '—';
+    return Number(v).toFixed(2);
+  }
+
+  // Tiny inline-SVG sparkline (native — no chart lib). vals are chronological.
+  function _finSpark(vals, opts) {
+    opts = opts || {};
+    const w = opts.w || 150, h = opts.h || 34, pad = 3;
+    const nums = vals.filter(v => v !== null && v !== undefined && isFinite(v));
+    if (nums.length < 2) return '';
+    let mn = Math.min(...nums), mx = Math.max(...nums);
+    if (mn === mx) { mn -= 1; mx += 1; }
+    const span = mx - mn, n = vals.length;
+    const x = i => pad + (i * (w - 2 * pad) / (n - 1));
+    const y = v => pad + (h - 2 * pad) * (1 - (v - mn) / span);
+    let d = '', started = false;
+    vals.forEach((v, i) => {
+      if (v === null || v === undefined || !isFinite(v)) return;
+      d += (started ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(v).toFixed(1) + ' ';
+      started = true;
+    });
+    const col = opts.color || (nums[nums.length - 1] >= nums[0] ? '#16a34a' : '#dc2626');
+    let base = '';
+    if (mn < 0 && mx > 0) {
+      const zy = y(0).toFixed(1);
+      base = '<line x1="' + pad + '" y1="' + zy + '" x2="' + (w - pad) + '" y2="' + zy + '" stroke="var(--border-subtle)" stroke-width="1" stroke-dasharray="2,2"/>';
+    }
+    let li = -1;
+    for (let i = vals.length - 1; i >= 0; i--) { if (vals[i] !== null && vals[i] !== undefined && isFinite(vals[i])) { li = i; break; } }
+    const dot = li >= 0 ? '<circle cx="' + x(li).toFixed(1) + '" cy="' + y(vals[li]).toFixed(1) + '" r="2" fill="' + col + '"/>' : '';
+    return '<svg width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" style="display:block;">' + base + '<path d="' + d.trim() + '" fill="none" stroke="' + col + '" stroke-width="1.5"/>' + dot + '</svg>';
+  }
+  function _finSparkCard(label, vals, fmt) {
+    const svg = _finSpark(vals);
+    if (!svg) return '';
+    let last;
+    for (let i = vals.length - 1; i >= 0; i--) { const v = vals[i]; if (v !== null && v !== undefined && isFinite(v)) { last = v; break; } }
+    return '<div style="flex:1;min-width:128px;border:1px solid var(--border-subtle);border-radius:8px;padding:8px 10px;">' +
+      '<div style="font-size:10px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.5px;">' + label + '</div>' +
+      '<div style="font-size:13px;font-weight:700;color:var(--text-primary);margin:2px 0 4px;">' + (last !== undefined ? fmt(last) : '—') + '</div>' +
+      svg + '</div>';
+  }
+
+  // Collapse ticker-chip list when the store is large so the page stays usable
+  // after a full US pull (thousands of names). Threshold + helpers ready now;
+  // after the pull finishes, a refresh (or sync-complete) keeps the card compact.
+  const FIN_COVERAGE_COLLAPSE_AT = 40;   // auto-collapse chip list at/above this
+  const FIN_COVERAGE_CHIP_CAP = 120;     // max chips rendered when expanded (perf)
+
+  function _finCoverageCollapse(force) {
+    const det = document.getElementById('fin-coverage-details');
+    if (!det) return;
+    if (force === true) det.open = false;
+    else if (force === false) det.open = true;
+    _finCoverageSyncChevron();
+  }
+
+  function _finCoverageSyncChevron() {
+    const det = document.getElementById('fin-coverage-details');
+    const ch = document.getElementById('fin-coverage-chevron');
+    if (ch && det) ch.style.transform = det.open ? 'rotate(90deg)' : '';
+  }
+
+  // ── Value Line sheet (above Financials store) ─────────────────
+  let _finVlTicker = null;
+  function _vlMoney(v, unit) {
+    if (v == null || v === '' || (typeof v === 'number' && isNaN(v))) return '—';
+    const x = Number(v);
+    if (unit === '%') return (x >= 0 ? '' : '') + x.toFixed(1) + '%';
+    if (unit === 'x') return x.toFixed(2) + '×';
+    if (unit === '$/sh') return '$' + x.toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 2 });
+    if (unit === 'sh') {
+      const a = Math.abs(x);
+      if (a >= 1e9) return (x / 1e9).toFixed(2) + 'B';
+      if (a >= 1e6) return (x / 1e6).toFixed(1) + 'M';
+      return x.toLocaleString('en-US', { maximumFractionDigits: 0 });
+    }
+    const a = Math.abs(x), s = x < 0 ? '−' : '';
+    if (a >= 1e12) return s + '$' + (a / 1e12).toFixed(2) + 'T';
+    if (a >= 1e9) return s + '$' + (a / 1e9).toFixed(2) + 'B';
+    if (a >= 1e6) return s + '$' + (a / 1e6).toFixed(1) + 'M';
+    if (a >= 1e3) return s + '$' + (a / 1e3).toFixed(0) + 'K';
+    return s + '$' + a.toFixed(0);
+  }
+  function _vlTable(block, title) {
+    const labels = (block && block.labels) || [];
+    const rows = (block && block.rows) || [];
+    if (!labels.length || !rows.length) return '';
+    let head = '<tr><th style="text-align:left;min-width:140px;">' + _trEsc(title || '') + '</th>';
+    labels.forEach(l => { head += '<th>' + _trEsc(l) + '</th>'; });
+    head += '</tr>';
+    let body = '';
+    rows.forEach(r => {
+      const unit = r.unit || '$';
+      if (unit === 'section') {
+        body += '<tr class="sec"><td class="lab" colspan="' + (labels.length + 1) + '">'
+          + _trEsc(r.label || '') + '</td></tr>';
+        return;
+      }
+      body += '<tr><td class="lab">' + _trEsc(r.label || '') + '</td>';
+      (r.values || []).forEach(v => {
+        body += '<td class="num">' + _vlMoney(v, unit) + '</td>';
+      });
+      body += '</tr>';
+    });
+    return '<div class="fin-vl-scroll"><table class="fin-vl-table">' + head + body + '</table></div>';
+  }
+  async function _loadFinVlLinks() {
+    const host = document.getElementById('fin-vl-links');
+    if (!host) return;
+    try {
+      const j = await (await window.dgaFetch('/api/financials/sheet-links?limit=48')).json();
+      if (!j.ok) throw new Error(j.error || 'Failed');
+      const links = j.links || [];
+      if (!links.length) {
+        host.innerHTML = '<span style="font-size:11px;color:var(--text-tertiary);">No stored financials yet — pull SEC data below, then company links appear here.</span>';
+        return;
+      }
+      host.innerHTML = links.map(L => {
+        const followed = L.followed ? '<span class="dot" title="In your universe (reports/watchlist)"></span>' : '';
+        return '<a href="#" class="fin-vl-chip' + (_finVlTicker === L.ticker ? ' active' : '')
+          + '" data-vl-tk="' + _trEsc(L.ticker) + '" title="'
+          + _trEsc((L.name || '') + ' · ' + (L.annuals || 0) + ' FY · ' + (L.quarters || 0) + 'Q')
+          + '">' + followed + _trEsc(L.ticker) + '</a>';
+      }).join('');
+      host.querySelectorAll('[data-vl-tk]').forEach(a => {
+        a.addEventListener('click', e => {
+          e.preventDefault();
+          const t = a.getAttribute('data-vl-tk');
+          // Chip → both Company Dashboard and Financials sheet
+          if (typeof _finDashLoad === 'function') _finDashLoad(t);
+          else _loadFinVlSheet(t);
+        });
+      });
+    } catch (e) {
+      host.innerHTML = '<span style="font-size:11px;color:#b91c1c;">Could not load links: '
+        + _trEsc(e.message || e) + '</span>';
+    }
+  }
+  async function _loadFinVlSheet(ticker) {
+    const tk = (ticker || '').trim().toUpperCase();
+    if (!tk) return;
+    _finVlTicker = tk;
+    const empty = document.getElementById('fin-vl-empty');
+    const sheet = document.getElementById('fin-vl-sheet');
+    const inp = document.getElementById('fin-vl-ticker');
+    if (inp) inp.value = tk;
+    // highlight active chip
+    document.querySelectorAll('#fin-vl-links .fin-vl-chip').forEach(c => {
+      c.classList.toggle('active', c.getAttribute('data-vl-tk') === tk);
+    });
+    if (empty) empty.textContent = 'Loading ' + tk + '…';
+    if (empty) empty.style.display = 'block';
+    if (sheet) { sheet.style.display = 'none'; sheet.innerHTML = ''; }
+    try {
+      const d = await (await window.dgaFetch('/api/financials/' + encodeURIComponent(tk) + '/sheet')).json();
+      if (!d.ok) throw new Error(d.error || 'Failed');
+      const cap = d.capital || {};
+      const px = d.price != null
+        ? '$' + Number(d.price).toLocaleString('en-US', { maximumFractionDigits: 2 })
+        : '—';
+      const sectorLine = [d.industry, d.sector].filter(Boolean).join(' · ');
+      const capHtml =
+        '<div class="fin-vl-cap">' +
+          [['Recent price', px],
+           ['Market cap', _vlMoney(cap.market_cap)],
+           ['Enterprise val.', _vlMoney(cap.enterprise_value)],
+           ['P/E', _vlMoney(cap.pe, 'x')],
+           ['P/B', _vlMoney(cap.pb, 'x')],
+           ['EV/EBITDA', _vlMoney(cap.ev_ebitda, 'x')],
+           ['FCF yield', _vlMoney(cap.fcf_yield_pct, '%')],
+           ['Cash', _vlMoney(cap.cash)],
+           ['Total debt', _vlMoney(cap.total_debt)],
+           ['Book / sh', _vlMoney(cap.book_value_ps, '$/sh')],
+           ['Shares', _vlMoney(cap.shares, 'sh')],
+           ['FY end', cap.period_end ? String(cap.period_end).slice(0, 10) : '—'],
+          ].map(([k, v]) =>
+            '<div><div class="k">' + k + '</div><div class="v">' + v + '</div></div>'
+          ).join('') +
+        '</div>';
+      const head =
+        '<div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:4px;">' +
+          '<div>' +
+            '<div style="font-size:16px;font-weight:800;color:var(--text-primary);">'
+              + _trEsc(d.entity_name || tk)
+              + ' <span style="color:var(--text-tertiary);font-weight:600;">· ' + _trEsc(tk) + '</span></div>' +
+            (sectorLine ? '<div style="font-size:11px;color:var(--text-tertiary);margin-top:2px;">' + _trEsc(sectorLine) + '</div>' : '') +
+          '</div>' +
+          '<div style="font-size:10.5px;color:var(--text-tertiary);text-align:right;">Value Line–style · SEC store · '
+            + _trEsc(d.cost || 'zero tokens') + '<br>'
+            + 'Synced with Company Dashboard · '
+            + '<a href="#" id="fin-vl-to-dash" style="color:var(--blue);">↑ Dashboard</a></div>' +
+        '</div>';
+      const annualHtml = _vlTable(d.annual, 'Annual');
+      const qHtml = _vlTable(d.quarterly, 'Quarterly');
+      sheet.innerHTML = head + capHtml
+        + (annualHtml ? '<div style="font-size:11px;font-weight:800;letter-spacing:0.6px;text-transform:uppercase;color:var(--text-secondary);margin:12px 0 6px;">Statistical array (annual)</div>' + annualHtml : '')
+        + (qHtml ? '<div style="font-size:11px;font-weight:800;letter-spacing:0.6px;text-transform:uppercase;color:var(--text-secondary);margin:14px 0 6px;">Recent quarters</div>' + qHtml : '')
+        + '<div style="font-size:10px;color:var(--text-tertiary);margin-top:10px;line-height:1.45;">'
+        + 'Source: ' + _trEsc(d.source || 'company_financials') + '. '
+        + 'Print / Save PDF uses your browser (no server cost). Download PDF is generated on click only. Not investment advice.</div>';
+      sheet.style.display = 'block';
+      if (empty) empty.style.display = 'none';
+      // Keep dashboard ticker field matched (sheet may have been opened first)
+      const di = document.getElementById('fin-dash-ticker');
+      if (di && !di.value) di.value = tk;
+      const toDash = document.getElementById('fin-vl-to-dash');
+      if (toDash) toDash.addEventListener('click', e => {
+        e.preventDefault();
+        try {
+          (document.getElementById('fin-dash-panel') || document.getElementById('fin-dash-head'))
+            ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } catch (_) {}
+      });
+    } catch (e) {
+      if (empty) {
+        empty.style.display = 'block';
+        empty.innerHTML = '<span style="color:#b91c1c;">' + _trEsc(e.message || e) + '</span>'
+          + ' — pull SEC data for this ticker in the store below.';
+      }
+    }
+  }
+  async function _downloadFinVlPdf() {
+    const tk = _finVlTicker || ((document.getElementById('fin-vl-ticker') || {}).value || '').trim().toUpperCase();
+    if (!tk) {
+      if (window.toast) window.toast('Open a company sheet first', { type: 'warn' });
+      return;
+    }
+    try {
+      const r = await window.dgaFetch('/api/financials/' + encodeURIComponent(tk) + '/sheet.pdf');
+      if (!r.ok) {
+        let msg = 'PDF failed';
+        try { const j = await r.json(); msg = j.detail || j.error || msg; } catch (_) {}
+        throw new Error(msg);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = tk + '_DGA_Financials_Sheet.pdf';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => { try { URL.revokeObjectURL(url); } catch (_) {} }, 30_000);
+      if (window.toast) window.toast('PDF ready: ' + tk, { type: 'success' });
+    } catch (e) {
+      if (window.toast) window.toast(String(e.message || e), { type: 'error' });
+    }
+  }
+
+  async function _loadFinCoverage() {
+    try {
+      const d = await (await window.dgaFetch('/api/financials/coverage')).json();
+      const cov = (d && d.coverage) || [];
+      const badge = document.getElementById('fin-coverage-badge');
+      const el = document.getElementById('fin-coverage');
+      const sumTxt = document.getElementById('fin-coverage-summary-text');
+      const hint = document.getElementById('fin-store-compact-hint');
+      const det = document.getElementById('fin-coverage-details');
+      if (badge) badge.textContent = cov.length ? (cov.length.toLocaleString() + ' names') : 'empty';
+      if (sumTxt) {
+        sumTxt.textContent = cov.length
+          ? ('Covered names · ' + cov.length.toLocaleString()
+             + (cov.length >= FIN_COVERAGE_COLLAPSE_AT ? ' (collapsed — expand to browse)' : ''))
+          : 'Covered names';
+      }
+      if (hint) {
+        hint.textContent = cov.length >= FIN_COVERAGE_COLLAPSE_AT
+          ? '· ticker list collapsed to save space'
+          : '';
+      }
+      if (el) {
+        if (!cov.length) {
+          el.innerHTML = 'No financials stored yet — choose <em>My companies</em> or <em>Custom ticker(s)</em> and click “Pull SEC data”.';
+        } else {
+          // Cap rendered chips for DOM perf; full count stays on the badge.
+          const show = cov.slice(0, FIN_COVERAGE_CHIP_CAP);
+          const more = cov.length - show.length;
+          el.innerHTML = show.map(c =>
+            '<span title="'+_trEsc(c.entity_name||'')+' · '+_trEsc(c.earliest||'')+' → '+_trEsc(c.latest||'')
+            +'" style="display:inline-block;margin:0 6px 4px 0;font-family:\'SF Mono\',monospace;font-size:10.5px;background:var(--gray-100);border:1px solid var(--border-subtle);padding:1px 7px;border-radius:9px;">'
+            +_trEsc(c.ticker)+' · '+c.quarters+'q/'+c.annuals+'y</span>'
+          ).join('') + (more > 0
+            ? '<span style="display:inline-block;margin:0 0 4px;font-size:10.5px;color:var(--text-tertiary);">+'
+              + more.toLocaleString() + ' more (use Company dashboard search / datalist)</span>'
+            : '');
+        }
+      }
+      // Auto-collapse when large (don't fight the user if they already expanded
+      // this session — only force-collapse when crossing the threshold first time
+      // or after a completed pull via _finCoverageCollapse(true)).
+      if (det && cov.length >= FIN_COVERAGE_COLLAPSE_AT && det.dataset.userToggled !== '1') {
+        det.open = false;
+      }
+      if (det && !det.dataset.wired) {
+        det.dataset.wired = '1';
+        det.addEventListener('toggle', () => {
+          det.dataset.userToggled = '1';
+          _finCoverageSyncChevron();
+        });
+      }
+      _finCoverageSyncChevron();
+      // Keep VL company links in sync with store coverage
+      try { _loadFinVlLinks(); } catch (_) {}
+    } catch(_) {}
+    // Universe counts + automation status
+    try {
+      const u = await (await window.dgaFetch('/api/financials/universes')).json();
+      const meta = document.getElementById('fin-universe-meta');
+      if (meta && u && u.ok) {
+        const bits = [];
+        if (u.followed && u.followed.count != null)
+          bits.push('My companies: ' + u.followed.count);
+        if (u.stored_tickers != null) bits.push('In DB: ' + Number(u.stored_tickers).toLocaleString());
+        if (u.stored_bytes) bits.push('Table ~' + (u.stored_bytes / 1e6).toFixed(1) + ' MB');
+        if (u.nightly) {
+          bits.push('Nightly ' + (u.nightly.enabled ? 'ON' : 'OFF'));
+          const last = u.nightly.last;
+          if (last && (last.ts || last.at))
+            bits.push('last nightly ' + String(last.ts || last.at).slice(0, 16).replace('T', ' '));
+        }
+        if (u.monthly) bits.push('Monthly ' + (u.monthly.enabled ? 'ON' : 'OFF'));
+        if (u.us_backfill) bits.push('US backfill ' + (u.us_backfill.enabled ? 'ON' : 'OFF'));
+        meta.textContent = bits.join(' · ') + ' · free SEC · zero LLM tokens · browse = free';
+      }
+    } catch(_) {}
+  }
+
+  async function _loadFinSettings() {
+    try {
+      const s = await (await window.dgaFetch('/api/financials/settings')).json();
+      if (!s || !s.ok) return;
+      const nt = document.getElementById('fin-nightly-toggle');
+      const mt = document.getElementById('fin-monthly-toggle');
+      const ut = document.getElementById('fin-us-backfill-toggle');
+      if (nt && s.fin_nightly) nt.checked = !!s.fin_nightly.enabled;
+      if (mt && s.fin_monthly) mt.checked = !!s.fin_monthly.enabled;
+      if (ut && s.fin_us_backfill) ut.checked = !!s.fin_us_backfill.enabled;
+      const hint = document.getElementById('fin-auto-hint');
+      if (hint) {
+        const n = s.followed_count != null ? s.followed_count : '?';
+        let t = n + ' followed names';
+        if (s.fin_nightly && s.fin_nightly.last && s.fin_nightly.last.ts)
+          t += ' · last nightly ' + String(s.fin_nightly.last.ts).slice(0, 16).replace('T', ' ');
+        hint.textContent = t;
+      }
+    } catch (_) {}
+  }
+
+  let _finSettingsSaving = false;
+  async function _saveFinAutoSettings() {
+    if (_finSettingsSaving) return;
+    _finSettingsSaving = true;
+    const nt = document.getElementById('fin-nightly-toggle');
+    const mt = document.getElementById('fin-monthly-toggle');
+    const ut = document.getElementById('fin-us-backfill-toggle');
+    try {
+      const body = {
+        fin_nightly: { enabled: !!(nt && nt.checked) },
+        fin_monthly: { enabled: !!(mt && mt.checked) },
+        fin_us_backfill: { enabled: !!(ut && ut.checked) },
+      };
+      const r = await window.dgaFetch('/api/financials/settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'Save failed');
+      if (window.toast) {
+        window.toast(
+          'Saved · nightly ' + (body.fin_nightly.enabled ? 'ON' : 'OFF')
+          + ' · monthly ' + (body.fin_monthly.enabled ? 'ON' : 'OFF')
+          + (body.fin_us_backfill.enabled ? ' · US backfill ON' : ''),
+          { type: 'success' });
+      }
+      await _loadFinSettings();
+      await _loadFinCoverage();
+    } catch (e) {
+      if (window.toast) window.toast('Could not save auto settings: ' + (e.message || e), { type: 'error' });
+    }
+    _finSettingsSaving = false;
+  }
+
+  async function _runFinOvernightNow() {
+    const status = document.getElementById('fin-sync-status');
+    const btn = document.getElementById('fin-overnight-btn');
+    const box = h => { if (status) status.innerHTML = h; };
+    const restore = 'Run one US gap-fill chunk';
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Queuing…'; }
+    try {
+      // One optional missing-only chunk — does NOT enable continuous supervisor
+      const r = await window.dgaFetch('/api/financials/overnight', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'us_chunk', years_back: 6 }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
+      box('<div style="font-size:12px;color:var(--text-secondary);">🔧 <strong>One US gap-fill chunk</strong> · keeping <strong>'
+        + (j.have != null ? Number(j.have).toLocaleString() : '?') + '</strong> stored · <strong>'
+        + (j.missing != null ? Number(j.missing).toLocaleString() : '?') + '</strong> gaps remaining · chunk size '
+        + (j.chunk != null ? j.chunk : '~150')
+        + ' · job <code>' + _trEsc(j.job_id || '') + '</code>. Insert-only · continuous backfill stays off unless toggled.</div>');
+      if (j.job_id) _pollFinJob(j.job_id, btn, restore);
+      else if (btn) { btn.disabled = false; btn.textContent = restore; }
+    } catch (e) {
+      box('<div style="font-size:12px;color:#b91c1c;">❌ ' + _trEsc(e.message) + '</div>');
+      if (btn) { btn.disabled = false; btn.textContent = restore; }
+    }
+  }
+
+  async function _runFinBackupNow() {
+    const status = document.getElementById('fin-sync-status');
+    const btn = document.getElementById('fin-backup-btn');
+    const box = h => { if (status) status.innerHTML = h; };
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Uploading…'; }
+    try {
+      const r = await window.dgaFetch('/api/financials/backup', { method: 'POST' });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
+      box('<div style="background:var(--success-50);border:1px solid #bbf7d0;color:var(--success-700);border-radius:8px;padding:9px 12px;font-size:12px;">☁️ Backed up: '
+        + _trEsc(j.path || 'ok') + '</div>');
+      if (window.toast) window.toast('Financials backed up to Dropbox', { type: 'success' });
+    } catch (e) {
+      box('<div style="font-size:12px;color:#b91c1c;">❌ Backup failed: ' + _trEsc(e.message) + '</div>');
+    }
+    if (btn) { btn.disabled = false; btn.textContent = '☁️ Backup to Dropbox'; }
+  }
+
+  function _pollFinJob(jobId, btn, restoreLabel) {
+    if (_finSyncPoll) { clearInterval(_finSyncPoll); _finSyncPoll = null; }
+    const status = document.getElementById('fin-sync-status');
+    const box = h => { if (status) status.innerHTML = h; };
+    const t0 = Date.now();
+    let lastDone = -1, stuckSince = Date.now(), resumeAttempts = 0;
+    // Chunk jobs are short; followed/monthly jobs are also bounded. Server continues if tab closes.
+    _finSyncPoll = setInterval(async () => {
+      if (Date.now() - t0 > 4 * 3600 * 1000) {
+        clearInterval(_finSyncPoll); _finSyncPoll = null;
+        box('<div style="font-size:12px;color:var(--text-secondary);">Still running in the background — safe to close this tab. Re-open Financials later; coverage updates as rows land.</div>');
+        if (btn) { btn.disabled = false; btn.textContent = restoreLabel; }
+        return;
+      }
+      try {
+        const r = await window.dgaFetch('/api/financials/sync/' + encodeURIComponent(jobId));
+        const s = await r.json();
+        // Job lost from memory (deploy) — offer one re-queue of a single chunk only
+        if (!s.ok && (r.status === 404 || s.resumable) && resumeAttempts < 2) {
+          resumeAttempts++;
+          box('<div style="font-size:12px;color:var(--text-secondary);">↻ Job handle lost (deploy?) — starting one more gap-fill chunk…</div>');
+          try {
+            const rr = await window.dgaFetch('/api/financials/overnight', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ mode: 'us_chunk', years_back: 6 }),
+            });
+            const jj = await rr.json();
+            if (jj.ok && jj.job_id) {
+              clearInterval(_finSyncPoll); _finSyncPoll = null;
+              _pollFinJob(jj.job_id, btn, restoreLabel);
+              return;
+            }
+          } catch (_) {}
+        }
+        if (s.status === 'done') {
+          clearInterval(_finSyncPoll); _finSyncPoll = null;
+          const n = (s.result && s.result.periods_stored) || 0;
+          box('<div style="background:var(--success-50);border:1px solid #bbf7d0;color:var(--success-700);border-radius:8px;padding:9px 12px;font-size:12px;">✓ '
+            + _trEsc(s.label || 'Done') + (n ? ' · ' + n + ' periods' : '') + '</div>');
+          if (btn) { btn.disabled = false; btn.textContent = restoreLabel; }
+          try {
+            const det = document.getElementById('fin-coverage-details');
+            if (det) det.dataset.userToggled = '';
+          } catch (_) {}
+          _loadFinCoverage().then(() => _finCoverageCollapse(true));
+        } else if (s.status === 'error') {
+          clearInterval(_finSyncPoll); _finSyncPoll = null;
+          box('<div style="font-size:12px;color:#b91c1c;">❌ ' + _trEsc(s.error || s.label || 'failed') + '</div>');
+          if (btn) { btn.disabled = false; btn.textContent = restoreLabel; }
+        } else {
+          const done = s.done != null ? s.done : 0;
+          const total = s.total != null ? s.total : 0;
+          const namesOk = s.names_ok != null ? s.names_ok : null;
+          const namesFail = s.names_fail != null ? s.names_fail : null;
+          if (done !== lastDone) { lastDone = done; stuckSince = Date.now(); }
+          let extra = '';
+          if (done === 0 && total > 0 && Date.now() - stuckSince > 45000) {
+            extra = ' · first SEC extract can take 30–90s (normal)';
+          }
+          const pct = total > 0 ? Math.min(100, Math.round(100 * done / total)) : 0;
+          const stats = (namesOk != null)
+            ? (' · <strong style="color:var(--success-700,#15803d);">+' + namesOk + ' new names</strong>'
+               + (namesFail != null ? ' · ' + namesFail + ' no SEC data' : ''))
+            : '';
+          box('<div style="font-size:12px;color:var(--text-secondary);line-height:1.5;">'
+            + _trEsc(s.label || 'Working…')
+            + (total ? ' · <strong>' + done + '/' + total + '</strong> tried (' + pct + '%)' : '')
+            + stats
+            + extra
+            + '<div style="margin-top:6px;height:6px;border-radius:99px;background:var(--gray-100,#f1f5f9);overflow:hidden;">'
+            + '<div style="height:100%;width:' + pct + '%;background:var(--blue,#5BB8D4);border-radius:99px;transition:width .3s;"></div></div>'
+            + '<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:4px;">'
+            + 'Tried count ≠ store growth. Badge grows only when SEC returns usable filings. Insert-only — no overwrite.</div>'
+            + '</div>');
+          if (done > 0 && (done % 5 === 0 || (namesOk != null && namesOk > 0 && done % 3 === 0))) {
+            _loadFinCoverage();
+          }
+        }
+      } catch (_) {
+        // Network blip — keep polling; job is server-side
+      }
+    }, 2500);
+  }
+
+  let _finSyncPoll = null;
+  function _finRestorePullButtons() {
+    const btn = document.getElementById('fin-sync-btn');
+    const cpb = document.getElementById('fin-custom-pull-btn');
+    if (btn) { btn.disabled = false; btn.textContent = '⬇️ Pull SEC data'; }
+    if (cpb) { cpb.disabled = false; cpb.textContent = 'Pull these tickers'; }
+  }
+  async function _syncFinancials() {
+    const status = document.getElementById('fin-sync-status');
+    const btn = document.getElementById('fin-sync-btn');
+    const cpb = document.getElementById('fin-custom-pull-btn');
+    const years = parseInt((document.getElementById('fin-years') || {}).value || '7', 10);
+    const universe = (document.getElementById('fin-universe') || {}).value || 'followed';
+    const tickers = ((document.getElementById('fin-tickers') || {}).value || '')
+      .toUpperCase().split(/[^A-Z.]+/).filter(Boolean);
+    const box = h => { if (status) status.innerHTML = h; };
+    if (universe === 'custom' && !tickers.length) {
+      box('<div style="font-size:12px;color:#b91c1c;">Enter at least one ticker (e.g. NVDA) then pull.</div>');
+      _finSyncUniverseUI();
+      const ti = document.getElementById('fin-tickers');
+      if (ti) try { ti.focus(); } catch (_) {}
+      return;
+    }
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Queuing…'; }
+    if (cpb) { cpb.disabled = true; cpb.textContent = '⏳…'; }
+    if (_finSyncPoll) { clearInterval(_finSyncPoll); _finSyncPoll = null; }
+    try {
+      const r = await window.dgaFetch('/api/financials/sync', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          years_back: years,
+          tickers,
+          universe,
+          refresh: true,  // re-hit SEC so new quarters can insert
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
+      const nTk = (j.count != null ? j.count : (j.tickers || []).length);
+      const uniLabel = {
+        followed: 'my companies',
+        reports: 'saved reports',
+        custom: 'custom ticker(s)',
+        sp500_nasdaq100: 'S&P+NDX comps',
+        sp500: 'S&P 500',
+        nasdaq100: 'Nasdaq-100',
+      }[j.universe] || j.universe || universe;
+      box('<div style="font-size:12px;color:var(--text-secondary);">📊 Pulling SEC XBRL for <strong>' + nTk
+        + '</strong> names · <code>' + _trEsc(uniLabel) + '</code>'
+        + (nTk > 80 ? ' · large set can take a while; safe to leave the tab' : ' · usually a few minutes')
+        + '. Insert-only (no overwrite).</div>');
+      if (!j.job_id) { _finRestorePullButtons(); return; }
+      // Poll progress; restore both pull buttons when done
+      const restoreLabel = '⬇️ Pull SEC data';
+      _pollFinJob(j.job_id, btn, restoreLabel);
+      const watch = setInterval(() => {
+        if (!_finSyncPoll) {
+          clearInterval(watch);
+          _finRestorePullButtons();
+        }
+      }, 800);
+      setTimeout(() => { try { clearInterval(watch); } catch (_) {} }, 4 * 3600 * 1000);
+    } catch (e) {
+      box('<div style="font-size:12px;color:#b91c1c;">❌ ' + _trEsc(e.message) + '</div>');
+      _finRestorePullButtons();
+    }
+  }
+
+  // Column spec shared by the company-history and screen tables.
+  const _FIN_COLS = [
+    { k:'revenue', l:'Revenue', f:_finM },
+    { k:'gross_margin', l:'GM%', f:_finPct },
+    { k:'operating_income', l:'OpInc', f:_finM },
+    { k:'operating_margin', l:'OpM%', f:_finPct },
+    { k:'net_income', l:'NetInc', f:_finM },
+    { k:'net_margin', l:'NetM%', f:_finPct },
+    { k:'comprehensive_income', l:'CompInc', f:_finM },
+    { k:'diluted_eps', l:'DilEPS', f:_finEps },
+    { k:'operating_cash_flow', l:'OCF', f:_finM },
+    { k:'free_cash_flow', l:'FCF', f:_finM },
+    { k:'cash', l:'Cash', f:_finM },
+    { k:'total_debt', l:'Debt', f:_finM },
+    { k:'total_assets', l:'Assets', f:_finM },
+    { k:'stockholders_equity', l:'Equity', f:_finM },
+  ];
+
+  async function _viewFinCompany() {
+    const out = document.getElementById('fin-co-out');
+    const tk = (document.getElementById('fin-co-ticker').value || '').trim().toUpperCase();
+    const period = document.getElementById('fin-co-period').value || 'quarter';
+    if (!tk) { out.textContent = 'Enter a ticker.'; return; }
+    out.innerHTML = 'Loading '+_trEsc(tk)+'…';
+    try {
+      const d = await (await window.dgaFetch('/api/financials/' + encodeURIComponent(tk) + '?period_type=' + period)).json();
+      if (!d.ok) throw new Error(d.error || 'Failed');
+      const rows = d.rows || [];
+      if (!rows.length) { out.innerHTML = 'No '+period+' data for '+_trEsc(tk)+'. Use “Pull SEC data” (or Custom ticker) first.'; return; }
+      // Trend sparklines (chronological, oldest → newest).
+      const chrono = [...rows].reverse();
+      const series = k => chrono.map(r => (r[k] === null || r[k] === undefined) ? null : Number(r[k]));
+      const sparks = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+        _finSparkCard('Revenue', series('revenue'), _finM) +
+        _finSparkCard('Net margin', series('net_margin'), _finPct) +
+        _finSparkCard('Net income', series('net_income'), _finM) +
+        _finSparkCard('Free cash flow', series('free_cash_flow'), _finM) +
+        '</div>';
+      const head = '<tr><th style="text-align:left;">'+_trEsc(tk)+'</th>' + _FIN_COLS.map(c=>'<th style="text-align:right;padding:0 6px;">'+c.l+'</th>').join('') + '</tr>';
+      const body = rows.map(r => {
+        const lbl = r.fy + (r.fp==='FY'?' FY':' '+r.fp) + (r.derived?'*':'');
+        return '<tr style="border-top:1px solid var(--border-subtle);">' +
+          '<td style="font-family:\'SF Mono\',monospace;white-space:nowrap;padding:3px 8px 3px 0;" title="period end '+_trEsc(r.period_end||'')+'">'+_trEsc(lbl)+'</td>' +
+          _FIN_COLS.map(c=>'<td style="text-align:right;padding:3px 6px;font-variant-numeric:tabular-nums;">'+c.f(r[c.k])+'</td>').join('') +
+        '</tr>';
+      }).join('');
+      out.innerHTML = '<div style="color:var(--text-secondary);margin-bottom:6px;">'+_trEsc(d.entity_name||tk)+' · '+rows.length+' periods · $ in millions · <span title="derived">*</span>=derived Q4</div>' +
+        sparks +
+        '<table style="border-collapse:collapse;width:100%;font-size:11px;">'+head+body+'</table>';
+    } catch (e) {
+      out.innerHTML = '<span style="color:#b91c1c;">Failed: '+_trEsc(e.message)+'</span>';
+    }
+  }
+
+  async function _runFinScreen() {
+    const out = document.getElementById('fin-scr-out');
+    const period = document.getElementById('fin-scr-period').value || 'quarter';
+    const order = document.getElementById('fin-scr-order').value || 'revenue';
+    out.innerHTML = 'Running…';
+    try {
+      const d = await (await window.dgaFetch('/api/financials/screen?period_type=' + period + '&order=' + order + '&desc=true')).json();
+      if (!d.ok) throw new Error(d.error || 'Failed');
+      const rows = d.rows || [];
+      if (!rows.length) { out.innerHTML = 'Nothing stored yet — use “Pull SEC data” first.'; return; }
+      const cols = _FIN_COLS;
+      const head = '<tr><th style="text-align:left;padding-right:6px;">Name</th><th style="text-align:left;padding-right:8px;">Period</th>' +
+        cols.map(c=>'<th style="text-align:right;padding:0 6px;'+(c.k===order?'color:var(--blue);':'')+'">'+c.l+'</th>').join('') + '</tr>';
+      const body = rows.map(r => {
+        const lbl = r.fy + (r.fp==='FY'?' FY':' '+r.fp) + (r.derived?'*':'');
+        return '<tr style="border-top:1px solid var(--border-subtle);">' +
+          '<td style="font-family:\'SF Mono\',monospace;font-weight:700;padding:3px 6px 3px 0;">'+_trEsc(r.ticker)+'</td>' +
+          '<td style="font-family:\'SF Mono\',monospace;white-space:nowrap;color:var(--text-tertiary);padding-right:8px;">'+_trEsc(lbl)+'</td>' +
+          cols.map(c=>'<td style="text-align:right;padding:3px 6px;font-variant-numeric:tabular-nums;'+(c.k===order?'color:var(--blue);font-weight:600;':'')+'">'+c.f(r[c.k])+'</td>').join('') +
+        '</tr>';
+      }).join('');
+      out.innerHTML = '<div style="color:var(--text-secondary);margin-bottom:6px;">'+rows.length+' names · '+(period==='quarter'?'latest quarter':'latest FY')+' · $ in millions</div>' +
+        '<table style="border-collapse:collapse;width:100%;font-size:11px;">'+head+body+'</table>';
+    } catch (e) {
+      out.innerHTML = '<span style="color:#b91c1c;">Failed: '+_trEsc(e.message)+'</span>';
+    }
+  }
+
+  async function _loadTranscriptList() {
+    const list = document.getElementById('tr-list');
+    if (!list) return;
+    try {
+      const d = await (await window.dgaFetch('/api/transcripts')).json();
+      const items = (d && d.transcripts) || [];
+      const cnt = document.getElementById('tr-list-count');
+      if (cnt) cnt.textContent = String(items.length);
+      if (!items.length) { list.innerHTML = '<div style="padding:18px;font-size:12px;color:var(--text-tertiary);text-align:center;">No transcripts yet — paste a YouTube link above.</div>'; return; }
+      list.innerHTML = items.map(t =>
+        '<div class="tr-row" data-tid="'+_trEsc(t.id)+'" style="padding:12px 16px;border-bottom:1px solid var(--border-subtle);cursor:pointer;">' +
+          '<div style="display:flex;align-items:baseline;gap:8px;">' +
+            '<span style="font-weight:700;color:var(--text-primary);font-size:13px;flex:1;">'+_trEsc(t.title||'Untitled')+'</span>' +
+            '<span style="font-size:10.5px;color:var(--text-tertiary);">'+(t.n_entities||0)+' cos · '+((t.word_count||0).toLocaleString())+'w</span>' +
+            '<button class="tr-del" data-tid="'+_trEsc(t.id)+'" title="Delete" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);font-size:13px;padding:0 2px;">×</button>' +
+          '</div>' +
+          '<div style="font-size:11px;color:var(--text-tertiary);margin-top:2px;">'+_trEsc(t.person||t.channel||'')+(t.created_at?' · '+new Date(t.created_at).toLocaleDateString():'')+'</div>' +
+          (t.summary?'<div style="font-size:11.5px;color:var(--text-secondary);margin-top:5px;line-height:1.45;">'+_trEsc(t.summary)+'</div>':'') +
+          '<div class="tr-detail" id="tr-detail-'+_trEsc(t.id)+'" style="display:none;margin-top:8px;"></div>' +
+        '</div>'
+      ).join('');
+      list.querySelectorAll('.tr-del').forEach(b => b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm('Delete this transcript?')) return;
+        await window.dgaFetch('/api/transcripts/' + encodeURIComponent(b.dataset.tid), { method:'DELETE' });
+        _loadTranscriptList();
+      }));
+      list.querySelectorAll('.tr-row').forEach(row => row.addEventListener('click', () => _toggleTranscriptDetail(row.dataset.tid)));
+    } catch (e) {
+      list.innerHTML = '<div style="padding:18px;font-size:12px;color:#b91c1c;">Failed to load: '+_trEsc(e.message)+'</div>';
+    }
+  }
+
+  async function _toggleTranscriptDetail(tid) {
+    const el = document.getElementById('tr-detail-' + tid);
+    if (!el) return;
+    if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+    el.style.display = 'block';
+    el.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary);">Loading…</div>';
+    try {
+      const d = await (await window.dgaFetch('/api/transcripts/' + encodeURIComponent(tid))).json();
+      const ents = (d && d.entities) || [];
+      const vurl = d.transcript && d.transcript.video_url;
+      const rows = ents.map(e => {
+        const col = e.sentiment==='bull'?'#16a34a':e.sentiment==='bear'?'#dc2626':'var(--text-tertiary)';
+        const ic  = e.sentiment==='bull'?'▲':e.sentiment==='bear'?'▼':'•';
+        const link = (vurl && e.timestamp_sec) ? vurl + '&t=' + e.timestamp_sec + 's' : vurl;
+        return '<div style="padding:5px 0;border-top:1px dashed var(--border-subtle);font-size:11.5px;">' +
+          '<span style="color:'+col+';font-weight:700;">'+ic+' '+_trEsc(e.company)+(e.ticker?' ('+_trEsc(e.ticker)+')':'')+'</span>' +
+          (e.theme?' <span style="color:var(--text-tertiary);">· '+_trEsc(e.theme)+'</span>':'') +
+          (e.quote?'<div style="color:var(--text-secondary);font-style:italic;margin-top:2px;">“'+_trEsc(e.quote)+'” '+(link?'<a href="'+_trEsc(link)+'" target="_blank" rel="noopener" style="font-style:normal;color:var(--brand-500);">↗</a>':'')+'</div>':'') +
+        '</div>';
+      }).join('');
+      el.innerHTML = (rows || '<div style="font-size:11px;color:var(--text-tertiary);">No companies extracted.</div>') +
+        (vurl?'<div style="margin-top:8px;"><a href="'+_trEsc(vurl)+'" target="_blank" rel="noopener" style="font-size:11px;color:var(--brand-500);">▶ Open on YouTube</a></div>':'');
+    } catch (e) {
+      el.innerHTML = '<div style="font-size:11px;color:#b91c1c;">'+_trEsc(e.message)+'</div>';
+    }
+  }
+
+  // ── Transcript-scoped AI Analyst (reuses /api/research/agentic) ──
+  let _trAgPoll = null;
+  async function _runTranscriptAgentic() {
+    const qEl = document.getElementById('tr-agentic-q');
+    const out = document.getElementById('tr-agentic-out');
+    const btn = document.getElementById('tr-agentic-run-btn');
+    const q = (qEl.value || '').trim();
+    if (q.length < 4) { window.toast('Ask a real question.', {type:'warn'}); return; }
+    out.style.display = 'block';
+    btn.disabled = true; btn.textContent = '⏳ …';
+    if (_trAgPoll) { clearInterval(_trAgPoll); _trAgPoll=null; }
+    const renderProg = d => {
+      const tools = (d.tool_calls||[]).map(tc => { const ic=_TR_TOOL_ICON[tc.tool]||'🔧'; return '<div style="font-size:11px;color:var(--text-secondary);padding:2px 0;">'+ic+' <strong>'+_trEsc(tc.tool)+'</strong> <span style="color:var(--text-tertiary);font-family:\'SF Mono\',monospace;">'+_trEsc(JSON.stringify(tc.input||{}).slice(0,50))+'</span></div>'; }).join('');
+      const cost = d.cost_usd!=null?' · 💸 $'+Number(d.cost_usd).toFixed(3):'';
+      out.innerHTML = '<div style="background:var(--bg-subtle);border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;"><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><span style="width:8px;height:8px;border-radius:50%;background:#9333ea;animation:spin 1.4s linear infinite;display:inline-block;"></span><span style="font-size:12px;font-weight:700;color:var(--text-primary);">'+_trEsc(d.label||'Working…')+'</span><span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:\'SF Mono\',monospace;">'+(d.steps||0)+' steps'+cost+'</span></div>'+(tools?'<div style="border-top:1px dashed var(--border-subtle);padding-top:8px;">'+tools+'</div>':'')+'</div>';
+    };
+    const renderResult = r => {
+      _trRenderResultInto(out, q, r);
+      // The answer was just persisted (source=transcript) — refresh the log.
+      setTimeout(loadTranscriptLog, 2000);
+    };
+    try {
+      const r = await window.dgaFetch('/api/research/agentic', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ question: q, source: 'transcript' }) });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
+      const jobId = j.job_id; const t0 = Date.now();
+      renderProg({ label:'Starting…', steps:0, tool_calls:[] });
+      _trAgPoll = setInterval(async () => {
+        if (Date.now() - t0 > 240000) { clearInterval(_trAgPoll); _trAgPoll=null; out.innerHTML='<div style="font-size:12px;color:var(--warn-700);">⚠ Timed out.</div>'; btn.disabled=false; btn.textContent='🤖 Analyze'; return; }
+        try {
+          const d = await (await window.dgaFetch('/api/research/agentic/' + encodeURIComponent(jobId))).json();
+          if (d.status==='done' && d.result) { clearInterval(_trAgPoll); _trAgPoll=null; renderResult(d.result); btn.disabled=false; btn.textContent='🤖 Analyze'; }
+          else if (d.status==='error') { clearInterval(_trAgPoll); _trAgPoll=null; out.innerHTML='<div style="font-size:12px;color:#b91c1c;">❌ '+_trEsc(d.label||d.error||'failed')+'</div>'; btn.disabled=false; btn.textContent='🤖 Analyze'; }
+          else renderProg(d);
+        } catch(_) {}
+      }, 1500);
+    } catch (e) {
+      out.innerHTML = '<div style="font-size:12px;color:#b91c1c;">❌ '+_trEsc(e.message)+'</div>';
+      btn.disabled=false; btn.textContent='🤖 Analyze';
+    }
+  }
+
+  // ── Transcript Q&A: rich render (with Memo + PDF buttons), memo drafting, and
+  //    a persisted log. Answers are saved server-side (analyst_reviews,
+  //    source=transcript); the same machinery as the AI Analyst & Strategist. ──
+  let _trLastResult = null, _trLastQuestion = '';
+  function _trRenderResultInto(out, question, r) {
+    _trLastResult = r; _trLastQuestion = question;
+    const tools = (r.tool_calls||[]).map(tc => { const ic=_TR_TOOL_ICON[tc.tool]||'🔧'; return '<span style="font-size:10px;background:var(--gray-100);border:1px solid var(--border-subtle);color:var(--text-secondary);padding:1px 7px;border-radius:10px;margin:0 4px 4px 0;display:inline-block;">'+ic+' '+_trEsc(tc.tool)+'</span>'; }).join('');
+    const answer = _dgaMarkdown(r.answer||'(no answer)');
+    const cost = r.cost_usd!=null?'💸 $'+Number(r.cost_usd).toFixed(3):'';
+    let vf = '';
+    const v = r.verification;
+    if (v && v.verdict==='clean') vf = '<div style="margin-top:12px;padding:8px 12px;background:var(--success-50);border:1px solid #bbf7d0;border-radius:6px;font-size:11.5px;color:var(--success-700);">✓ Verification: every numeric claim is backed by a tool call.</div>';
+    else if (v && v.verdict==='flags' && (v.flags||[]).length) vf = '<div style="margin-top:12px;padding:10px 12px;background:var(--warn-50);border:1px solid #fde68a;border-radius:6px;font-size:11.5px;color:var(--warn-700);"><strong>⚠ '+(v.flags||[]).length+' claim(s) flagged — review before sharing.</strong></div>';
+    out.style.display = 'block';
+    out.innerHTML = '<div style="background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:16px 18px;box-shadow:var(--shadow-sm);">'
+      + '<div class="md-rendered" style="font-size:13.5px;line-height:1.6;color:var(--text-primary);">'+answer+'</div>'+vf
+      + (tools?'<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border-subtle);">'+tools+'</div>':'')
+      + '<div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+      +   '<button id="tr-memo-btn" class="btn-secondary" style="font-size:12px;padding:6px 12px;">📄 Draft memo from this</button>'
+      +   '<button id="tr-print-btn" class="btn-secondary" style="font-size:12px;padding:6px 12px;">🖨 PDF</button>'
+      +   '<span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:\'SF Mono\',monospace;">'+cost+' · '+_trEsc(r.model||'')+'</span>'
+      + '</div></div>';
+    const mb = document.getElementById('tr-memo-btn');
+    if (mb) mb.addEventListener('click', () => _trDraftMemo(question, r.answer, r.verification, mb));
+    const pb = document.getElementById('tr-print-btn');
+    if (pb) pb.addEventListener('click', () => {
+      const n = out.querySelector('.md-rendered');
+      if (window._openAnalystPrint) window._openAnalystPrint(question, n ? n.innerHTML : '');
+    });
+  }
+
+  async function _trDraftMemo(question, answer, verification, btn) {
+    if (!answer) return;
+    const v = verification;
+    if (v && v.verdict === 'flags' && (v.flags||[]).length) {
+      if (!confirm('⚠ Verification flagged '+v.flags.length+' claim(s). Memos can be emailed to LPs — draft one anyway?')) return;
+    }
+    const title = prompt('Memo title:', (question || 'Transcript Insight').slice(0, 70));
+    if (title === null) return;
+    const orig = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Drafting LP memo… (~20s)'; }
+    try {
+      const r = await window.dgaFetch('/api/memos/from-analysis', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ question: question, answer: answer, title: (title||'').trim() }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.detail || j.error || 'Failed');
+      window.toast('✓ Memo saved — find it under the 📄 Memos tab to assign & email.', { type:'success', ttl:5000 });
+    } catch (e) {
+      window.toast('Memo draft failed: ' + e.message, { type:'error' });
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = orig || '📄 Draft memo from this'; }
+    }
+  }
+
+  async function _trFetchSaved(id) {
+    const r = await window.dgaFetch('/api/research/analyst/reviews/' + encodeURIComponent(id));
+    const d = await r.json();
+    if (!d || !d.ok || !d.review) throw new Error('not found');
+    return d.review;
+  }
+  async function _trViewSaved(id) {
+    try {
+      const rv = await _trFetchSaved(id);
+      const out = document.getElementById('tr-agentic-out');
+      _trRenderResultInto(out, rv.question || '', { answer: rv.answer||'', verification: rv.verification, tool_calls: rv.tool_calls||[], cost_usd: rv.cost_usd, model: rv.model });
+      out.scrollIntoView({ behavior:'smooth', block:'start' });
+    } catch (e) { window.toast('Could not open that Q&A.', {type:'error'}); }
+  }
+  async function _trMemoSaved(id, btn) {
+    try { const rv = await _trFetchSaved(id); _trDraftMemo(rv.question||'', rv.answer||'', rv.verification, btn); }
+    catch (e) { window.toast('Could not open that Q&A.', {type:'error'}); }
+  }
+  async function _trPdfSaved(id) {
+    try {
+      const rv = await _trFetchSaved(id);
+      let when=''; try { when = _parseServerDate(rv.generated_at).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'}); } catch(e){}
+      if (window._openAnalystPrint) window._openAnalystPrint(rv.question||'', window._dgaMarkdown(rv.answer||''), when);
+    } catch (e) { window.toast('Could not open that Q&A.', {type:'error'}); }
+  }
+
+  async function loadTranscriptLog() {
+    const box = document.getElementById('tr-log-list');
+    if (!box) return;
+    try {
+      const r = await window.dgaFetch('/api/research/analyst/reviews?source=transcript');
+      const d = await r.json();
+      const rows = (d && d.reviews) || [];
+      if (!rows.length) { box.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary);font-style:italic;padding:4px 0;">No saved Q&amp;A yet — ask a question above and it’ll be logged here.</div>'; return; }
+      box.innerHTML = rows.map(function(rv) {
+        var when=''; try { when = _parseServerDate(rv.generated_at).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'}); } catch(e){ when=(rv.generated_at||'').slice(0,16); }
+        var qs = (rv.question||'(no question)').replace(/\s+/g,' ').trim(); if (qs.length>90) qs = qs.slice(0,90)+'…';
+        return '<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border-subtle);">' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div style="font-size:12px;color:var(--text-primary);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+_trEsc(qs)+'</div>' +
+            '<div style="font-size:10px;color:var(--text-tertiary);margin-top:1px;">'+_trEsc(when)+(rv.model?' · '+_trEsc(rv.model):'')+'</div>' +
+          '</div>' +
+          '<button class="tr-log-view btn-secondary" data-id="'+_trEsc(rv.id)+'" style="font-size:10.5px;padding:3px 9px;">View</button>' +
+          '<button class="tr-log-memo btn-secondary" data-id="'+_trEsc(rv.id)+'" style="font-size:10.5px;padding:3px 9px;">📄 Memo</button>' +
+          '<button class="tr-log-pdf btn-secondary" data-id="'+_trEsc(rv.id)+'" style="font-size:10.5px;padding:3px 9px;">🖨 PDF</button>' +
+          '<button class="tr-log-del btn-secondary" data-id="'+_trEsc(rv.id)+'" title="Delete" style="font-size:10.5px;padding:3px 8px;color:#dc2626;">✕</button>' +
+        '</div>';
+      }).join('');
+      box.querySelectorAll('.tr-log-view').forEach(function(b){ b.addEventListener('click', function(){ _trViewSaved(b.dataset.id); }); });
+      box.querySelectorAll('.tr-log-memo').forEach(function(b){ b.addEventListener('click', function(){ _trMemoSaved(b.dataset.id, b); }); });
+      box.querySelectorAll('.tr-log-pdf').forEach(function(b){ b.addEventListener('click', function(){ _trPdfSaved(b.dataset.id); }); });
+      box.querySelectorAll('.tr-log-del').forEach(function(b){ b.addEventListener('click', async function(){
+        if (!confirm('Delete this saved Q&A?')) return;
+        try { await window.dgaFetch('/api/research/analyst/reviews/'+encodeURIComponent(b.dataset.id), {method:'DELETE'}); } catch(e){}
+        loadTranscriptLog();
+      }); });
+    } catch (e) {
+      box.innerHTML = '<div style="font-size:11px;color:#dc2626;">Could not load saved Q&amp;A.</div>';
+    }
+  }
+  window._loadTranscriptLog = loadTranscriptLog;
+
+  // ── 🤖 AI Analyst (agentic) — kick off a run + poll live progress ──
+  (function wireAgentic() {
+    const btn = document.getElementById('agentic-run-btn');
+    const qEl = document.getElementById('agentic-q');
+    const out = document.getElementById('agentic-out');
+    if (!btn || !qEl || !out) return;
+    if (btn.dataset.wired) return;
+    btn.dataset.wired = '1';
+
+    document.querySelectorAll('.agentic-ex').forEach(chip => {
+      chip.addEventListener('click', () => { qEl.value = chip.textContent.trim(); qEl.focus(); });
+    });
+
+    // One-tap preset: fill the box with the full retiree-portfolio prompt, then
+    // select the [ACCOUNT] placeholder so the user can type the account name
+    // (e.g. ANAT IRA / ANAT TOD) immediately. Does NOT auto-run.
+    const presetBtn = document.getElementById('agentic-preset-retiree');
+    if (presetBtn) {
+      presetBtn.addEventListener('click', () => {
+        const txt = presetBtn.dataset.preset || '';
+        qEl.value = txt;
+        qEl.focus();
+        const acct = presetBtn.dataset.account || 'ANAT IRA';
+        const token = '[' + acct + ']';
+        const i = txt.indexOf(token);
+        if (i >= 0) { try { qEl.setSelectionRange(i, i + token.length); } catch (e) {} }
+        qEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    }
+
+    const esc = s => (s || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]);
+    const TOOL_ICON = { get_quote:'💹', get_sector:'🏷', read_saved_report:'📄',
+                        get_recent_news:'📰', list_saved_reports:'📚',
+                        get_financials:'📊', compute:'🧮', get_ytd_attribution:'📈',
+                        web_search:'🌐', list_transcripts:'🎙️', read_transcript:'📜',
+                        search_transcripts:'🔎', search_call_transcripts:'📞' };
+
+    let pollTimer = null;
+    function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+
+    function renderProgress(d, elapsedMs) {
+      const tools = (d.tool_calls || []).map(tc => {
+        const ic = TOOL_ICON[tc.tool] || '🔧';
+        const arg = tc.input ? esc(JSON.stringify(tc.input).slice(0, 50)) : '';
+        return `<div style="font-size:11px;color:var(--text-secondary);padding:2px 0;">${ic} <strong>${esc(tc.tool)}</strong> <span style="color:var(--text-tertiary);font-family:'SF Mono',monospace;">${arg}</span></div>`;
+      }).join('');
+      const cost = d.cost_usd != null ? ` · 💸 $${Number(d.cost_usd).toFixed(3)}` : '';
+      const secs = elapsedMs != null ? Math.round(elapsedMs / 1000) : null;
+      const elapTxt = secs != null ? ` · ⏱ ${secs}s` : '';
+      // Past 3 min, reassure the user that a heavy multi-step run is still going
+      // (the backend has no wall-clock cap; it runs to a real answer or its
+      // 12-step limit). Avoids the old "looks dead" feeling before the result.
+      const slowNote = (secs != null && secs > 180)
+        ? '<div style="margin-top:8px;font-size:10.5px;color:var(--text-tertiary);font-style:italic;">Heavy multi-step analysis (e.g. multiple portfolios + live option scans) — still working, hang tight…</div>'
+        : '';
+      out.innerHTML =
+        '<div style="background:var(--bg-subtle);border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;">' +
+          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
+            '<span style="width:8px;height:8px;border-radius:50%;background:#9333ea;animation:spin 1.4s linear infinite;display:inline-block;"></span>' +
+            `<span style="font-size:12px;font-weight:700;color:var(--text-primary);">${esc(d.label || 'Working…')}</span>` +
+            `<span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:'SF Mono',monospace;">${(d.steps||0)} steps${cost}${elapTxt}</span>` +
+          '</div>' +
+          (tools ? `<div style="border-top:1px dashed var(--border-subtle);padding-top:8px;">${tools}</div>` : '') +
+          slowNote +
+        '</div>';
+    }
+
+    // Keep the last result around so the "Draft memo" button can use it.
+    let _lastResult = null;
+    let _lastQuestion = '';
+
+    function renderVerification(v) {
+      if (!v) return '';
+      if (v.verdict === 'clean') {
+        return '<div style="margin-top:12px;padding:8px 12px;background:var(--success-50);border:1px solid #bbf7d0;border-radius:6px;font-size:11.5px;color:var(--success-700);">' +
+               '✓ Verification pass: every numeric claim is backed by a tool call.</div>';
+      }
+      if (v.verdict === 'unchecked') {
+        return '<div style="margin-top:12px;padding:8px 12px;background:var(--gray-100);border:1px solid var(--border-subtle);border-radius:6px;font-size:11.5px;color:var(--text-tertiary);">' +
+               '⚠ Verification did not run (degraded gracefully).</div>';
+      }
+      const flags = (v.flags || []).map(f =>
+        `<li style="margin:3px 0;"><strong>${esc(f.issue||'flag')}:</strong> ${esc(f.claim||'')}` +
+        (f.note ? ` — <span style="color:var(--text-tertiary);">${esc(f.note)}</span>` : '') + '</li>'
+      ).join('');
+      return '<div style="margin-top:12px;padding:10px 12px;background:var(--warn-50);border:1px solid #fde68a;border-radius:6px;font-size:11.5px;color:var(--warn-700);">' +
+             `<strong>⚠ Verification flagged ${(v.flags||[]).length} claim(s) — review before sharing:</strong>` +
+             `<ul style="margin:6px 0 0;padding-left:18px;">${flags}</ul></div>`;
+    }
+
+    function renderResult(r) {
+      _lastResult = r;
+      const tools = (r.tool_calls || []).map(tc => {
+        const ic = TOOL_ICON[tc.tool] || '🔧';
+        return `<span style="font-size:10px;background:var(--gray-100);border:1px solid var(--border-subtle);color:var(--text-secondary);padding:1px 7px;border-radius:10px;margin:0 4px 4px 0;display:inline-block;">${ic} ${esc(tc.tool)}</span>`;
+      }).join('');
+      // Detect an optional ```sleeve {json} block (proposed target allocation):
+      // strip it from the displayed prose and offer a one-click push to Builder.
+      let rawAnswer = r.answer || '(no answer)';
+      let sleeve = null;
+      const sm = rawAnswer.match(/```sleeve\s*([\s\S]*?)```/i);
+      if (sm) {
+        try {
+          const obj = JSON.parse(sm[1].trim());
+          // Structured {weights, basket_size, account} OR legacy flat sector→%.
+          const w = (obj.weights && typeof obj.weights === 'object') ? obj.weights : obj;
+          const clean = {}; let sum = 0;
+          for (const k in w) { const v = Number(w[k]); if (v > 0) { clean[k] = v; sum += v; } }
+          if (sum > 0 && Object.keys(clean).length) {
+            sleeve = {
+              weights: clean,
+              basket_size: Number(obj.basket_size) > 0 ? Number(obj.basket_size) : null,
+              account: obj.account || null,
+            };
+          }
+        } catch (e) { /* malformed sleeve — ignore */ }
+        rawAnswer = rawAnswer.replace(sm[0], '').trim();
+      }
+      const answer = _dgaMarkdown(rawAnswer);
+      const cost = r.cost_usd != null ? `💸 $${Number(r.cost_usd).toFixed(3)}` : '';
+      const sleeveBtn = sleeve
+        ? '<button id="agentic-sleeve-btn" class="btn-secondary" style="font-size:12px;padding:6px 12px;background:var(--brand-50);border-color:var(--brand-400);color:var(--brand-700);font-weight:700;">📊 Build this sleeve in the Builder →</button>'
+        : '';
+      out.innerHTML =
+        '<div style="background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:16px 18px;box-shadow:var(--shadow-sm);">' +
+          `<div class="md-rendered" style="font-size:13.5px;line-height:1.6;color:var(--text-primary);">${answer}</div>` +
+          renderVerification(r.verification) +
+          (tools ? `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border-subtle);">${tools}</div>` : '') +
+          '<div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+            sleeveBtn +
+            '<button id="agentic-print-btn" class="btn-secondary" style="font-size:12px;padding:6px 12px;">⬇ PDF</button>' +
+            '<button id="agentic-email-btn" class="btn-secondary" style="font-size:12px;padding:6px 12px;">✉ Email</button>' +
+            '<button id="agentic-memo-btn" class="btn-secondary" style="font-size:12px;padding:6px 12px;">📄 Draft memo from this</button>' +
+            `<span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:'SF Mono',monospace;">${cost} · ${esc(r.model||'')}</span>` +
+          '</div>' +
+        '</div>';
+      const memoBtn = document.getElementById('agentic-memo-btn');
+      if (memoBtn) memoBtn.addEventListener('click', () => _draftMemoFromAnalysis());
+      const slBtn = document.getElementById('agentic-sleeve-btn');
+      if (slBtn && sleeve) slBtn.addEventListener('click', () => _applySleeveToBuilder(sleeve));
+      const printBtn = document.getElementById('agentic-print-btn');
+      if (printBtn) printBtn.addEventListener('click', () => {
+        const ansNode = out.querySelector('.md-rendered');
+        _openAnalystPrint(_lastQuestion || '', ansNode ? ansNode.innerHTML : '');
+      });
+      const emailBtn = document.getElementById('agentic-email-btn');
+      if (emailBtn) emailBtn.addEventListener('click', () => {
+        const ansNode = out.querySelector('.md-rendered');
+        _dgaResearchPdfEmail({ title: 'Analyst', question: _lastQuestion || '',
+          answerHTML: ansNode ? ansNode.innerHTML : '' });
+      });
+      // A completed run was just persisted server-side — refresh the saved list
+      // (small delay so the best-effort DB insert lands first).
+      setTimeout(loadAnalystReviews, 2000);
+    }
+
+    // ── Shared: View-identical PDF via the server (DGA Capital template) ──────
+    // The server wraps this exact .md-rendered HTML in the DGA letterhead and
+    // renders it with WeasyPrint, so the PDF matches the on-screen View. Used by
+    // the AI Analyst, the Portfolio Strategist, and the Transcripts Q&A.
+    // OPENS the PDF in a new tab (browser PDF viewer) — the user saves it
+    // themselves; we do NOT auto-download. A blank tab is opened synchronously
+    // (within the click gesture) so pop-up blockers don't kill it; it's then
+    // navigated to the rendered PDF blob.
+    async function _dgaResearchPdfDownload({ title, question, answerHTML, stamp, filename }) {
+      const win = window.open('', '_blank');   // sync open — preserves user gesture
+      if (win) { try { win.document.write('<p style="font-family:sans-serif;color:#64748b;padding:20px;">Generating PDF…</p>'); } catch (e) {} }
+      try {
+        const body = { title: title || 'Analyst', question: question || '',
+                       answer_html: answerHTML || '', stamp: stamp || '',
+                       filename: filename || null };
+        const r = await window.dgaFetch('/api/research/pdf', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body) });
+        if (!r.ok) { let m = ''; try { m = (await r.json()).detail; } catch (e) {} throw new Error(m || ('HTTP ' + r.status)); }
+        const blob = await r.blob();
+        const url  = URL.createObjectURL(blob);
+        if (win) win.location.href = url; else window.open(url, '_blank');
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      } catch (e) {
+        if (win) { try { win.close(); } catch (_) {} }
+        throw e;
+      }
+    }
+
+    async function _dgaResearchPdfEmail({ title, question, answerHTML, stamp }) {
+      const def = (window.DGA_USER && window.DGA_USER.email) || '';
+      const to  = window.prompt('Email this PDF to (LP or yourself):', def);
+      if (!to) return;
+      try {
+        const r = await window.dgaFetch('/api/research/email-pdf', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: title || 'Analyst', question: question || '',
+                                 answer_html: answerHTML || '', stamp: stamp || '', to }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) throw new Error(d.detail || d.error || ('HTTP ' + r.status));
+        window.toast('✉ Sent to ' + to, { type: 'success' });
+      } catch (e) { window.toast('Email failed: ' + e.message, { type: 'error' }); }
+    }
+
+    // Public PDF entry point: downloads the View-identical server PDF; on any
+    // failure falls back to the browser print window (still the rich format).
+    async function _openAnalystPrint(question, answerHTML, stamp, title) {
+      try {
+        await _dgaResearchPdfDownload({ title: title || 'Analyst', question, answerHTML, stamp });
+      } catch (e) {
+        console.warn('[pdf] server render failed, falling back to print window:', e.message);
+        _openAnalystPrintWindow(question, answerHTML, stamp);
+      }
+    }
+
+    // Fallback: open a print window with the same rich format (Save as PDF).
+    function _openAnalystPrintWindow(question, answerHTML, stamp) {
+      const q = esc(question || '');
+      if (!stamp) { try { stamp = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }); } catch (e) { stamp = ''; } }
+      const w = window.open('', '_blank', 'width=900,height=1100');
+      if (!w) { alert('Pop-up blocked — allow pop-ups to print.'); return; }
+      w.document.write(
+        '<!doctype html><html><head><meta charset="utf-8"><title>DGA Capital — AI Analyst</title>' +
+        '<style>' +
+        '@page{size:Letter;margin:0.7in}' +
+        '*{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}' +
+        'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:11pt;line-height:1.55;color:#0A1628;max-width:7.1in;margin:0 auto;-webkit-font-smoothing:antialiased}' +
+        '.lh{display:flex;justify-content:space-between;align-items:flex-end;gap:12pt;font-size:8.5pt;letter-spacing:1.5px;color:#5BB8D4;border-bottom:2.5pt solid #0A1628;padding-bottom:7pt;margin-bottom:16pt;text-transform:uppercase}' +
+        '.lh b{color:#0A1628;font-weight:800;letter-spacing:1px}' +
+        '.lh .stamp{letter-spacing:0.4px;color:#64748b;font-weight:400;text-transform:none;white-space:nowrap}' +
+        '.q{font-weight:700;font-size:12pt;line-height:1.4;color:#0A1628;margin:0 0 16pt;padding:10pt 12pt;background:#f1f5f9;border-left:3pt solid #5BB8D4;border-radius:3px}' +
+        '.md-rendered p{margin:0 0 9pt}' +
+        '.md-rendered .md-h{font-weight:800;color:#0A1628;line-height:1.3}' +
+        '.md-rendered .md-h1,.md-rendered .md-h2{font-size:13.5pt;margin:16pt 0 7pt;padding-bottom:3pt;border-bottom:1px solid #e2e8f0}' +
+        '.md-rendered .md-h3,.md-rendered .md-h4{font-size:11.5pt;color:#334155;margin:13pt 0 5pt}' +
+        '.md-rendered ul.md-list,.md-rendered ol.md-list{margin:6pt 0 11pt;padding-left:20pt}' +
+        '.md-rendered li{margin:3pt 0}' +
+        '.md-rendered strong{font-weight:700;color:#0A1628}' +
+        '.md-rendered em{font-style:italic}' +
+        '.md-rendered code{font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:0.85em;background:#f1f5f9;padding:1px 5px;border-radius:4px;color:#0A1628}' +
+        '.md-rendered .md-hr{border:none;border-top:1px solid #cbd5e1;margin:13pt 0}' +
+        '.md-rendered a{color:#0A1628;text-decoration:underline}' +
+        '.md-rendered table.md-table{border-collapse:collapse;width:100%;margin:11pt 0 14pt;font-size:9pt;line-height:1.4}' +
+        '.md-rendered table.md-table th{background:#0A1628;color:#fff;text-align:left;padding:6pt 9pt;font-weight:700;font-size:8pt;letter-spacing:0.4px;text-transform:uppercase}' +
+        '.md-rendered table.md-table td{padding:5pt 9pt;border-bottom:1px solid #e2e8f0;vertical-align:top;color:#0A1628}' +
+        '.md-rendered table.md-table tr:nth-child(even) td{background:#f8fafc}' +
+        '.md-rendered table.md-table tr{page-break-inside:avoid}' +
+        '.md-rendered thead{display:table-header-group}' +
+        '</style></head><body onload="window.print()">' +
+        '<div class="lh"><b>DGA Capital · AI Analyst</b>' +
+          (stamp ? '<span class="stamp">Confidential · ' + esc(stamp) + '</span>' : '<span class="stamp">Confidential</span>') +
+        '</div>' +
+        (q ? '<div class="q">' + q + '</div>' : '') +
+        '<div class="md-rendered">' + answerHTML + '</div>' +
+        '</body></html>');
+      w.document.close();
+    }
+    // Expose so the Transcripts "Ask the transcripts" card reuses the identical
+    // rich print/PDF format for its saved Q&A.
+    window._openAnalystPrint = _openAnalystPrint;
+    // Expose the shared PDF/email helpers so the (separately-scoped) Portfolio
+    // Strategist IIFE reuses the identical server-rendered DGA PDF.
+    window._dgaResearchPdfDownload = _dgaResearchPdfDownload;
+    window._dgaResearchPdfEmail    = _dgaResearchPdfEmail;
+
+    // ── Saved analyses: list past AI Analyst answers, re-open or PDF them ──
+    async function loadAnalystReviews() {
+      const box = document.getElementById('agentic-reviews-list');
+      if (!box) return;
+      try {
+        const r = await window.dgaFetch('/api/research/analyst/reviews?source=analyst');
+        const d = await r.json();
+        const rows = (d && d.reviews) || [];
+        if (!rows.length) {
+          box.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary);font-style:italic;padding:4px 0;">No saved analyses yet — run one above and it\'ll appear here.</div>';
+          return;
+        }
+        box.innerHTML = rows.map(function (rv) {
+          var when = '';
+          try { when = _parseServerDate(rv.generated_at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }); } catch (e) { when = (rv.generated_at || '').slice(0, 16); }
+          var qsnip = (rv.question || '(no question)').replace(/\s+/g, ' ').trim();
+          if (qsnip.length > 90) qsnip = qsnip.slice(0, 90) + '…';
+          return '<div class="agentic-rev-row" style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border-subtle);">' +
+            '<div style="flex:1;min-width:0;">' +
+              '<div style="font-size:12px;color:var(--text-primary);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(qsnip) + '</div>' +
+              '<div style="font-size:10px;color:var(--text-tertiary);margin-top:1px;">' + esc(when) + (rv.model ? ' · ' + esc(rv.model) : '') + '</div>' +
+            '</div>' +
+            '<button class="agentic-rev-open btn-secondary" data-id="' + esc(rv.id) + '" style="font-size:10.5px;padding:3px 9px;">View</button>' +
+            '<button class="agentic-rev-pdf btn-secondary" data-id="' + esc(rv.id) + '" style="font-size:10.5px;padding:3px 9px;">🖨 PDF</button>' +
+            '<button class="agentic-rev-del btn-secondary" data-id="' + esc(rv.id) + '" title="Delete" style="font-size:10.5px;padding:3px 8px;color:#dc2626;">✕</button>' +
+          '</div>';
+        }).join('');
+        box.querySelectorAll('.agentic-rev-pdf').forEach(function (b) {
+          b.addEventListener('click', function () { _printSavedReview(b.dataset.id); });
+        });
+        box.querySelectorAll('.agentic-rev-open').forEach(function (b) {
+          b.addEventListener('click', function () { _openSavedReview(b.dataset.id); });
+        });
+        box.querySelectorAll('.agentic-rev-del').forEach(function (b) {
+          b.addEventListener('click', async function () {
+            if (!confirm('Delete this saved analysis?')) return;
+            try { await window.dgaFetch('/api/research/analyst/reviews/' + encodeURIComponent(b.dataset.id), { method: 'DELETE' }); } catch (e) {}
+            loadAnalystReviews();
+          });
+        });
+      } catch (e) {
+        box.innerHTML = '<div style="font-size:11px;color:#dc2626;">Could not load saved analyses.</div>';
+      }
+    }
+    window._loadAnalystReviews = loadAnalystReviews;
+
+    async function _fetchSavedReview(id) {
+      const r = await window.dgaFetch('/api/research/analyst/reviews/' + encodeURIComponent(id));
+      const d = await r.json();
+      if (!d || !d.ok || !d.review) throw new Error('not found');
+      return d.review;
+    }
+    async function _printSavedReview(id) {
+      try {
+        const rv = await _fetchSavedReview(id);
+        var when = '';
+        try { when = _parseServerDate(rv.generated_at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }); } catch (e) {}
+        _openAnalystPrint(rv.question || '', window._dgaMarkdown(rv.answer || ''), when);
+      } catch (e) { alert('Could not open that saved analysis.'); }
+    }
+    async function _openSavedReview(id) {
+      try {
+        const rv = await _fetchSavedReview(id);
+        _lastQuestion = rv.question || '';
+        out.style.display = 'block';   // result area is display:none until shown
+        renderResult({ answer: rv.answer || '', verification: rv.verification,
+                       tool_calls: rv.tool_calls || [], cost_usd: rv.cost_usd, model: rv.model });
+        out.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch (e) { alert('Could not open that saved analysis.'); }
+    }
+
+    // Sector-name aliases → the Builder's canonical names (the LLM may vary).
+    const _SLEEVE_SECTOR_ALIASES = {
+      'consumer discretionary': 'Consumer Cyclical', 'consumer staples': 'Consumer Defensive',
+      'materials': 'Basic Materials', 'information technology': 'Technology', 'tech': 'Technology',
+      'financial services': 'Financials', 'financial': 'Financials', 'health care': 'Healthcare',
+      'telecom': 'Communication Services', 'telecommunications': 'Communication Services',
+    };
+    function _applySleeveToBuilder(sleeve) {
+      // Accept structured {weights, basket_size, account} or a legacy flat map.
+      const weights = (sleeve && sleeve.weights) ? sleeve.weights : (sleeve || {});
+      const basketSize = (sleeve && Number(sleeve.basket_size) > 0) ? Number(sleeve.basket_size) : null;
+      const account = (sleeve && sleeve.account) ? sleeve.account : null;
+      const norm = {}; let total = 0;
+      for (const k in weights) {
+        const canon = _SLEEVE_SECTOR_ALIASES[k.toLowerCase().trim()] ||
+          (BUILDER_SECTOR_OPTIONS.find(o => o.toLowerCase() === k.toLowerCase().trim()) || k);
+        norm[canon] = (norm[canon] || 0) + Number(weights[k]); total += Number(weights[k]);
+      }
+      const rows = Object.keys(norm).map(k => `${k}: ${Math.round(norm[k] / total * 100)}%`).join('\n');
+      const sizeLine = basketSize
+        ? `\n\nBasket size: $${Math.round(basketSize).toLocaleString()}${account ? ' (' + account + ' — true rebalance at the account\'s actual size)' : ''}`
+        : '';
+      if (!confirm('Send this target sleeve to the Builder?\n\n' + rows + sizeLine +
+                   '\n\n(Replaces the current Builder sector weights' +
+                   (basketSize ? ' and basket size' : '') + '.)')) return;
+      const out2 = {};
+      Object.keys(norm).forEach(k => { out2[k] = Math.round(norm[k] / total * 100); });
+      _builderSectorWeights = out2;
+      showTab('builder');
+      if (typeof _initBuilderTab === 'function' && !_builderInitialized) _initBuilderTab();
+      _renderBuilderSectors();
+      _refreshBuilderAddDropdown();
+      // Size the basket to the account's actual market value → a true rebalance.
+      if (basketSize) {
+        const bs = document.getElementById('builder-basket-size');
+        if (bs) bs.value = Math.round(basketSize);
+      }
+      setTimeout(() => {
+        const rb = document.getElementById('builder-run-btn');
+        if (rb) {
+          rb.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          rb.style.transition = 'box-shadow .3s';
+          rb.style.boxShadow = '0 0 0 3px var(--brand-400)';
+          setTimeout(() => { rb.style.boxShadow = ''; }, 1600);
+        }
+      }, 250);
+    }
+
+    async function _draftMemoFromAnalysis() {
+      if (!_lastResult) return;
+      const btn = document.getElementById('agentic-memo-btn');
+      const v = _lastResult.verification;
+      // Option D gate: if verification flagged claims, force an explicit ack.
+      if (v && v.verdict === 'flags' && (v.flags||[]).length) {
+        const ok = confirm(
+          `⚠ Verification flagged ${v.flags.length} unsupported/contradicted claim(s).\n\n` +
+          `Memos can be emailed to LPs — are you sure you want to draft a memo from ` +
+          `this analysis without resolving them first?`);
+        if (!ok) return;
+      }
+      const title = prompt('Memo title:', (_lastQuestion || 'Research Memo').slice(0, 70));
+      if (title === null) return;
+      if (btn) { btn.disabled = true; btn.textContent = '⏳ Drafting LP memo… (~20s)'; }
+      try {
+        const r = await window.dgaFetch('/api/memos/from-analysis', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ question: _lastQuestion, answer: _lastResult.answer,
+                                 title: (title||'').trim() }),
+        });
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.detail || j.error || 'Failed');
+        window.toast('✓ Memo saved — find it under the 📄 Memos tab to assign & email.',
+                     { type: 'success', ttl: 5000 });
+      } catch (e) {
+        window.toast('Memo draft failed: ' + e.message, { type: 'error' });
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '📄 Draft memo from this'; }
+      }
+    }
+
+    llmStampControl(btn, 'agentic');
+    btn.addEventListener('click', async () => {
+      const question = (qEl.value || '').trim();
+      if (question.length < 4) { window.toast('Ask a real question.', {type:'warn'}); return; }
+      _lastQuestion = question;
+      const meta = llmDescribe('agentic');
+      btn.disabled = true; btn.textContent = '⏳ ' + (meta.model || 'Claude').slice(0, 18) + '…';
+      llmToast('agentic', 'Starting analyst');
+      out.style.display = 'block';
+      out.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:8px 0;">'
+        + 'Starting · <strong>' + meta.model + '</strong> · ' + meta.cost + '</div>';
+      const t0 = Date.now();
+      try {
+        const r0 = await window.dgaFetch('/api/research/agentic', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ question }),
+        });
+        const d0 = await r0.json();
+        if (!d0.ok) throw new Error(d0.error || 'Failed to start');
+        const jobId = d0.job_id;
+        // 10-min safety cap (was 3 min). Heavy runs — two portfolios + live
+        // option scans — legitimately exceed 3 min, and the backend has NO
+        // wall-clock cap (it runs to a real answer or its 12-step limit), so a
+        // short client cap just hid finished work. We poll until the job reaches
+        // a terminal state; the cap only guards against a dead backend, and even
+        // then we do a FINAL status check so a just-finished result isn't lost.
+        pollTimer = setInterval(async () => {
+          if (Date.now() - t0 > 600000) {   // 10-min safety cap
+            try {
+              const rf = await window.dgaFetch('/api/research/agentic/' + encodeURIComponent(jobId));
+              const df = await rf.json();
+              if (df.status === 'done' && df.result) {
+                stopPoll(); renderResult(df.result);
+                btn.disabled = false; btn.textContent = '🤖 Analyze'; return;
+              }
+            } catch (_) { /* fall through to the timeout notice */ }
+            stopPoll();
+            out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ Still running after 10 min — this is an unusually heavy request. It may finish in the background; re-open the analyst shortly, or split it into smaller questions.</div>';
+            btn.disabled = false; btn.textContent = '🤖 Analyze'; return;
+          }
+          try {
+            const r = await window.dgaFetch('/api/research/agentic/' + encodeURIComponent(jobId));
+            const d = await r.json();
+            if (d.status === 'done' && d.result) {
+              stopPoll(); renderResult(d.result);
+              btn.disabled = false; btn.textContent = '🤖 Analyze';
+            } else if (d.status === 'error') {
+              stopPoll();
+              out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + esc(d.label || d.error || 'failed') + '</div>';
+              btn.disabled = false; btn.textContent = '🤖 Analyze';
+            } else {
+              renderProgress(d, Date.now() - t0);
+            }
+          } catch (_) { /* transient */ }
+        }, 1500);
+      } catch (e) {
+        out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + esc(e.message) + '</div>';
+        btn.disabled = false; btn.textContent = '🤖 Analyze';
+      }
+    });
+
+    // Saved-analyses list: load on wire + manual refresh button.
+    const revRefresh = document.getElementById('agentic-reviews-refresh');
+    if (revRefresh) revRefresh.addEventListener('click', () => loadAnalystReviews());
+    loadAnalystReviews();
+  })();
+
+  // ── 🧭 Portfolio Strategist — fund picker / upload → agentic review ──
+  (function wireStrategist() {
+    const btn = document.getElementById('strat-run-btn');
+    const fundSel = document.getElementById('strat-fund');
+    const fileEl = document.getElementById('strat-file');
+    const out = document.getElementById('strat-out');
+    if (!btn || !out || btn.dataset.wired) return;
+    btn.dataset.wired = '1';
+    const esc = s => (s || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]);
+    const TOOL_ICON = { get_quote:'💹', get_sector:'🏷', read_saved_report:'📄',
+                        get_recent_news:'📰', list_saved_reports:'📚',
+                        get_financials:'📊', compute:'🧮', get_ytd_attribution:'📈',
+                        web_search:'🌐' };
+    let _stratResult = null, _stratPositions = [], _stratTickers = [], _stratFund = '', _stratJobId = null;
+
+    // Populate fund dropdown (reuse fund list)
+    (async () => {
+      try {
+        const r = await window.dgaFetch('/api/fund/list');
+        const j = await r.json();
+        const list = Array.isArray(j) ? j : (j.funds || []);
+        fundSel.innerHTML = list.filter(f => f && f.id).map(f =>
+            `<option value="${f.id}">${esc(f.short_name || f.name || f.id)}</option>`).join('');
+      } catch (_) {}
+    })();
+
+    function renderProgress(d) {
+      const tools = (d.tool_calls || []).slice(-8).map(tc => {
+        const ic = TOOL_ICON[tc.tool] || '🔧';
+        return `<div style="font-size:11px;color:var(--text-secondary);padding:1px 0;">${ic} <strong>${esc(tc.tool)}</strong> <span style="color:var(--text-tertiary);font-family:'SF Mono',monospace;">${esc(JSON.stringify(tc.input||{}).slice(0,46))}</span></div>`;
+      }).join('');
+      const cost = d.cost_usd != null ? ` · 💸 $${Number(d.cost_usd).toFixed(3)}` : '';
+      out.innerHTML =
+        '<div style="background:var(--bg-subtle);border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;">' +
+          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
+            '<span style="width:8px;height:8px;border-radius:50%;background:#9333ea;animation:spin 1.4s linear infinite;display:inline-block;"></span>' +
+            `<span style="font-size:12px;font-weight:700;color:var(--text-primary);">${esc(d.label||'Working…')}</span>` +
+            `<span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:'SF Mono',monospace;">${(d.steps||0)} steps${cost}</span>` +
+          '</div>' + (tools ? `<div style="border-top:1px dashed var(--border-subtle);padding-top:8px;">${tools}</div>` : '') +
+        '</div>';
+    }
+
+    function renderVerification(v) {
+      if (!v) return '';
+      if (v.verdict === 'clean') return '<div style="margin-top:12px;padding:8px 12px;background:var(--success-50);border:1px solid #bbf7d0;border-radius:6px;font-size:11.5px;color:var(--success-700);">✓ Verification: every numeric claim is backed by a tool call.</div>';
+      if (v.verdict === 'unchecked') return '<div style="margin-top:12px;padding:8px 12px;background:var(--gray-100);border:1px solid var(--border-subtle);border-radius:6px;font-size:11.5px;color:var(--text-tertiary);">⚠ Verification did not run.</div>';
+      const flags = (v.flags||[]).map(f => `<li style="margin:3px 0;"><strong>${esc(f.issue||'flag')}:</strong> ${esc(f.claim||'')}${f.note?` — <span style="color:var(--text-tertiary);">${esc(f.note)}</span>`:''}</li>`).join('');
+      return `<div style="margin-top:12px;padding:10px 12px;background:var(--warn-50);border:1px solid #fde68a;border-radius:6px;font-size:11.5px;color:var(--warn-700);"><strong>⚠ Verification flagged ${(v.flags||[]).length} claim(s) — review before sharing:</strong><ul style="margin:6px 0 0;padding-left:18px;">${flags}</ul></div>`;
+    }
+
+    function renderResult(r) {
+      _stratResult = r;
+      const answer = _dgaMarkdown(r.answer || '(no answer)');
+      const cost = r.cost_usd != null ? `💸 $${Number(r.cost_usd).toFixed(3)}` : '';
+      out.innerHTML =
+        '<div style="background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:16px 18px;box-shadow:var(--shadow-sm);">' +
+          `<div class="md-rendered" style="font-size:13.5px;line-height:1.6;color:var(--text-primary);">${answer}</div>` +
+          renderVerification(r.verification) +
+          '<div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">' +
+            '<button id="strat-pdf-btn" class="btn-secondary" style="font-size:12px;padding:7px 14px;">⬇ Review PDF</button>' +
+            '<button id="strat-email-btn" class="btn-secondary" style="font-size:12px;padding:7px 14px;">✉ Email</button>' +
+            '<button id="strat-roundup-btn" class="btn-primary" style="font-size:12px;padding:7px 14px;">🎙️ Generate Portfolio Roundup</button>' +
+            '<button id="strat-memo-btn" class="btn-secondary" style="font-size:12px;padding:7px 14px;">📄 Draft strategy memo</button>' +
+            `<span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:'SF Mono',monospace;">${cost} · ${esc(r.model||'')}</span>` +
+          '</div>' +
+          '<div style="margin-top:6px;font-size:10px;color:var(--text-tertiary);">✓ Saved automatically — find it under “Past committee reviews” after any rebuild.</div>' +
+        '</div>';
+      document.getElementById('strat-pdf-btn')?.addEventListener('click', () => { if (_stratJobId) _openReviewPdf(_stratJobId); });
+      document.getElementById('strat-email-btn')?.addEventListener('click', () => { if (_stratJobId) _emailReviewPdf(_stratJobId); });
+      document.getElementById('strat-roundup-btn')?.addEventListener('click', _handoffRoundup);
+      document.getElementById('strat-memo-btn')?.addEventListener('click', _handoffMemo);
+      _loadStratArchive();
+    }
+
+    // Resolve a review (live result or saved by id) → the same fields the View
+    // renders, so the PDF is View-identical.
+    async function _stratReviewExport(reviewId) {
+      let rv = _stratResult;
+      if (!rv || !rv.answer || _stratJobId !== reviewId) {
+        const d = await (await window.dgaFetch('/api/research/strategist/reviews/' + encodeURIComponent(reviewId))).json();
+        if (!d.ok || !d.review) throw new Error(d.error || 'review not found');
+        rv = d.review;
+      }
+      return {
+        title:      'Investment Committee Review',
+        question:   [rv.fund_name, rv.tickers].filter(Boolean).join(' — '),
+        answerHTML: window._dgaMarkdown(rv.answer || ''),
+        stamp:      rv.generated_at ? _parseServerDate(rv.generated_at).toLocaleString() : '',
+        filename:   'IC-Review_' + ((rv.fund_name || 'Portfolio').replace(/[^A-Za-z0-9]+/g, '_')) + '.pdf',
+      };
+    }
+
+    // Download the full-review PDF — View-identical (server DGA template).
+    async function _openReviewPdf(reviewId) {
+      try { await window._dgaResearchPdfDownload(await _stratReviewExport(reviewId)); }
+      catch (e) { window.toast('Could not export review PDF: ' + e.message, {type:'error'}); }
+    }
+
+    // Email the full-review PDF.
+    async function _emailReviewPdf(reviewId) {
+      try { await window._dgaResearchPdfEmail(await _stratReviewExport(reviewId)); }
+      catch (e) { window.toast('Could not email review PDF: ' + e.message, {type:'error'}); }
+    }
+
+    async function _loadStratArchive() {
+      const wrap = document.getElementById('strat-archive-list');
+      const cnt = document.getElementById('strat-archive-count');
+      if (!wrap) return;
+      try {
+        const d = await (await window.dgaFetch('/api/research/strategist/reviews')).json();
+        const revs = (d && d.reviews) || [];
+        if (cnt) cnt.textContent = '(' + revs.length + ')';
+        if (!revs.length) { wrap.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary);">No saved reviews yet.</div>'; return; }
+        wrap.innerHTML = revs.map(rv =>
+          '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border-subtle);font-size:11.5px;">' +
+            '<span style="font-weight:700;color:var(--text-primary);">' + esc(rv.fund_name || 'Portfolio') + '</span>' +
+            '<span style="color:var(--text-tertiary);">' + esc((rv.tickers||'').split(',').slice(0,6).join(', ')) + ((rv.tickers||'').split(',').length>6?'…':'') + '</span>' +
+            '<span style="margin-left:auto;color:var(--text-tertiary);font-family:\'SF Mono\',monospace;font-size:10px;">' + (rv.generated_at ? _parseServerDate(rv.generated_at).toLocaleString() : '') + '</span>' +
+            '<button class="strat-arch-view btn-secondary" data-id="' + esc(rv.id) + '" style="font-size:10.5px;padding:3px 9px;">View</button>' +
+            '<button class="strat-arch-pdf btn-secondary" data-id="' + esc(rv.id) + '" style="font-size:10.5px;padding:3px 9px;">🖨 PDF</button>' +
+            '<button class="strat-arch-del btn-secondary" data-id="' + esc(rv.id) + '" title="Delete" style="font-size:10.5px;padding:3px 8px;color:#dc2626;">✕</button>' +
+          '</div>').join('');
+        wrap.querySelectorAll('.strat-arch-pdf').forEach(b => b.addEventListener('click', () => _openReviewPdf(b.dataset.id)));
+        wrap.querySelectorAll('.strat-arch-view').forEach(b => b.addEventListener('click', () => _viewStratArchive(b.dataset.id)));
+        wrap.querySelectorAll('.strat-arch-del').forEach(b => b.addEventListener('click', async () => {
+          if (!confirm('Delete this saved committee review?')) return;
+          try { await window.dgaFetch('/api/research/strategist/reviews/' + encodeURIComponent(b.dataset.id), { method: 'DELETE' }); } catch (e) {}
+          _loadStratArchive();
+        }));
+      } catch (_) {
+        wrap.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary);">Could not load past reviews.</div>';
+      }
+    }
+
+    async function _viewStratArchive(id) {
+      try {
+        const d = await (await window.dgaFetch('/api/research/strategist/reviews/' + encodeURIComponent(id))).json();
+        if (!d.ok || !d.review) throw new Error(d.error || 'not found');
+        _stratResult = d.review; _stratJobId = id;
+        out.style.display = 'block';
+        renderResult(d.review);
+        out.scrollIntoView({behavior:'smooth', block:'start'});
+      } catch (e) { window.toast('Could not open review: ' + e.message, {type:'error'}); }
+    }
+
+    let _stratRoundupPoll = null;
+
+    function _stratRoundupBox(html) {
+      let box = document.getElementById('strat-roundup-progress');
+      if (!box) {
+        box = document.createElement('div');
+        box.id = 'strat-roundup-progress';
+        box.style.cssText = 'margin-top:12px;';
+        const anchor = document.getElementById('strat-roundup-btn');
+        (anchor ? anchor.parentElement.parentElement : out).appendChild(box);
+      }
+      box.innerHTML = html;
+      return box;
+    }
+
+    async function _handoffRoundup() {
+      if (_stratTickers.length < 5) {
+        window.toast('Portfolio Roundup needs ≥5 tickers; this book has ' + _stratTickers.length + '.', {type:'warn'});
+        return;
+      }
+      const b = document.getElementById('strat-roundup-btn');
+      b.disabled = true; b.textContent = '⏳ Queuing…';
+      const jobKey = 'PORTFOLIO_' + _stratTickers.map(t => String(t).toUpperCase()).join(',');
+      if (_stratRoundupPoll) { clearInterval(_stratRoundupPoll); _stratRoundupPoll = null; }
+      try {
+        const r = await window.dgaFetch('/api/podcast-portfolio-roundup/script', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ tickers: _stratTickers, positions: _stratPositions }),
+        });
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.error || 'Failed');
+
+        // Live progress — poll the script-status job so the user can SEE it work.
+        const t0 = Date.now();
+        const render = (label, spinner) =>
+          _stratRoundupBox(
+            '<div style="background:var(--bg-subtle);border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:9px;">' +
+              (spinner ? '<span style="width:9px;height:9px;border-radius:50%;background:#0ea5e9;animation:spin 1.4s linear infinite;display:inline-block;flex:0 0 auto;"></span>' : '') +
+              '<span style="font-size:12px;font-weight:600;color:var(--text-primary);">' + esc(label) + '</span>' +
+            '</div>');
+        render('🎙️ Portfolio Roundup queued — generating script…', true);
+
+        _stratRoundupPoll = setInterval(async () => {
+          if (Date.now() - t0 > 360000) {   // 6-min safety cap
+            clearInterval(_stratRoundupPoll); _stratRoundupPoll = null;
+            _stratRoundupBox('<div style="background:var(--warn-50);border:1px solid #fde68a;border-radius:8px;padding:10px 12px;font-size:12px;color:var(--warn-700);">⚠ Still working after 6 min — check LLM Lab → “Open a saved script”.</div>');
+            return;
+          }
+          try {
+            const s = await (await window.dgaFetch('/api/podcast/' + encodeURIComponent(jobKey) + '/script-status')).json();
+            if (s.status === 'done' || s.stage === 'done') {
+              clearInterval(_stratRoundupPoll); _stratRoundupPoll = null;
+              _stratRoundupBox(
+                '<div style="background:var(--success-50);border:1px solid #bbf7d0;border-radius:8px;padding:11px 13px;">' +
+                  '<div style="font-size:12.5px;font-weight:700;color:var(--success-700);margin-bottom:7px;">✓ Portfolio Roundup script ready</div>' +
+                  '<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:9px;">Open it in LLM Lab to review and generate the audio.</div>' +
+                  '<button id="strat-roundup-open" class="btn-primary" style="font-size:12px;padding:6px 13px;">🎧 Open in LLM Lab →</button>' +
+                '</div>');
+              document.getElementById('strat-roundup-open')?.addEventListener('click', async () => {
+                try { showTab('lab'); } catch(_) {}
+                try {
+                  await _populatePodcastSavedScripts();
+                  const sel = document.getElementById('podcast-script-saved');
+                  if (sel) {
+                    // Newest portfolio_roundup is first in the DESC-ordered list.
+                    const opt = Array.from(sel.options).find(o => o.value.endsWith('::portfolio_roundup'));
+                    if (opt) { sel.value = opt.value; sel.dispatchEvent(new Event('change')); }
+                    try { sel.scrollIntoView({behavior:'smooth', block:'center'}); } catch(_) {}
+                  }
+                } catch(_) {}
+              });
+              window.toast('✓ Portfolio Roundup script ready — open it in LLM Lab.', {type:'success', ttl:5000});
+            } else if (s.status === 'error' || s.stage === 'error') {
+              clearInterval(_stratRoundupPoll); _stratRoundupPoll = null;
+              _stratRoundupBox('<div style="background:var(--error-50,#fef2f2);border:1px solid #fecaca;border-radius:8px;padding:10px 12px;font-size:12px;color:#b91c1c;">❌ Roundup failed: ' + esc(s.error || s.label || 'unknown error') + '</div>');
+            } else {
+              render(s.label || ('Working… (' + (s.stage || 'processing') + ')'), true);
+            }
+          } catch(_) { /* transient network hiccup — keep polling */ }
+        }, 2500);
+      } catch (e) {
+        window.toast('Roundup handoff failed: ' + e.message, {type:'error'});
+        _stratRoundupBox('<div style="background:var(--error-50,#fef2f2);border:1px solid #fecaca;border-radius:8px;padding:10px 12px;font-size:12px;color:#b91c1c;">❌ ' + esc(e.message) + '</div>');
+      } finally { b.disabled = false; b.textContent = '🎙️ Generate Portfolio Roundup'; }
+    }
+
+    async function _handoffMemo() {
+      if (!_stratResult) return;
+      const v = _stratResult.verification;
+      if (v && v.verdict === 'flags' && (v.flags||[]).length) {
+        if (!confirm(`⚠ Verification flagged ${v.flags.length} claim(s). Memos can reach LPs — draft anyway?`)) return;
+      }
+      const title = prompt('Memo title:', (_stratFund ? _stratFund + ' — Strategy Review' : 'Portfolio Strategy Review'));
+      if (title === null) return;
+      const b = document.getElementById('strat-memo-btn');
+      b.disabled = true; b.textContent = '⏳ Drafting LP memo… (~20s)';
+      try {
+        const r = await window.dgaFetch('/api/memos/from-analysis', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ question: 'Portfolio strategy review: ' + (_stratFund||'uploaded book'),
+                                 answer: _stratResult.answer, title: (title||'').trim() }),
+        });
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.detail || j.error || 'Failed');
+        window.toast('✓ Strategy memo saved — Memos tab to assign & email.', {type:'success', ttl:5000});
+      } catch (e) {
+        window.toast('Memo draft failed: ' + e.message, {type:'error'});
+      } finally { b.disabled = false; b.textContent = '📄 Draft strategy memo'; }
+    }
+
+    async function start(payload, fundLabel) {
+      _stratFund = fundLabel || '';
+      btn.disabled = true; btn.textContent = '⏳ Reviewing…';
+      out.style.display = 'block';
+      out.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:8px 0;">Loading book…</div>';
+      const t0 = Date.now();
+      try {
+        const r0 = await window.dgaFetch('/api/research/portfolio-strategist', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(payload),
+        });
+        const d0 = await r0.json();
+        if (!d0.ok) throw new Error(d0.error || 'Failed to start');
+        _stratPositions = d0.positions || []; _stratTickers = d0.tickers || [];
+        if (d0.fund_name) _stratFund = d0.fund_name;
+        const jobId = d0.job_id;
+        _stratJobId = jobId;   // == the persisted review id (used for the PDF)
+        const timer = setInterval(async () => {
+          if (Date.now() - t0 > 300000) {   // 5-min cap (portfolio is heavier)
+            clearInterval(timer); out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ Timed out after 5 min.</div>';
+            btn.disabled = false; btn.textContent = '🧭 Run review'; return;
+          }
+          try {
+            const r = await window.dgaFetch('/api/research/agentic/' + encodeURIComponent(jobId));
+            const d = await r.json();
+            if (d.status === 'done' && d.result) {
+              clearInterval(timer); renderResult(d.result);
+              btn.disabled = false; btn.textContent = '🧭 Run review';
+            } else if (d.status === 'error') {
+              clearInterval(timer);
+              out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + esc(d.label || d.error || 'failed') + '</div>';
+              btn.disabled = false; btn.textContent = '🧭 Run review';
+            } else { renderProgress(d); }
+          } catch (_) {}
+        }, 1400);
+      } catch (e) {
+        out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + esc(e.message) + '</div>';
+        btn.disabled = false; btn.textContent = '🧭 Run review';
+      }
+    }
+
+    llmStampControl(btn, 'strategist');
+    btn.addEventListener('click', async () => {
+      const selected = Array.from(fundSel.selectedOptions || []);
+      const fundIds = selected.map(o => o.value).filter(Boolean);
+      const file = fileEl.files && fileEl.files[0];
+      const meta = llmDescribe('strategist');
+      llmToast('strategist', 'Starting strategist');
+      if (fundIds.length) {
+        const label = selected.map(o => o.textContent).join(' + ') +
+                      (fundIds.length > 1 ? ' (combined)' : '');
+        btn.textContent = '⏳ ' + meta.model.slice(0, 14) + '…';
+        start({ fund_ids: fundIds }, label + ' · ' + meta.model + ' · ' + meta.cost);
+      } else if (file) {
+        // Upload → parse via the existing roundup upload parser, then strategist
+        btn.disabled = true; btn.textContent = '⏳ Parsing file…';
+        try {
+          const fd = new FormData(); fd.append('file', file); fd.append('parse_only', 'true');
+          const up = await window.dgaFetch('/api/podcast-portfolio-roundup/upload', { method:'POST', body: fd });
+          const uj = await up.json();
+          if (!uj.ok) throw new Error(uj.detail || uj.error || 'Parse failed');
+          // parse_only=true → just parsed positions, no podcast job spun up.
+          btn.textContent = '⏳ ' + meta.model.slice(0, 14) + '…';
+          start({ positions: uj.positions || [] }, 'uploaded book · ' + meta.model + ' · ' + meta.cost);
+        } catch (e) {
+          window.toast('Upload failed: ' + e.message, {type:'error'});
+          btn.disabled = false; btn.textContent = '🧭 Run review';
+          llmStampControl(btn, 'strategist');
+        }
+      } else {
+        window.toast('Pick a fund or upload a portfolio file.', {type:'warn'});
+      }
+    });
+
+    // Show saved reviews on load so they're available after any rebuild.
+    setTimeout(_loadStratArchive, 0);
+  })();
+
+  async function loadReports() {
+    try {
+      // Fire both in parallel: reports list + podcast episode list. We only
+      // wait on reports for render; the podcast set arrives as a side-effect
+      // and is consulted by renderReports() each time it runs.
+      const [rRep, rPod] = await Promise.all([
+        window.dgaFetch('/api/reports'),
+        window.dgaFetch('/api/podcast/list').catch(function() { return null; }),
+      ]);
+      if (rPod && rPod.ok) {
+        try {
+          const pd = await rPod.json();
+          window._podcastEpisodeTickers = new Set((pd.episodes || []).map(function(e) { return e.ticker; }));
+        } catch {}
+      }
+      if (!rRep.ok) throw new Error('reports ' + rRep.status);
+      const list = await rRep.json();
+      renderReports(Array.isArray(list) ? list : []);
+      // Inject news headlines as a side-effect after the rows render.
+      setTimeout(loadNewsForReports, 200);
+    } catch (e) {
+      console.warn('[reports]', e);
+    }
+  }
+
+  // Sort state for reports table (persists across re-renders within the session)
+  // Default: 'date' = when the report was last successfully run (newest first).
+  // Click TGT/Upside to switch to upside sort.
+  let _repSortMode = 'date';   // 'date' | 'upside'
+  let _repSortDir  = 'desc';
+
+  /** Epoch ms of when this report was last run (successful Grok/Claude gen preferred). */
+  function _repRunAtMs(rep) {
+    if (!rep) return 0;
+    const times = [];
+    // Prefer successful report generation timestamps (when analysis actually completed)
+    if (rep.generated_at) times.push(new Date(rep.generated_at).getTime());
+    if (rep.claude_generated_at) times.push(new Date(rep.claude_generated_at).getTime());
+    if (times.length) {
+      const best = Math.max.apply(null, times.filter(function (n) { return !isNaN(n); }));
+      if (best > 0) return best;
+    }
+    // Fall back to last attempt (includes failed retries) only if no success ts
+    if (rep.last_attempt_at) {
+      const t = new Date(rep.last_attempt_at).getTime();
+      if (!isNaN(t)) return t;
+    }
+    return 0;
+  }
+
+  // Format the "x ago" relative date used in the dateStr column. Falls back
+  // to absolute ISO date for anything older than 7 days.
+  function _repFmtRelDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    const diffMs = Date.now() - d.getTime();
+    const min = Math.floor(diffMs / 60000);
+    if (min < 1)   return 'Just now';
+    if (min < 60)  return min + 'm ago';
+    const hrs = Math.floor(min / 60);
+    if (hrs < 24)  return hrs + 'h ago';
+    const days = Math.floor(hrs / 24);
+    if (days < 2)  return 'Yesterday';
+    if (days < 7)  return days + 'd ago';
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  // Compact the analyst's stated as-of date (a free-text string like
+  // "May 22, 2026") into something tiny for the top line: "5d ago", "3w ago",
+  // or "May 22". Falls back to the original string when it can't be parsed.
+  // Returns { short, full } — full is shown as the hover tooltip.
+  function _repCompactAsOf(str) {
+    const full = (str || '').trim();
+    if (!full) return { short: '', full: '' };
+    const d = new Date(full);
+    if (isNaN(d.getTime())) return { short: full, full: full };
+    const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+    let short;
+    if (days < 0)       short = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    else if (days === 0) short = 'Today';
+    else if (days < 14)  short = days + 'd ago';
+    else if (days < 56)  short = Math.round(days / 7) + 'w ago';
+    else {
+      const curYr = new Date().getFullYear();
+      short = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+            + (d.getFullYear() !== curYr ? " '" + String(d.getFullYear()).slice(-2) : '');
+    }
+    return { short: short, full: full };
+  }
+
+  function renderReports(reports) {
+    const tbody = document.getElementById('reports-tbody');
+    document.getElementById('reports-count').textContent = String(reports.length);
+
+    // Always sort by last successful run (newest → oldest) unless upside mode.
+    if (_repSortMode !== 'upside') {
+      reports = reports.slice().sort(function(a, b) {
+        return _repRunAtMs(b) - _repRunAtMs(a);
+      });
+    }
+
+    // Single batch quote call — one request for all tickers instead of N
+    // parallel /api/quote/ calls that hammer Yahoo and trigger rate limits.
+    const tickerList = reports.map(r => r.ticker).join(',');
+    window.dgaFetch('/api/quotes?tickers=' + encodeURIComponent(tickerList))
+      .then(r => r.ok ? r.json() : {}).catch(() => ({}))
+      .then(quotesMap => {
+      tbody.innerHTML = reports.map((rep, i) => {
+        const q = quotesMap[rep.ticker] || {};
+        const price = q.price != null ? Number(q.price) : null;
+        const pct = q.pct_change != null ? Number(q.pct_change) : null;
+        const target = rep.price_target != null ? Number(rep.price_target) : null;
+        const upside = (target != null && price != null && price > 0)
+                       ? ((target - price) / price * 100) : (rep.upside_pct != null ? Number(rep.upside_pct) : null);
+        // Status indicator: ✅ on success, ❌ on failure (tooltip = error message).
+        // Date shown is the LATEST attempt time (success or fail), so the user
+        // can tell at a glance which reports refreshed and which are stale.
+        const attemptAt   = rep.last_attempt_at || rep.generated_at;
+        const dateStr     = _repFmtRelDate(attemptAt);
+        const attemptStat = rep.last_attempt_status || (rep.generated_at ? 'success' : null);
+        const attemptErr  = (rep.last_attempt_error || '').replace(/"/g, '&quot;');
+        let statusIcon = '';
+        if (attemptStat === 'failed') {
+          statusIcon = '<span class="rep-status-fail" title="Last attempt FAILED: '
+            + attemptErr + ' (click to retry)" data-rep-retry="' + rep.ticker + '"'
+            + ' onclick="event.stopPropagation();">❌</span>';
+        } else if (attemptStat === 'success') {
+          statusIcon = '<span class="rep-status-ok" title="Last refresh succeeded">✅</span>';
+        }
+        const sortVal = upside != null ? upside.toFixed(4) : '';
+        const runMs = _repRunAtMs(rep);
+        // Show when the analysis was run (pipeline finish), not the report's narrative as-of
+        const runDateStr = runMs ? _repFmtRelDate(new Date(runMs).toISOString()) : dateStr;
+        return (
+          '<tr data-ticker="' + rep.ticker + '" data-rep-status="' + (attemptStat || '') + '" data-run-at="' + runMs + '">' +
+          '<td>' +
+            '<span style="display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap;">' +
+              statusIcon +
+              '<span class="rep-tk" data-rep-gf="' + rep.ticker + '" title="Open free snapshot for ' + rep.ticker + '">' + rep.ticker + '</span>' +
+              '<button data-rep-delete="' + rep.ticker + '" title="Remove report" ' +
+                'style="background:none;border:none;cursor:pointer;padding:0 2px;font-size:12px;line-height:1;color:var(--dim);opacity:0.6;" ' +
+                'onclick="event.stopPropagation();">×</button>' +
+            '</span>' +
+            (rep.has_docx !== false ? '<span class="rep-pill rep-pill-doc">DOC</span>' : '') +
+            (rep.has_pptx
+              ? '<span class="rep-pill rep-pill-ppt' + (rep.pptx_stale ? ' stale' : '') + '"'
+                + ' title="' + (rep.pptx_stale
+                    ? 'PowerPoint was generated from an earlier report run. Re-run the analyzer with the Gamma checkbox to refresh.'
+                    : 'PowerPoint presentation') + '">PPT</span>'
+              : '') +
+            // LLM provider pills — each is independently clickable to open
+            // that engine's specific report. When BOTH ran, render TWO pills
+            // side-by-side so the user has a one-click path into each version.
+            ((rep.providers || []).includes('grok')
+              ? '<span class="rep-pill rep-pill-llm rep-pill-llm-grok rep-pill-clickable" '
+                + 'data-rep-open="' + rep.ticker + '" data-rep-provider="grok"'
+                + ' title="Click to open Grok report"'
+                + ' onclick="event.stopPropagation();">GROK</span>'
+              : '') +
+            ((rep.providers || []).includes('claude')
+              ? '<span class="rep-pill rep-pill-llm rep-pill-llm-claude rep-pill-clickable" '
+                + 'data-rep-open="' + rep.ticker + '" data-rep-provider="claude"'
+                + ' title="Click to open Claude report"'
+                + ' onclick="event.stopPropagation();">CLAUDE</span>'
+              : '') +
+            '<button class="rep-compare-btn" data-compare-ticker="' + rep.ticker + '"'
+              + ' title="Compare Grok report with Claude (≈2-3 min)"'
+              + ' onclick="event.stopPropagation();">🔬</button>' +
+            // 🎙️ Podcast — only when an episode exists for this ticker.
+            // Click opens the LLM Lab tab + auto-plays this episode.
+            ((window._podcastEpisodeTickers && window._podcastEpisodeTickers.has(rep.ticker))
+              ? '<button class="rep-compare-btn rep-podcast-btn" data-podcast-ticker="' + rep.ticker + '"'
+                + ' title="Open this stock\'s podcast episode"'
+                + ' onclick="event.stopPropagation();">🎙️</button>'
+              : '') +
+            '<button class="rep-compare-btn" data-refresh-ticker="' + rep.ticker + '"'
+              + ' title="Wipe cached SEC + market data for this ticker and re-run a fresh Grok analysis. '
+              + 'Use when the report has empty financial tables (cached extract was bad)."'
+              + ' onclick="event.stopPropagation();">🔃</button>' +
+            // "Run" time = when analysis finished (generated_at / claude_generated_at)
+            '<span class="rep-date" title="Last run: ' + _esc(runMs ? new Date(runMs).toLocaleString() : (attemptAt || '')) + '">'
+              + _esc(runDateStr) + '</span>' +
+          '</td>' +
+          '<td class="rep-num">' +
+            '<div class="rep-num-stack">' +
+              '<div class="rep-num-primary">' + (price != null ? '$' + fmtPx(price) : '—') + _quoteStaleChip(q) + '</div>' +
+              '<div class="rep-num-secondary ' + cssClass(pct) + '">' + fmtPct(pct) + '</div>' +
+            '</div>' +
+          '</td>' +
+          '<td class="rep-num" data-sort-val="' + sortVal + '">' +
+            (function() {
+              // When BOTH LLMs produced a target, stack them: each row has
+              // [provider chip · upside % · target $] right-aligned. When only
+              // one LLM ran, keep a matching stacked layout for alignment.
+              const gT = rep.grok_price_target,   cT = rep.claude_price_target;
+              const _fmtTgt = function(v) { return v == null ? '—' : '$' + (v >= 100 ? Number(v).toFixed(0) : Number(v).toFixed(2)); };
+              if (gT != null && cT != null) {
+                const gUp = (price != null && price > 0) ? ((gT - price) / price * 100) : null;
+                const cUp = (price != null && price > 0) ? ((cT - price) / price * 100) : null;
+                return '<div class="rep-num-stack">'
+                  + '<div class="rep-tgt-row">'
+                  +   '<span class="rep-tgt-prov grok">G</span>'
+                  +   '<span class="rep-tgt-up ' + cssClass(gUp) + '">' + fmtPct(gUp) + '</span>'
+                  +   '<span class="rep-tgt-price">' + _fmtTgt(gT) + '</span>'
+                  + '</div>'
+                  + '<div class="rep-tgt-row">'
+                  +   '<span class="rep-tgt-prov claude">C</span>'
+                  +   '<span class="rep-tgt-up ' + cssClass(cUp) + '">' + fmtPct(cUp) + '</span>'
+                  +   '<span class="rep-tgt-price">' + _fmtTgt(cT) + '</span>'
+                  + '</div></div>';
+              }
+              return '<div class="rep-num-stack">'
+                + '<div class="rep-num-lbl">TGT</div>'
+                + '<div class="rep-num-primary">' + (target != null ? '$' + (target >= 100 ? target.toFixed(0) : target.toFixed(2)) : '—') + '</div>'
+                + '<div class="rep-num-secondary ' + cssClass(upside) + '">' + fmtPct(upside) + '</div>'
+                + '</div>';
+            })() +
+          '</td>' +
+          '</tr>'
+        );
+      }).join('');
+
+      // Trigger inline news headlines once the rows are in the DOM. The
+      // old setTimeout-from-loadReports approach fired before this point
+      // because tbody.innerHTML is set inside the async quotes .then().
+      try {
+        if (typeof window.loadNewsForReports === 'function') {
+          setTimeout(window.loadNewsForReports, 0);
+        }
+      } catch {}
+
+      // Click row → open default (Grok) report viewer; per-pill buttons get
+      // their own opener handlers below
+      tbody.querySelectorAll('tr[data-ticker]').forEach(tr => {
+        tr.addEventListener('click', (e) => {
+          if (e.target.closest('[data-rep-delete]')) return;
+          if (e.target.closest('[data-compare-ticker]')) return;
+          if (e.target.closest('[data-rep-open]')) return;
+          if (e.target.closest('[data-rep-retry]')) return;
+          if (e.target.closest('[data-rep-gf]')) return;   // ticker → GuruFocus
+          openReport(tr.getAttribute('data-ticker'));
+        });
+      });
+
+      // Ticker chip → GuruFocus summary (only when clicking the ticker text;
+      // row-click still opens the report)
+      tbody.querySelectorAll('[data-rep-gf]').forEach(span => {
+        span.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openGuruFocus(span.getAttribute('data-rep-gf'));
+        });
+      });
+
+      // GROK / CLAUDE pill clicks → open THAT engine's specific report
+      tbody.querySelectorAll('[data-rep-open]').forEach(span => {
+        span.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const tk = span.getAttribute('data-rep-open');
+          const pv = span.getAttribute('data-rep-provider') || 'grok';
+          openReport(tk, pv);
+        });
+      });
+
+      // 🔬 Compare buttons — open side-by-side Grok vs Claude modal
+      tbody.querySelectorAll('[data-compare-ticker]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const tk = btn.getAttribute('data-compare-ticker');
+          openCompareModal(tk);
+        });
+      });
+
+      // 🎙️ Podcast buttons — switch to LLM Lab tab, sync the audio ticker
+      // picker, surface the player for this ticker's existing episode.
+      tbody.querySelectorAll('[data-podcast-ticker]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const tk = btn.getAttribute('data-podcast-ticker');
+          // Switch to the LLM Lab tab (which contains the podcast card)
+          const labTab = document.querySelector('.topbar-link[data-tab="lab"]');
+          if (labTab) labTab.click();
+          // After the tab DOM is visible, sync pickers + open the player.
+          // Small timeout lets _initLabTab finish populating dropdowns.
+          setTimeout(function() {
+            const sel = document.getElementById('podcast-audio-saved');
+            if (sel) {
+              if (!Array.from(sel.options).some(function(o){ return o.value === tk; })) {
+                const opt = document.createElement('option');
+                opt.value = tk; opt.textContent = tk;
+                sel.appendChild(opt);
+              }
+              sel.value = tk;
+            }
+            const ep = (window._podcastEpisodes || []).find(function(e){ return e.ticker === tk; });
+            if (typeof _showPodcastPlayer === 'function') {
+              _showPodcastPlayer(tk, ep || { title: tk });
+            }
+            const player = document.getElementById('podcast-audio-player');
+            if (player && player.scrollIntoView) {
+              player.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }, 250);
+        });
+      });
+
+      // 🔃 Refresh-data buttons — wipe SEC cache + force fresh Grok analyze
+      // Use when financial tables are empty in the saved report (cached XBRL
+      // extract was bad). Re-runs the data layer + new LLM call.
+      tbody.querySelectorAll('[data-refresh-ticker]').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const tk = btn.getAttribute('data-refresh-ticker');
+          if (!confirm('Wipe cached SEC + market data for ' + tk + ' and re-run a fresh Grok analysis?\n\n'
+              + '• Use this when the saved report has empty financial tables\n'
+              + '• Forces a fresh SEC EDGAR download + XBRL extract\n'
+              + '• Then re-runs Grok analysis (~2-3 min)\n'
+              + '• After it finishes, re-Compare with Claude will use the new data')) return;
+          btn.disabled = true; btn.textContent = '⏳';
+          try {
+            const r = await window.dgaFetch('/api/reports/' + encodeURIComponent(tk) + '/refresh-data',
+                                            { method: 'POST' });
+            if (!r.ok) { const err = await r.json().catch(()=>({})); throw new Error(err.detail || r.status); }
+            const j = await r.json();
+            btn.textContent = '⏳';
+            btn.title = 'Refreshing (job ' + j.job_id.slice(0,8) + '). This may take 2-3 min.';
+            // Poll the job; refresh the reports list when done
+            const interval = setInterval(async () => {
+              try {
+                const jr = await window.dgaFetch('/api/jobs/' + j.job_id);
+                if (!jr.ok) return;
+                const jd = await jr.json();
+                if (jd.status === 'done' || jd.status === 'failed') {
+                  clearInterval(interval);
+                  btn.disabled = false; btn.textContent = '🔃';
+                  loadReports();
+                }
+              } catch (e) {}
+            }, 10000);
+          } catch (err) {
+            btn.disabled = false; btn.textContent = '🔃';
+            alert('Refresh failed: ' + err.message);
+          }
+        });
+      });
+
+      // × delete buttons
+      tbody.querySelectorAll('[data-rep-delete]').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const tk = btn.getAttribute('data-rep-delete');
+          if (!confirm('Remove ' + tk + ' from Saved Reports?')) return;
+          try {
+            await window.dgaFetch('/api/reports/' + encodeURIComponent(tk), { method: 'DELETE' });
+            loadReports();
+          } catch(err) {
+            console.warn('[delete-report]', err);
+          }
+        });
+      });
+
+      // ❌ click → re-run analysis just for this ticker (no bulk job)
+      tbody.querySelectorAll('[data-rep-retry]').forEach(span => {
+        span.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const tk = span.getAttribute('data-rep-retry');
+          if (!confirm('Retry analysis for ' + tk + '?\nLast error: ' + (span.getAttribute('title') || ''))) return;
+          try {
+            const r = await window.dgaFetch('/api/analyze', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ticker: tk, generate_gamma: false }),
+            });
+            if (!r.ok) throw new Error('analyze ' + r.status);
+            const j = await r.json();
+            span.textContent = '⏳';
+            span.title = 'Retry in progress (job ' + j.job_id.slice(0,8) + '…)';
+            // Refresh the list every 30s while a retry is pending; loadReports
+            // will pick up the updated last_attempt_status when it lands
+            const interval = setInterval(async () => {
+              try {
+                const jr = await window.dgaFetch('/api/jobs/' + j.job_id);
+                if (!jr.ok) return;
+                const jd = await jr.json();
+                if (jd.status === 'done' || jd.status === 'failed') {
+                  clearInterval(interval);
+                  loadReports();
+                }
+              } catch (e) {}
+            }, 8000);
+          } catch (err) {
+            alert('Retry failed: ' + err.message);
+          }
+        });
+      });
+
+      // Wire per-row scan buttons
+      _wireRepScanButtons();
+
+      // Only apply upside-sort if the user explicitly switched to it.
+      // Default date mode already sorted by last run (newest first) above.
+      if (_repSortMode === 'upside') {
+        _sortTableByCol(tbody, 2, _repSortDir);
+      }
+
+      // Wire the "TGT / Upside" column header — first call or re-wire after re-render
+      const th = document.getElementById('rep-th-upside');
+      if (th && !th.dataset.sortWired) {
+        th.dataset.sortWired = '1';
+        const arrow = document.createElement('span');
+        arrow.id = 'rep-sort-arrow';
+        arrow.style.cssText = 'margin-left:4px;font-size:9px;opacity:0.7;';
+        arrow.textContent = _repSortMode === 'upside' ? (_repSortDir === 'desc' ? '▼' : '▲') : '';
+        th.appendChild(arrow);
+        th.title = 'Click to sort by upside. Click again to flip direction.';
+        th.addEventListener('click', function() {
+          if (_repSortMode !== 'upside') {
+            _repSortMode = 'upside';
+            _repSortDir  = 'desc';
+          } else {
+            // Second flip returns to newest-run order
+            if (_repSortDir === 'asc') {
+              _repSortMode = 'date';
+              _repSortDir = 'desc';
+              document.getElementById('rep-sort-arrow').textContent = '';
+              loadReports();
+              return;
+            }
+            _repSortDir = 'asc';
+          }
+          document.getElementById('rep-sort-arrow').textContent = _repSortDir === 'desc' ? '▼' : '▲';
+          _sortTableByCol(tbody, 2, _repSortDir);
+        });
+      } else {
+        const arrow = document.getElementById('rep-sort-arrow');
+        if (arrow) {
+          arrow.textContent = _repSortMode === 'upside'
+            ? (_repSortDir === 'desc' ? '▼' : '▲')
+            : '';
+        }
+      }
+    });
+  }
+
+  // ── Hero Analyze Ticker ──────────────────────────────────────────
+  const $heroTicker = document.getElementById('hero-ticker');
+  const $heroBtn    = document.getElementById('hero-run-btn');
+  const $heroHint   = document.getElementById('hero-hint');
+  const $heroProg     = document.getElementById('hero-progress');
+  const $heroProgLbl  = document.getElementById('hero-prog-label');
+  const $heroProgPct  = document.getElementById('hero-prog-pct');
+  const $heroProgFill = document.getElementById('hero-prog-fill');
+
+  function _heroProgShow(on) { if ($heroProg) $heroProg.classList.toggle('show', !!on); }
+  function _heroProgSet(pctInt, lbl) {
+    // null pct = indeterminate (queued / between updates) — keep a small sliver.
+    const w = pctInt == null ? 6 : Math.max(4, Math.min(100, pctInt));
+    if ($heroProgFill) $heroProgFill.style.width = w + '%';
+    if ($heroProgPct)  $heroProgPct.textContent = (pctInt == null ? '' : pctInt + '%');
+    if ($heroProgLbl && lbl) $heroProgLbl.textContent = lbl;
+  }
+
+  // Cancel support (ui377): track the active job id so the Cancel button can
+  // POST /api/jobs/{id}/cancel. Server-side the cancel is cooperative — the
+  // worker stops at the next checkpoint and NOTHING is saved.
+  const $heroCancelBtn = document.getElementById('hero-cancel-btn');
+  let _heroActiveJobId = null;
+  function _heroShowCancel(on) {
+    if (!$heroCancelBtn) return;
+    $heroCancelBtn.style.display = on ? '' : 'none';
+    if (on) { $heroCancelBtn.disabled = false; $heroCancelBtn.textContent = '✕ Cancel'; }
+  }
+
+  async function runAnalysis() {
+    const ticker = ($heroTicker.value || '').trim().toUpperCase().replace(/[^A-Z.]/g,'');
+    if (!ticker) { $heroHint.style.color='var(--red)'; $heroHint.textContent='Enter a ticker first.'; return; }
+    const eng = document.getElementById('hero-llm')?.value || 'grok';
+    const act = eng === 'claude' ? 'report_claude' : eng === 'both' ? 'report_both' : 'report_grok';
+    const meta = llmDescribe(act);
+    $heroBtn.disabled = true;
+    $heroBtn.innerHTML = '<span class="spin">⟳</span> ' + meta.model.slice(0, 18);
+    $heroHint.style.color = 'var(--mid)';
+    $heroHint.textContent = 'Running ' + meta.model + ' · est. ' + meta.cost
+      + (document.getElementById('hero-gamma')?.checked ? ' + Gamma deck' : '');
+    llmToast(act, 'Starting full report');
+    _heroProgSet(null, meta.model + ' · queued…');
+    _heroProgShow(true);
+    try {
+      const r = await window.dgaFetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ticker,
+          generate_gamma: document.getElementById('hero-gamma')?.checked === true,
+          llm_provider:   eng,
+        }),
+      });
+      if (!r.ok) throw new Error('analyze ' + r.status);
+      const job = await r.json();
+      _heroActiveJobId = job.job_id;
+      _heroShowCancel(true);
+      pollJob(job.job_id, '/api/jobs/', $heroBtn, '⚡ RUN',
+        (j) => {
+          _heroActiveJobId = null; _heroShowCancel(false);
+          _heroProgSet(100, 'Complete · ' + meta.model);
+          setTimeout(() => _heroProgShow(false), 650);
+          loadReports();
+          const tgt = j.result?.price_target ? ` · Target $${j.result.price_target}` : '';
+          // Actual LLM spend for this run (token usage × live pricing).
+          const c = j.result?.cost_usd;
+          const costTxt = (c != null && !isNaN(c))
+            ? ` · actual $${Number(c).toFixed(2)}`
+            : ` · est. ${meta.cost}`;
+          const used = j.result?.model || meta.model;
+          $heroHint.style.color = 'var(--green)';
+          $heroHint.textContent = `✅ ${ticker} · ${used}${costTxt}${tgt} — see Saved Reports`;
+          llmStampControl($heroBtn, act);
+        },
+        () => {
+          _heroActiveJobId = null; _heroShowCancel(false);
+          _heroProgShow(false);
+          $heroHint.style.color='var(--red)'; $heroHint.textContent='Analysis failed — check logs.';
+          llmStampControl($heroBtn, act);
+        },
+        (pctInt, lbl) => _heroProgSet(pctInt, (lbl || '…') + ' · ' + meta.model),
+        () => {
+          // Canceled — quiet reset, nothing was persisted server-side.
+          _heroActiveJobId = null; _heroShowCancel(false);
+          _heroProgShow(false);
+          $heroHint.style.color = 'var(--dim)';
+          $heroHint.textContent = 'Analysis canceled — nothing saved.';
+          llmStampControl($heroBtn, act);
+        }
+      );
+    } catch (e) {
+      $heroBtn.disabled = false;
+      $heroBtn.textContent = '⚡ RUN';
+      _heroActiveJobId = null; _heroShowCancel(false);
+      _heroProgShow(false);
+      $heroHint.style.color = 'var(--red)';
+      $heroHint.textContent = 'Error: ' + (e.message || 'unknown');
+      llmStampControl($heroBtn, act);
+    }
+  }
+  $heroBtn.addEventListener('click', runAnalysis);
+  $heroTicker.addEventListener('keydown', e => { if (e.key === 'Enter') runAnalysis(); });
+
+  // Cancel a running analysis. The poll loop notices status 'canceled' and
+  // resets the UI; here we just flag the job and show "Canceling…".
+  if ($heroCancelBtn) {
+    $heroCancelBtn.addEventListener('click', async () => {
+      if (!_heroActiveJobId) { _heroShowCancel(false); return; }
+      $heroCancelBtn.disabled = true;
+      $heroCancelBtn.textContent = '⏳ Canceling…';
+      _heroProgSet(null, 'Canceling…');
+      try {
+        const r = await window.dgaFetch('/api/jobs/' + encodeURIComponent(_heroActiveJobId) + '/cancel', { method: 'POST' });
+        if (!r.ok) throw new Error('cancel ' + r.status);
+        // Poll loop takes it from here (status → 'canceled').
+      } catch (e) {
+        // Job may have already finished (404) — let the poll loop resolve it.
+        $heroCancelBtn.disabled = false;
+        $heroCancelBtn.textContent = '✕ Cancel';
+      }
+    });
+  }
+
+  // Engine chips → drive the hidden #hero-llm select (value contract preserved)
+  document.querySelectorAll('#hero-llm-chips .hero-llm-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const sel = document.getElementById('hero-llm');
+      if (sel) {
+        sel.value = chip.dataset.llm || 'grok';
+        sel.dispatchEvent(new Event('change'));   // refresh the cost estimate
+      }
+      document.querySelectorAll('#hero-llm-chips .hero-llm-chip').forEach(c =>
+        c.classList.toggle('active', c === chip));
+      _updateHeroModelTag();
+    });
+  });
+
+  // ── Live model ids (from server config, not hardcoded) ──────────────────
+  // Fetch once; label the Grok/Claude chips with the exact model that will run
+  // and show the active engine's model in #hero-model-tag so the card always
+  // states which Grok (or Claude) version it's using.
+  var _HERO_MODELS = null;
+  function _updateHeroModelTag() {
+    const tag = document.getElementById('hero-model-tag');
+    if (!tag || !_HERO_MODELS) return;
+    const sel = document.getElementById('hero-llm');
+    const eng = (sel && sel.value) || 'grok';
+    const g = _HERO_MODELS.grok || 'grok', c = _HERO_MODELS.claude || 'claude';
+    tag.textContent = eng === 'claude' ? c : eng === 'both' ? (g + ' + ' + c) : g;
+  }
+  (async function _loadHeroModels() {
+    try {
+      const r = await window.dgaFetch('/api/config/models');
+      if (!r.ok) return;
+      _HERO_MODELS = await r.json();
+      // Feed global catalog used by llmDescribe() for every LLM button
+      window.DGA_LLM = Object.assign(window.DGA_LLM || {}, {
+        grok: _HERO_MODELS.grok,
+        claude: _HERO_MODELS.claude,
+        agentic: _HERO_MODELS.agentic,
+        volume: _HERO_MODELS.volume || { enabled: false },
+        est: _HERO_MODELS.est || {},
+      });
+      const gc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="grok"]');
+      const cc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="claude"]');
+      if (gc) gc.title = (_HERO_MODELS.grok || 'Grok') + ' · full report · ' + (_HERO_COST_EST.grok || '');
+      if (cc) cc.title = (_HERO_MODELS.claude || 'Claude') + ' · full report · ' + (_HERO_COST_EST.claude || '');
+      const est = _HERO_MODELS.est;
+      if (est) {
+        const rng = a => '$' + a[0].toFixed(2) + '–' + a[1].toFixed(2);
+        if (est.grok_report)   _HERO_COST_EST.grok   = rng(est.grok_report);
+        if (est.claude_report) _HERO_COST_EST.claude = rng(est.claude_report);
+        if (est.both_report)   _HERO_COST_EST.both   = rng(est.both_report);
+        if (est.pulse_per_ticker) _PULSE_COST_PER_TICKER = est.pulse_per_ticker;
+        if (typeof _updateHeroCost === 'function') _updateHeroCost();
+        if (typeof _PULSE_PREFIXES !== 'undefined')
+          _PULSE_PREFIXES.forEach(function(pfx) { try { _pulseCostEstimate(pfx, true); } catch(_){} });
+      }
+      _updateHeroModelTag();
+      try { llmRefreshAllStamps(); } catch (_) {}
+    } catch (e) { /* leave the em-dash placeholder */ }
+  })();
+
+  // ── Per-run cost estimate ──────────────────────────────────────────────
+  // Static fallbacks only — /api/config/models returns live estimates computed
+  // from the server's pricing tables for the ACTUAL configured models, and
+  // _loadHeroModels overwrites these on load (so a GROK_MODEL swap re-prices
+  // every chip with zero UI changes).
+  const $heroLlm   = document.getElementById('hero-llm');
+  const $heroGamma2 = document.getElementById('hero-gamma');
+  const $heroCost  = document.getElementById('hero-cost-est');
+  let _HERO_COST_EST = { grok: '$0.30–0.60', claude: '$0.50–1.00', both: '$0.80–1.60' };
+  function _updateHeroCost() {
+    if (!$heroCost) return;
+    const eng = ($heroLlm && $heroLlm.value) || 'grok';
+    let s = '≈ ' + (_HERO_COST_EST[eng] || _HERO_COST_EST.grok) + ' / report';
+    if ($heroGamma2 && $heroGamma2.checked) s += ' + deck';
+    $heroCost.textContent = s;
+  }
+  if ($heroLlm)    $heroLlm.addEventListener('change', _updateHeroCost);
+  if ($heroGamma2) $heroGamma2.addEventListener('change', _updateHeroCost);
+  _updateHeroCost();
+
+  // ── Last Portfolio Run ───────────────────────────────────────────
+  async function loadLastPortfolio() {
+    try {
+      const r = await window.dgaFetch('/api/portfolio/last');
+      if (!r.ok) return;
+      const d = await r.json();
+      const badge = document.getElementById('portfolio-run-badge');
+      const body  = document.getElementById('portfolio-run-body');
+      const view  = document.getElementById('portfolio-run-view');
+      if (!d.exists) {
+        body.innerHTML = '<div style="font-size:12px;color:var(--dim);padding:4px 0;">No portfolio run yet.</div>';
+        return;
+      }
+      if (badge) badge.textContent = fmtDate(d.generated_at);
+      if (view)  { view.style.display=''; view.onclick = () => showTab('tracker'); }
+      // Try to get richer data
+      try {
+        const r2 = await window.dgaFetch('/api/portfolio/last-job');
+        if (r2.ok) {
+          const j = await r2.json();
+          const nav  = j.nav || j.total_market_value || null;
+          const ytd  = j.ytd_pct ?? j.ytd ?? null;
+          const twrr = j.twrr ?? null;
+          const holds = j.holdings?.length || j.n_holdings || null;
+          body.innerHTML = `
+            <div style="font-size:12px;color:var(--mid);margin-bottom:8px;">
+              Portfolio Review${holds ? ' · ' + holds + ' holdings' : ''}
+            </div>
+            <div style="display:flex;gap:14px;font-size:11px;flex-wrap:wrap;">
+              ${nav  ? `<div><span style="color:var(--dim)">NAV</span> <strong style="color:var(--text-primary)" class="mono">${fmtUSD(nav)}</strong></div>` : ''}
+              ${ytd  != null ? `<div><span style="color:var(--dim)">YTD</span> <strong class="${cssClass(ytd)} mono">${fmtPct(ytd)}</strong></div>` : ''}
+              ${twrr != null ? `<div><span style="color:var(--dim)">TWRR</span> <strong class="${cssClass(twrr)} mono">${fmtPct(twrr)}</strong></div>` : ''}
+            </div>`;
+        }
+      } catch { body.innerHTML = '<div style="font-size:12px;color:var(--mid)">Last run: ' + fmtDate(d.generated_at) + '</div>'; }
+    } catch {}
+  }
+
+  // ── Universal search → free on-site stock peek (no LLM, no GuruFocus) ──
+  const $search = document.getElementById('search-input');
+  const $sr = document.getElementById('search-results');
+  let searchDebounce = null;
+  let searchSeq = 0;
+
+  function _isTickerLike(q) {
+    return /^[A-Za-z][A-Za-z0-9.\-]{0,9}$/.test((q || '').trim());
+  }
+  function _normalizeTickerQuery(q) {
+    return String(q || '').trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '');
+  }
+
+  if ($search) {
+    $search.addEventListener('input', () => {
+      clearTimeout(searchDebounce);
+      const q = $search.value.trim();
+      // Allow 1-char for tickers (F, T, V…); companies need 2+
+      if (!q || (q.length < 2 && !_isTickerLike(q))) {
+        if ($sr) { $sr.classList.remove('open'); $sr.innerHTML = ''; }
+        return;
+      }
+      searchDebounce = setTimeout(() => doSearch(q), 220);
+    });
+    $search.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const q = $search.value.trim();
+        const first = $sr && $sr.querySelector('.sr-item[data-ticker]');
+        if (first) {
+          first.click();
+          return;
+        }
+        // Exact ticker Enter — open free snapshot immediately (no wait on dropdown)
+        if (_isTickerLike(q)) {
+          const tk = _normalizeTickerQuery(q);
+          if (tk) {
+            $search.value = '';
+            if ($sr) $sr.classList.remove('open');
+            openStockPeek(tk);
+          }
+        }
+      } else if (e.key === 'Escape') {
+        if ($sr) $sr.classList.remove('open');
+        $search.blur();
+      }
+    });
+  }
+  document.addEventListener('click', (e) => {
+    if ($sr && !e.target.closest('#search-wrap')) $sr.classList.remove('open');
+  });
+  // ⌘K / Ctrl+K focuses the top ticker box
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+      const tag = (e.target && e.target.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) {
+        if (e.target !== $search) return;
+      }
+      if ($search) {
+        e.preventDefault();
+        $search.focus();
+        $search.select();
+      }
+    }
+  });
+
+  async function doSearch(q) {
+    if (!$sr) return;
+    const mySeq = ++searchSeq;
+    const tickerLike = _isTickerLike(q);
+    try {
+      $sr.innerHTML = '<div class="sr-item" style="opacity:0.6;cursor:default;"><span class="sr-name">Searching…</span></div>';
+      $sr.classList.add('open');
+      const r = await window.dgaFetch('/api/search/resolve?q=' + encodeURIComponent(q));
+      if (!r.ok) throw new Error('search ' + r.status);
+      const data = await r.json();
+      if (mySeq !== searchSeq) return; // stale
+      let results = data.results || [];
+      // If Yahoo search is empty but query looks like a ticker, still offer it
+      if (!results.length && tickerLike) {
+        const tk = _normalizeTickerQuery(q);
+        results = [{ ticker: tk, name: 'Open free snapshot', exchange: 'LIVE' }];
+      }
+      if (!results.length) {
+        $sr.innerHTML = '<div class="sr-item" style="opacity:0.5;cursor:default;"><span class="sr-name">No matches — try a ticker like AAPL</span></div>';
+      } else {
+        $sr.innerHTML = results.map(r => `
+          <div class="sr-item" data-ticker="${String(r.ticker || '').replace(/"/g, '')}">
+            <span class="sr-tk">${r.ticker || ''}</span>
+            <span class="sr-name">${r.name || ''}</span>
+            <span class="sr-ex">${r.exchange || 'FREE'}</span>
+          </div>
+        `).join('');
+        $sr.querySelectorAll('.sr-item[data-ticker]').forEach(item => {
+          item.addEventListener('click', () => {
+            const tk = item.getAttribute('data-ticker');
+            $search.value = '';
+            $sr.classList.remove('open');
+            openStockPeek(tk);   // on-site free data — never GuruFocus / never auto-AI
+          });
+        });
+      }
+      $sr.classList.add('open');
+    } catch (e) {
+      console.warn('[search]', e);
+      // Offline / API error: still allow ticker Enter path
+      if (tickerLike) {
+        const tk = _normalizeTickerQuery(q);
+        $sr.innerHTML = `<div class="sr-item" data-ticker="${tk}">
+          <span class="sr-tk">${tk}</span>
+          <span class="sr-name">Open free snapshot</span>
+          <span class="sr-ex">LIVE</span>
+        </div>`;
+        $sr.querySelector('.sr-item[data-ticker]')?.addEventListener('click', () => {
+          $search.value = '';
+          $sr.classList.remove('open');
+          openStockPeek(tk);
+        });
+        $sr.classList.add('open');
+      }
+    }
+  }
+
+  // Free stock peek modal — /api/stock-info (Yahoo live fallback, $0 tokens)
+  function openStockPeek(ticker) {
+    const tk = _normalizeTickerQuery(ticker);
+    if (!tk) return;
+    // Prefer dedicated modal; falls back to legacy name for any external callers
+    openFreeStockModal(tk);
+  }
+
+  async function openFreeStockModal(tk) {
+    // Remove prior
+    const old = document.getElementById('stock-peek-modal');
+    if (old) old.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'stock-peek-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9200;';
+    overlay.innerHTML = `
+      <div class="dga-dialog" style="width:min(560px,94vw);height:auto;max-height:88vh;resize:both;">
+        <div class="dga-dialog-handle" style="display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--panel-edge);">
+          <span style="font-size:16px;font-weight:800;letter-spacing:0.8px;color:var(--text-primary);">${tk}</span>
+          <span style="font-size:9px;font-weight:800;letter-spacing:0.6px;padding:2px 7px;border-radius:4px;background:rgba(34,197,94,0.12);color:#15803d;">FREE · NO AI</span>
+          <span id="sp-price" style="font-size:14px;font-weight:800;font-variant-numeric:tabular-nums;margin-left:4px;"></span>
+          <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
+            <button type="button" id="sp-wl" class="tab-btn" style="font-size:10px;">+ Watchlist</button>
+            <button type="button" id="sp-close" style="background:rgba(0,0,0,0.05);border:1px solid var(--panel-edge);border-radius:5px;padding:3px 12px;cursor:pointer;font-size:14px;">✕</button>
+          </div>
+        </div>
+        <div id="sp-body" class="dga-dialog-body" style="padding:14px 16px 18px;">
+          <div class="tab-loading"><span class="spin">↻</span> Loading free snapshot…</div>
+        </div>
+        <div style="padding:10px 16px 12px;border-top:1px solid var(--panel-edge);display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:#fafbfc;">
+          <span style="font-size:10px;color:var(--dim);flex:1;">Yahoo / local store · $0 tokens. AI only if you click Run analysis.</span>
+          <button type="button" id="sp-report" class="tab-btn" style="display:none;font-size:10px;">Open report</button>
+          <button type="button" id="sp-ai" class="tab-btn" style="font-size:10px;background:var(--blue);color:#0A1628;border:none;font-weight:800;">Run AI analysis</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    document.body.style.overflow = 'hidden';
+
+    const close = () => {
+      overlay.remove();
+      document.body.style.overflow = '';
+    };
+    overlay.querySelector('#sp-close').onclick = close;
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    const dlg = overlay.querySelector('.dga-dialog');
+    const handle = overlay.querySelector('.dga-dialog-handle');
+    if (dlg && handle && typeof _initDragModal === 'function') _initDragModal(dlg, handle);
+
+    const body = overlay.querySelector('#sp-body');
+    const priceEl = overlay.querySelector('#sp-price');
+    try {
+      const r = await window.dgaFetch('/api/stock-info/' + encodeURIComponent(tk));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      // Reuse the free stock-info HTML builder from the positions expander
+      if (typeof _sieHTML === 'function') {
+        body.innerHTML = _sieHTML(tk, d, null);
+        // Hide the expander's internal "Run AI" — footer has one deliberate control
+        const innerRun = body.querySelector('[data-sie-run]');
+        if (innerRun) innerRun.style.display = 'none';
+        const rep = body.querySelector('[data-sie-report]');
+        if (rep) {
+          const footRep = overlay.querySelector('#sp-report');
+          if (footRep) {
+            footRep.style.display = '';
+            footRep.onclick = () => { close(); openReport(tk); };
+          }
+          rep.addEventListener('click', (e) => { e.stopPropagation(); close(); openReport(tk); });
+        }
+      } else {
+        const q = d.quote || {};
+        const m = d.meta || {};
+        body.innerHTML = `<div style="font-size:14px;font-weight:700;">${m.name || tk}</div>
+          <div style="margin-top:8px;font-size:13px;">Price: ${q.price != null ? '$' + Number(q.price).toFixed(2) : '—'}
+          ${q.pct_change != null ? ' (' + (q.pct_change >= 0 ? '+' : '') + Number(q.pct_change).toFixed(2) + '%)' : ''}</div>
+          <div style="margin-top:6px;font-size:12px;color:var(--dim);">${m.sector || ''} ${m.industry ? '· ' + m.industry : ''}</div>`;
+      }
+      const q = d.quote || {};
+      if (priceEl && q.price != null) {
+        const pct = q.pct_change;
+        const cls = pct == null ? '' : (pct >= 0 ? 'up' : 'dn');
+        priceEl.innerHTML = '$' + Number(q.price).toFixed(2)
+          + (pct != null ? ' <span class="' + cls + '">' + (pct >= 0 ? '+' : '') + Number(pct).toFixed(2) + '%</span>' : '');
+      }
+    } catch (e) {
+      body.innerHTML = '<div class="tab-error">Could not load ' + tk + ': ' + (e.message || e) + '</div>';
+    }
+
+    const wlBtn = overlay.querySelector('#sp-wl');
+    if (wlBtn) {
+      wlBtn.onclick = async () => {
+        try {
+          const r = await window.dgaFetch('/api/watchlist', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ticker: tk }),
+          });
+          if (!r.ok) throw new Error('watchlist ' + r.status);
+          wlBtn.textContent = '✓ On watchlist';
+          wlBtn.disabled = true;
+          try { if (typeof loadWatchlist === 'function') loadWatchlist(); } catch (_) {}
+        } catch (err) {
+          wlBtn.textContent = 'Watchlist failed';
+        }
+      };
+    }
+    const aiBtn = overlay.querySelector('#sp-ai');
+    if (aiBtn) {
+      aiBtn.onclick = () => {
+        close();
+        showTab('research');
+        const input = document.getElementById('hero-ticker');
+        const btn = document.getElementById('hero-run-btn');
+        if (input) input.value = tk;
+        if (input && input.scrollIntoView) input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Do NOT auto-click Run — user must confirm (costs tokens)
+        try { window.toast && window.toast(tk + ' ready — click RUN for AI (costs tokens)', { type: 'info', ttl: 3500 }); } catch (_) {}
+      };
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // IDEAS TAB — Market Intelligence + Daily Morning Brief + Market Pulse
+  // (ui377). Loads LATEST data only — no AI runs on tab activation.
+  // ══════════════════════════════════════════════════════════════
+  async function loadIdeasTab() {
+    loadIntel();
+    _ideasLoadBrief();
+    _pulseMount('ideas-pulse-mount', 'ipulse');
+    _pulseLoadLatest();
+    // One-time wiring for the brief card's Run button + (*) explainer
+    const runBtn = document.getElementById('ideas-brief-run');
+    if (runBtn && !runBtn._wired) { runBtn._wired = true; runBtn.addEventListener('click', _ideasRunBrief); }
+    const info = document.getElementById('ideas-brief-info');
+    const exp  = document.getElementById('ideas-brief-exp');
+    if (info && exp && !info._wired) {
+      info._wired = true;
+      info.addEventListener('click', function() { exp.classList.toggle('open'); });
+    }
+  }
+
+  // ── Idea Generator ────────────────────────────────────────────────────────
+  // Surfaces movers ≥ ±4% from the user's universe (watchlist + positions +
+  // saved reports), classified into sector_move / news / unknown.
+  // Auto-loads on Research tab activation; refreshes every 15 min.
+  var _ideaFeedTimer = null;
+  var _ideaFeedLastFetch = 0;
+  var _ideaFeedThreshold = 4.0;   // default; future: make user-settable
+  var _ideaFeedExpanded = {};     // { ticker: bool } — which rows are showing news detail
+  var _ideaFeedPanelOpen = true;  // open by default (HTML renders the body open)
+
+  function _ideaFmtPct(p) {
+    if (p == null || isNaN(p)) return '—';
+    return (p >= 0 ? '+' : '') + Number(p).toFixed(2) + '%';
+  }
+  function _ideaFmtAge(iso) {
+    if (!iso) return '';
+    // _pacific_time_str returns 'YYYY-MM-DD HH:MM PT' — just display as-is, compact.
+    return iso.replace(/^\d{4}-/, '').replace(' PT', ' PT');
+  }
+  function _ideaEsc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;');
+  }
+  function _ideaFmtNewsAge(ts) {
+    if (!ts) return '';
+    const ageMin = (Date.now() / 1000 - Number(ts)) / 60;
+    if (ageMin < 60)  return Math.round(ageMin) + 'm ago';
+    if (ageMin < 1440) return Math.round(ageMin / 60) + 'h ago';
+    return Math.round(ageMin / 1440) + 'd ago';
+  }
+
+  function _renderIdeaFeedRow(m) {
+    const isUp  = m.pct_change >= 0;
+    const cls   = isUp ? 'up' : 'down';
+    const srcs  = (m.sources || []).map(function(s) {
+      const lbl = s === 'watchlist' ? 'WL' : s === 'report' ? 'RPT' : s === 'position' ? 'POS' : s.toUpperCase();
+      return '<span class="idea-gen-src-chip" title="' + _ideaEsc(s) + '">' + lbl + '</span>';
+    }).join('');
+    const reasonCls = 'idea-gen-cls-' + (m.reason_class || 'unknown');
+    const reasonLbl = (m.reason_class || 'unknown').replace('_', ' ');
+    const reason = m.reason_text || (m.reason_class === 'unknown' ? 'No specific catalyst detected' : '');
+
+    let html = '<div class="idea-gen-row" data-ticker="' + _ideaEsc(m.ticker) + '">'
+      + '<div class="idea-gen-tk">' + _ideaEsc(m.ticker) + '</div>'
+      + '<div class="idea-gen-pct ' + cls + '">' + _ideaFmtPct(m.pct_change) + '</div>'
+      + '<div class="idea-gen-reason">'
+      +   '<span class="idea-gen-reason-cls ' + reasonCls + '">' + reasonLbl + '</span>'
+      +   _ideaEsc(reason)
+      + '</div>'
+      + '<div class="idea-gen-src">' + srcs + '</div>'
+      + '</div>';
+
+    // Expanded detail (rendered but hidden by default)
+    if (_ideaFeedExpanded[m.ticker]) {
+      html += '<div class="idea-gen-detail" data-ticker="' + _ideaEsc(m.ticker) + '">';
+      // Sector + price line
+      const sectorLine = (m.sector && m.sector !== 'Unknown' ? m.sector : '—')
+        + (m.sector_etf ? ' · ' + m.sector_etf + ' ' + _ideaFmtPct(m.sector_pct_change) : '');
+      html += '<h5>Snapshot</h5>'
+           + '<div style="margin-bottom:8px;font-size:11px;">'
+           +   '<span style="color:var(--text-primary);font-weight:700;">$' + Number(m.price || 0).toFixed(2) + '</span>'
+           +   ' · ' + sectorLine
+           + '</div>';
+      if (m.news && m.news.length) {
+        html += '<h5>Headlines (' + m.news.length + ')</h5>';
+        m.news.forEach(function(n) {
+          html += '<div class="idea-gen-news-item">'
+            + (n.url
+                ? '<a href="' + _ideaEsc(n.url) + '" target="_blank" rel="noopener">' + _ideaEsc(n.title) + '</a>'
+                : '<span style="color:var(--text-primary);font-weight:600;">' + _ideaEsc(n.title) + '</span>')
+            + '<div class="idea-gen-news-meta">'
+            +   _ideaEsc(n.publisher || '')
+            +   (n.pub_ts ? ' · ' + _ideaFmtNewsAge(n.pub_ts) : '')
+            + '</div>'
+            + '</div>';
+        });
+      } else {
+        html += '<div style="font-size:11px;color:#94a3b8;font-style:italic;">No recent headlines available.</div>';
+      }
+      html += '<button class="idea-gen-deep" data-deep-ticker="' + _ideaEsc(m.ticker) + '">⚡ Run deep-dive</button>';
+      html += '</div>';
+    }
+    return html;
+  }
+
+  function _renderIdeaFeed(data) {
+    const list  = document.getElementById('idea-gen-list');
+    const badge = document.getElementById('idea-gen-count');
+    const asof  = document.getElementById('idea-gen-asof');
+    const note  = document.getElementById('idea-gen-note');
+    if (!list) return;
+    const movers = data && data.movers || [];
+    if (badge) badge.textContent = movers.length;
+    if (asof)  asof.textContent  = data && data.as_of ? data.as_of : '—';
+    if (note) {
+      if (data && data.note) { note.style.display = 'block'; note.textContent = data.note; }
+      else if (data && data.error) { note.style.display = 'block'; note.textContent = 'Error: ' + data.error; }
+      else { note.style.display = 'none'; note.textContent = ''; }
+    }
+    if (!movers.length) {
+      list.innerHTML = '<div class="idea-gen-empty">'
+        + (data && data.note ? '' : 'No movers ≥ ±' + (data && data.threshold || _ideaFeedThreshold) + '% right now.')
+        + '</div>';
+      return;
+    }
+    list.innerHTML = movers.map(_renderIdeaFeedRow).join('');
+
+    // Row click → toggle detail expand. If the mover has no news yet (it was
+    // beyond the server's eager-enrich cap, or its headlines came back empty),
+    // lazily fetch them on expand via /api/news (free 3-tier RSS, non-LLM).
+    list.querySelectorAll('.idea-gen-row').forEach(function(row) {
+      row.addEventListener('click', async function() {
+        const tk = row.dataset.ticker;
+        const willExpand = !_ideaFeedExpanded[tk];
+        _ideaFeedExpanded[tk] = willExpand;
+        _renderIdeaFeed(data);
+        if (willExpand) {
+          const m = (data.movers || []).find(function(x) { return x.ticker === tk; });
+          if (m && (!m.news || !m.news.length) && !m._newsTried) {
+            m._newsTried = true;
+            try {
+              const rn = await window.dgaFetch('/api/news?tickers=' + encodeURIComponent(tk) + '&limit=6');
+              if (rn.ok) {
+                const dn = await rn.json();
+                const items = (dn.news && dn.news[tk]) || [];
+                if (items.length) {
+                  m.news = items;
+                  if (_ideaFeedExpanded[tk]) _renderIdeaFeed(data);
+                }
+              }
+            } catch (e) { /* leave the "no headlines" note */ }
+          }
+        }
+      });
+    });
+    // Deep-dive button → trigger analyze flow
+    list.querySelectorAll('[data-deep-ticker]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        const tk = btn.dataset.deepTicker;
+        // Use the existing Analyze Ticker hero input + button
+        const heroInput = document.getElementById('hero-ticker');
+        const heroBtn   = document.getElementById('hero-run-btn');
+        if (heroInput) heroInput.value = tk;
+        if (heroBtn)   heroBtn.click();
+        // Scroll into view so the user can see the analysis kicking off
+        if (heroInput) heroInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    });
+  }
+
+  async function loadIdeaFeed(force) {
+    // Cache-aware: skip refetch if last successful fetch was < 5 min ago
+    // (unless `force` is true). Server-side caching duplicates this but
+    // avoids a needless round-trip too.
+    const now = Date.now();
+    if (!force && (now - _ideaFeedLastFetch) < 5 * 60 * 1000 && document.getElementById('idea-gen-count')?.textContent !== '—') {
+      return;
+    }
+    try {
+      const url = '/api/v2/research/idea-feed?threshold=' + encodeURIComponent(_ideaFeedThreshold)
+        + '&limit=60' + (force ? '&force=true' : '');
+      const r = await window.dgaFetch(url);
+      if (!r.ok) throw new Error('idea-feed ' + r.status);
+      const data = await r.json();
+      _ideaFeedLastFetch = now;
+      _renderIdeaFeed(data);
+    } catch (e) {
+      console.warn('[idea-feed]', e);
+      const list  = document.getElementById('idea-gen-list');
+      if (list) list.innerHTML = '<div class="idea-gen-empty">Idea feed unavailable.</div>';
+    }
+  }
+
+  // Wire header click → expand/collapse the whole card
+  document.addEventListener('DOMContentLoaded', function() {
+    const head  = document.getElementById('idea-gen-head');
+    const body  = document.getElementById('idea-gen-body');
+    const panel = document.getElementById('idea-gen-panel');
+    const refBtn = document.getElementById('idea-gen-refresh');
+    if (refBtn) {
+      refBtn.addEventListener('click', async function(ev) {
+        ev.stopPropagation();      // don't toggle expand/collapse
+        const orig = refBtn.textContent;
+        refBtn.disabled = true; refBtn.textContent = '⏳';
+        // Ensure the panel is open so the user sees the refreshed list
+        if (!_ideaFeedPanelOpen && body && panel) {
+          _ideaFeedPanelOpen = true;
+          body.style.display = 'block';
+          panel.dataset.open = '1';
+        }
+        try { await loadIdeaFeed(true); }
+        finally { refBtn.disabled = false; refBtn.textContent = orig; }
+      });
+    }
+    const prioBtn = document.getElementById('idea-gen-prioritize');
+    const prioOut = document.getElementById('idea-gen-prioritize-result');
+    if (prioBtn) {
+      llmStampControl(prioBtn, 'prioritize');
+      prioBtn.addEventListener('click', async function(ev) {
+        ev.stopPropagation();
+        const meta = llmDescribe('prioritize');
+        const orig = prioBtn.textContent;
+        prioBtn.disabled = true;
+        prioBtn.textContent = '⏳ ' + meta.model.slice(0, 14) + '…';
+        llmToast('prioritize', 'Prioritize');
+        if (!_ideaFeedPanelOpen && body && panel) {
+          _ideaFeedPanelOpen = true;
+          body.style.display = 'block';
+          panel.dataset.open = '1';
+        }
+        prioOut.style.display = 'block';
+        prioOut.innerHTML = '<em style="color:#92400e;">'
+          + meta.provider.toUpperCase() + ' · <strong>' + meta.model + '</strong> · '
+          + meta.cost + ' — screening universe…</em>';
+        try {
+          const r = await window.dgaFetch('/api/v2/research/prioritize?top_n=5', { method: 'POST' });
+          const d = await r.json();
+          if (!d.ok) { prioOut.innerHTML = '❌ ' + (d.error || 'failed'); return; }
+          if (!d.picks || !d.picks.length) {
+            prioOut.innerHTML = '<em>' + (d.note || 'No picks returned.') + '</em>';
+            return;
+          }
+          const priColor = function(p) {
+            return p === 'high' ? '#dc2626' : p === 'med' ? '#d97706' : '#64748b';
+          };
+          const esc = function(s) { return (s||'').replace(/[&<>]/g, function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c];}); };
+          const bucketBadge = function(b) {
+            if (b === 'active') return '<span title="Moved ≥2.5% today — react now" style="font-size:10px;">🔥</span>';
+            if (b === 'stale')  return '<span title="Saved report >14 days old — refresh candidate" style="font-size:10px;">♻️</span>';
+            return '<span title="Recently analyzed, quiet today" style="font-size:10px;opacity:0.5;">·</span>';
+          };
+          const bc = d.bucket_counts || {};
+          const breakdown = (bc.active != null)
+            ? ' · 🔥' + bc.active + ' active · ♻️' + bc.stale + ' stale · ·' + bc.fresh + ' fresh'
+            : '';
+          const modelLbl = (d.model || meta.model || 'model').toString();
+          const provLbl = (d.provider || meta.provider || '').toString().toUpperCase();
+          let html = '<div style="font-weight:800;font-size:11px;letter-spacing:0.5px;color:#92400e;margin-bottom:6px;">' +
+            '🎯 ' + provLbl + ' · ' + modelLbl + ' · ' + meta.cost
+            + ' — RECOMMENDS (' + d.considered + ' considered' + breakdown + ' · ' + d.picks.length + ' picks)</div>';
+          d.picks.forEach(function(p) {
+            const tk = esc(p.ticker || '');
+            html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid #fde68a;">' +
+              bucketBadge(p.bucket) +
+              '<span style="font-weight:800;color:var(--text-primary);min-width:54px;letter-spacing:0.5px;">' + tk + '</span>' +
+              '<span style="background:' + priColor(p.priority) + ';color:#fff;font-size:9px;font-weight:800;padding:1px 6px;border-radius:3px;letter-spacing:0.5px;text-transform:uppercase;">' + esc(p.priority || 'med') + '</span>' +
+              '<span style="color:#a16207;font-weight:700;font-family:\'SF Mono\',monospace;font-size:11px;">' + (p.score != null ? p.score : '—') + '</span>' +
+              '<span style="flex:1;color:#78350f;font-size:11.5px;">' + esc(p.reason || '') + '</span>' +
+              '<button class="idea-prio-run" data-tk="' + tk + '" title="Queue full Grok/Claude report (hero engine)" style="background:#0A1628;color:#fff;border:none;padding:4px 9px;border-radius:4px;font-size:10.5px;font-weight:700;cursor:pointer;">▶ Report</button>' +
+              '</div>';
+          });
+          if (d.skipped && d.skipped.length) {
+            html += '<div style="margin-top:8px;font-size:10.5px;color:#a16207;"><strong>Skipped:</strong> ' +
+              d.skipped.slice(0, 12).map(function(s){ return esc(s.ticker) + ' (' + esc(s.reason || '') + ')'; }).join(' · ') +
+              (d.skipped.length > 12 ? ' · …+' + (d.skipped.length - 12) + ' more' : '') +
+              '</div>';
+          }
+          prioOut.innerHTML = html;
+          prioOut.querySelectorAll('.idea-prio-run').forEach(function(b) {
+            b.addEventListener('click', function() {
+              const tk = b.dataset.tk;
+              const input = document.getElementById('hero-ticker');
+              const runBtn = document.getElementById('hero-run-btn');
+              if (input) input.value = tk;
+              if (runBtn) runBtn.click();
+              if (input && input.scrollIntoView) input.scrollIntoView({ behavior:'smooth', block:'center' });
+            });
+          });
+        } catch (e) {
+          prioOut.innerHTML = '❌ ' + e.message;
+        } finally {
+          prioBtn.disabled = false; prioBtn.textContent = orig;
+          llmStampControl(prioBtn, 'prioritize');
+        }
+      });
+    }
+    if (head && body && panel) {
+      head.addEventListener('click', function() {
+        _ideaFeedPanelOpen = !_ideaFeedPanelOpen;
+        body.style.display = _ideaFeedPanelOpen ? 'block' : 'none';
+        panel.dataset.open = _ideaFeedPanelOpen ? '1' : '0';
+        if (_ideaFeedPanelOpen) loadIdeaFeed(false);
+      });
+    }
+    // Initial fetch on page load (Research is the default tab)
+    // Delay slightly so auth token is ready
+    setTimeout(function() { loadIdeaFeed(true); }, 500);
+    // Auto-refresh every 15 min
+    if (!_ideaFeedTimer) {
+      _ideaFeedTimer = setInterval(function() {
+        if (document.getElementById('tab-research')?.classList.contains('active')) {
+          loadIdeaFeed(true);
+        }
+      }, 15 * 60 * 1000);
+    }
+  });
+
+  // ── Builder ───────────────────────────────────────────────────────────────
+  // Sector-weighted basket allocator from saved-report candidates.
+  // Pre-defined sector taxonomy (matches the backend's _builder_classify_sector
+  // canonical labels). User picks weights → backend allocates by EV.
+  var _builderCandidatesCache = null;
+  var _builderSectorWeights   = {};   // {sectorName: percentValue} (legacy sector-target mode)
+  var _builderInitialized     = false;
+  var _builderLastRequest     = null; // the most recent allocate/construct request body
+  var _builderLastResult      = null; // the most recent allocate/construct response
+  var _builderLastScenarioId  = null; // id of the saved scenario, if any
+  // Pool-first picker state (ui377)
+  var _builderPoolSel        = {};    // ticker → checked?
+  var _builderPoolFilter     = '';    // search box text
+  var _builderIncludeComps   = false; // comps hidden/off by default
+  var _builderConstructMethod = 'equal';
+  const _BUILDER_METHOD_EXPLAIN = {
+    equal:           '1/N across every selected stock — no price targets needed.',
+    ev_weighted:     'Softmax by upside-to-target — bigger upside gets more weight; names without a stored target use the pool median (marked ~).',
+    rating_weighted: 'Weight by rating tier: Buy-family 1.5× · Hold 1.0× · Sell-family 0.4× · unrated 1.0×, normalized.',
+  };
+  const _BUILDER_METHOD_LABEL = {
+    equal: 'Equal', ev_weighted: 'Conviction (EV)', rating_weighted: 'Rating-tiered',
+  };
+
+  const BUILDER_SECTOR_OPTIONS = [
+    "Technology", "Energy", "Financials", "Healthcare", "Consumer Cyclical",
+    "Consumer Defensive", "Industrials", "Utilities", "Real Estate",
+    "Communication Services", "Basic Materials",
+    // 'Other' rolls up candidates whose yfinance sector returned blank/Unknown
+    // (ETFs, ADRs, foreign listings, recent IPOs, etc.) so they're still
+    // selectable in any basket instead of being silently excluded.
+    "Other",
+  ];
+
+  function _builderFmtUSD(v) {
+    if (v == null || isNaN(v)) return '—';
+    if (Math.abs(v) >= 1e6) return '$' + (v/1e6).toFixed(2) + 'M';
+    if (Math.abs(v) >= 1e3) return '$' + (v/1e3).toFixed(1) + 'K';
+    return '$' + Math.round(v).toLocaleString();
+  }
+  function _builderFmtPct(v, decimals) {
+    if (v == null || isNaN(v)) return '—';
+    return (v >= 0 ? '+' : '') + Number(v).toFixed(decimals == null ? 2 : decimals) + '%';
+  }
+  function _builderEsc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function _renderBuilderSectors() {
+    const list = document.getElementById('builder-sectors-list');
+    if (!list) return;
+    const entries = Object.entries(_builderSectorWeights);
+    if (!entries.length) {
+      list.innerHTML = '<div style="font-size:11px;color:#94a3b8;font-style:italic;padding:8px 0;">No sectors added yet — pick one below.</div>';
+    } else {
+      list.innerHTML = entries.map(function([sec, pct]) {
+        return '<div class="builder-sector-row" data-sec="' + _builderEsc(sec) + '">'
+          + '<div class="builder-sector-name">' + _builderEsc(sec) + '</div>'
+          + '<input type="number" class="builder-sector-pct" value="' + pct + '" min="0" max="100" step="1">'
+          + '<button class="builder-sector-rm" title="Remove">×</button>'
+          + '</div>';
+      }).join('');
+      // Wire weight inputs
+      list.querySelectorAll('.builder-sector-pct').forEach(function(inp) {
+        inp.addEventListener('input', function() {
+          const sec = inp.closest('.builder-sector-row').dataset.sec;
+          _builderSectorWeights[sec] = parseFloat(inp.value) || 0;
+          _updateBuilderTotal();
+        });
+      });
+      list.querySelectorAll('.builder-sector-rm').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          const sec = btn.closest('.builder-sector-row').dataset.sec;
+          delete _builderSectorWeights[sec];
+          _renderBuilderSectors();
+          _updateBuilderTotal();
+          _refreshBuilderAddDropdown();
+        });
+      });
+    }
+    _updateBuilderTotal();
+  }
+  function _updateBuilderTotal() {
+    const total = Object.values(_builderSectorWeights).reduce(function(a, b) { return a + (b || 0); }, 0);
+    const el = document.getElementById('builder-weight-total-val');
+    if (!el) return;
+    el.textContent = total.toFixed(0) + '%';
+    el.style.color = (Math.abs(total - 100) < 0.5) ? '#16a34a' : (total > 100 ? '#dc2626' : '#f59e0b');
+  }
+  function _refreshBuilderAddDropdown() {
+    const dd = document.getElementById('builder-add-sector');
+    if (!dd) return;
+    const used = new Set(Object.keys(_builderSectorWeights));
+    dd.innerHTML = '<option value="">+ Add sector…</option>';
+    BUILDER_SECTOR_OPTIONS.forEach(function(s) {
+      if (used.has(s)) return;
+      dd.innerHTML += '<option value="' + _builderEsc(s) + '">' + _builderEsc(s) + '</option>';
+    });
+  }
+
+  // Refresh the Candidate Pool in place — re-pulls saved-report tickers/targets
+  // and re-resolves sectors via the cache-busting endpoint. No market sync, no
+  // leaving the Builder tab.
+  async function _builderRefreshPool() {
+    const btn  = document.getElementById('builder-pool-refresh-btn');
+    const meta = document.getElementById('builder-pool-meta');
+    if (btn) btn.disabled = true;
+    try {
+      // 1. Load the pool immediately (pure-DB, instant) so names are visible.
+      if (meta) meta.textContent = 'Refreshing…';
+      await loadBuilderCandidates({ fresh: true });
+      // 2. Kick the sector-resolve job: EDGAR-SIC-resolve every name still in
+      //    'Other' and persist it, so they become eligible for allocation.
+      const startR = await window.dgaFetch('/api/v2/builder/resolve-sectors', { method: 'POST' });
+      if (startR.ok) {
+        let job = await startR.json();
+        if (job && job.total > 0) {
+          // 3. Poll until the job finishes, showing live progress.
+          for (let i = 0; i < 120 && (job.running || job.done < job.total); i++) {
+            if (meta) meta.textContent = 'Resolving sectors… ' + (job.done || 0) + '/' + job.total;
+            await new Promise(r => setTimeout(r, 1500));
+            const sR = await window.dgaFetch('/api/v2/builder/resolve-sectors');
+            if (!sR.ok) break;
+            job = await sR.json();
+            if (!job.running && job.done >= job.total) break;
+          }
+          // 4. Reload the pool so the freshly-resolved sectors show.
+          await loadBuilderCandidates({ fresh: true });
+        }
+      }
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function loadBuilderCandidates(opts) {
+    const meta   = document.getElementById('builder-pool-meta');
+    const sumEl  = document.getElementById('builder-sectors-summary');
+    if (sumEl) sumEl.innerHTML = '<div style="opacity:0.6;font-style:italic;">Loading saved reports…</div>';
+    try {
+      const _q = (opts && opts.fresh) ? '?fresh=1' : '';
+      const r = await window.dgaFetch('/api/v2/builder/candidates' + _q);
+      if (!r.ok) throw new Error('candidates ' + r.status);
+      const data = await r.json();
+      _builderCandidatesCache = data;
+      // Pool-first picker (ui377): default-check report subjects; comps stay
+      // OFF behind the "include comps" toggle. User picks survive a refresh.
+      (data.candidates || []).forEach(function(c) {
+        if (_builderPoolSel[c.ticker] == null) _builderPoolSel[c.ticker] = (c.source === 'report');
+      });
+      _renderBuilderPool();
+      if (meta) meta.textContent = data.total + ' candidates · ' + (data.sectors || []).length + ' sectors';
+      if (sumEl) {
+        if (!data.sectors || !data.sectors.length) {
+          const dg = data.diagnostics || {};
+          const why = dg.error
+            ? dg.error
+            : (dg.total_unarchived === 0
+                ? 'No non-archived saved reports found in the database.'
+                : (dg.used_rows === 0
+                    ? (dg.total_unarchived + ' reports exist, but none have a price target.')
+                    : 'Reports loaded but none mapped to a sector yet — hit ↻ Refresh above to resolve sectors.'));
+          sumEl.innerHTML = '<div style="font-size:11.5px;color:#94a3b8;font-style:italic;">No candidates. ' +
+            _builderEsc(why) + '</div>' +
+            '<div style="font-size:10px;color:#cbd5e1;margin-top:4px;">diag: ' + _builderEsc(JSON.stringify(dg)) + '</div>';
+        } else {
+          sumEl.innerHTML = data.sectors.map(function(s) {
+            const med = s.median_upside_pct;
+            const medCls = (med != null && med < 0) ? 'medup neg' : 'medup';
+            const medTxt = med == null ? '—' : ((med >= 0 ? '+' : '') + med.toFixed(1) + '%');
+            return '<div class="builder-pool-row">'
+              + '<span><strong>' + _builderEsc(s.name) + '</strong></span>'
+              + '<span>' + s.count + ' name' + (s.count !== 1 ? 's' : '')
+              +   ' · median upside <span class="' + medCls + '">' + medTxt + '</span></span>'
+              + '</div>';
+          }).join('');
+        }
+      }
+    } catch (e) {
+      console.warn('[builder]', e);
+      if (sumEl) sumEl.innerHTML = '<div style="font-size:11.5px;color:#dc2626;">Could not load candidates: ' + _builderEsc(e.message) + '</div>';
+      const pl = document.getElementById('builder-pool-list');
+      if (pl) pl.innerHTML = '<div style="padding:12px 14px;font-size:11px;color:#dc2626;">Could not load candidates: ' + _builderEsc(e.message) + '</div>';
+    }
+  }
+
+  // ── Pool-first picker + construct (ui377) ──────────────────────────────────
+  function _builderVisibleCandidates() {
+    const cands = (_builderCandidatesCache && _builderCandidatesCache.candidates) || [];
+    const q = (_builderPoolFilter || '').toLowerCase();
+    return cands
+      .filter(function(c) { return _builderIncludeComps || c.source !== 'comp'; })
+      .filter(function(c) {
+        if (!q) return true;
+        return (c.ticker + ' ' + (c.name || '') + ' ' + (c.sector || '')).toLowerCase().indexOf(q) !== -1;
+      });
+  }
+  function _builderSelectedTickers() {
+    const cands = (_builderCandidatesCache && _builderCandidatesCache.candidates) || [];
+    return cands
+      .filter(function(c) { return (_builderIncludeComps || c.source !== 'comp') && _builderPoolSel[c.ticker]; })
+      .map(function(c) { return c.ticker; });
+  }
+  function _updateBuilderPoolCount() {
+    const countEl = document.getElementById('builder-pool-count');
+    if (!countEl) return;
+    const cands = (_builderCandidatesCache && _builderCandidatesCache.candidates) || [];
+    const eligible = cands.filter(function(c) { return _builderIncludeComps || c.source !== 'comp'; });
+    countEl.textContent = _builderSelectedTickers().length + ' / ' + eligible.length + ' selected';
+  }
+
+  function _renderBuilderPool() {
+    const list = document.getElementById('builder-pool-list');
+    if (!list) return;
+    const cands = (_builderCandidatesCache && _builderCandidatesCache.candidates) || [];
+    if (!cands.length) {
+      list.innerHTML = '<div style="padding:12px 14px;font-size:11px;color:#94a3b8;font-style:italic;">'
+        + 'No candidates yet — save some research first, or hit ↻ Refresh.</div>';
+      _updateBuilderPoolCount();
+      return;
+    }
+    const visible = _builderVisibleCandidates();
+    if (!visible.length) {
+      list.innerHTML = '<div style="padding:12px 14px;font-size:11px;color:#94a3b8;font-style:italic;">No matches for the current filter.</div>';
+      _updateBuilderPoolCount();
+      return;
+    }
+    list.innerHTML = visible.map(function(c) {
+      const up = c.upside_pct;
+      const upCls = up == null ? 'none' : (up >= 0 ? 'pos' : 'neg');
+      // No-target reports show "—" but are NEVER hidden from the pool.
+      const upTxt = up == null ? '—' : ((up >= 0 ? '+' : '') + Number(up).toFixed(1) + '%');
+      const comp = c.source === 'comp'
+        ? '<span class="builder-src-chip builder-src-comp" title="Comp ticker extracted from a saved report'
+          + (c.from_report ? ' (' + _builderEsc(c.from_report) + ')' : '') + '">COMP</span>'
+        : '';
+      return '<label class="builder-pool-item" data-tk="' + _builderEsc(c.ticker) + '">'
+        + '<input type="checkbox"' + (_builderPoolSel[c.ticker] ? ' checked' : '') + '>'
+        + '<span class="bp-tk">' + _builderEsc(c.ticker) + '</span>' + comp
+        + '<span class="bp-name">' + _builderEsc(c.name || '') + '</span>'
+        + '<span class="builder-sec-chip">' + _builderEsc(c.sector || 'Unknown') + '</span>'
+        + '<span class="bp-rating">' + _builderEsc(c.rating || '') + '</span>'
+        + '<span class="bp-up ' + upCls + '" title="'
+        +   (up == null ? 'No stored price target — stays in the pool; EV weighting median-fills it' : 'Upside to stored target')
+        + '">' + upTxt + '</span>'
+        + '</label>';
+    }).join('');
+    list.querySelectorAll('.builder-pool-item input[type="checkbox"]').forEach(function(inp) {
+      inp.addEventListener('change', function() {
+        const tk = inp.closest('.builder-pool-item').dataset.tk;
+        _builderPoolSel[tk] = inp.checked;
+        _updateBuilderPoolCount();
+      });
+    });
+    _updateBuilderPoolCount();
+  }
+
+  async function buildConstruct() {
+    const btn  = document.getElementById('builder-construct-btn');
+    const stat = document.getElementById('builder-status');
+    const tickers = _builderSelectedTickers();
+    if (!tickers.length) { if (stat) stat.textContent = 'Select at least one stock in the pool.'; return; }
+    const body = {
+      tickers:             tickers,
+      basket_size:         parseFloat(document.getElementById('builder-basket-size').value) || 0,
+      method:              _builderConstructMethod,
+      max_per_stock_pct:   parseFloat(document.getElementById('builder-max-per-stock').value) || 10,
+      max_per_sector_pct:  parseFloat(document.getElementById('builder-max-sector-pct')?.value) || 0,
+      softmax_temperature: 1.0,
+    };
+    if (btn) { btn.disabled = true; btn.textContent = 'Building…'; }
+    if (stat) stat.textContent = '';
+    try {
+      const r = await window.dgaFetch('/api/v2/builder/construct', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error('construct ' + r.status + ': ' + txt);
+      }
+      const data = await r.json();
+      _builderLastRequest = body;
+      // Compat shim: /scenarios/{id}/to-watchlist walks
+      // result.sectors[].positions[].ticker — mirror the flat rows into that
+      // shape so Save Scenario + Send-to-Watchlist keep working unchanged.
+      data.sectors = [{ sector: 'Pool', positions: (data.rows || []).map(function(rr) { return { ticker: rr.ticker }; }) }];
+      _builderLastResult     = data;
+      _builderLastScenarioId = null;
+      _renderConstructResult(data);
+      if (stat) stat.textContent = 'Done.';
+    } catch (e) {
+      console.warn('[builder-construct]', e);
+      if (stat) stat.textContent = 'Error: ' + e.message;
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '⚡ Build'; }
+    }
+  }
+
+  function _renderConstructResult(data) {
+    const wrap   = document.getElementById('builder-result');
+    const body   = document.getElementById('builder-result-body');
+    const sumEl  = document.getElementById('builder-result-summary');
+    const warnEl = document.getElementById('builder-warnings');
+    if (!wrap || !body) return;
+    wrap.style.display = 'block';
+
+    const sm = data.summary || {};
+    if (sumEl) {
+      const up = sm.expected_upside_pct;
+      sumEl.innerHTML =
+        (sm.positions != null ? sm.positions + ' positions' : '—')
+        + ' · allocated ' + _builderFmtUSD(sm.allocated)
+        + ' · residual cash ' + _builderFmtUSD(sm.residual_cash)
+        + (up != null
+            ? ' · <strong style="color:' + (up >= 0 ? '#16a34a' : '#dc2626') + ';">'
+              + _builderFmtPct(up, 2) + ' expected upside</strong>'
+            : '')
+        + (sm.method ? ' · ' + (_BUILDER_METHOD_LABEL[sm.method] || sm.method) : '');
+    }
+    if (warnEl) {
+      const miss = data.missing_from_pool || [];
+      if (miss.length) {
+        warnEl.style.display = 'block';
+        warnEl.innerHTML = '⚠ Not in the candidate pool (skipped): ' + miss.map(_builderEsc).join(', ');
+      } else {
+        warnEl.style.display = 'none';
+      }
+    }
+
+    const rows = data.rows || [];
+    if (!rows.length) {
+      body.innerHTML = '<div style="padding:24px;color:#94a3b8;text-align:center;font-size:12px;">No allocation produced.</div>';
+      return;
+    }
+    const anyFilled = rows.some(function(r) { return r.upside_filled; });
+    let html = '<table class="builder-result-table">'
+      + '<thead><tr><th>Ticker</th><th style="text-align:left;">Name</th><th>Sector</th>'
+      + '<th>Weight</th><th>$ Alloc</th><th>Shares @ Price</th><th>Upside</th></tr></thead><tbody>';
+    rows.forEach(function(r) {
+      const upCls = (r.upside_pct || 0) >= 0 ? 'upside-up' : 'upside-down';
+      const upTxt = r.upside_pct == null ? '—' : _builderFmtPct(r.upside_pct, 1);
+      const filled = r.upside_filled
+        ? '<sup title="No stored target — pool median upside used for weighting" style="cursor:help;">~</sup>'
+        : '';
+      const sharesTxt = (r.shares != null && r.price != null)
+        ? Number(r.shares).toLocaleString() + ' @ $' + Number(r.price).toFixed(2)
+        : '—';
+      html += '<tr>'
+        + '<td><span class="tk">' + _builderEsc(r.ticker) + '</span>'
+        +   (r.rating ? ' <span style="font-size:9px;color:#64748b;">' + _builderEsc(r.rating) + '</span>' : '')
+        + '</td>'
+        + '<td style="text-align:left;font-size:10.5px;color:#64748b;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
+        +   _builderEsc(r.name || '') + '</td>'
+        + '<td><span class="builder-sec-chip">' + _builderEsc(r.sector || '') + '</span></td>'
+        + '<td><strong>' + Number(r.weight_pct).toFixed(2) + '%</strong></td>'
+        + '<td>' + _builderFmtUSD(r.actual_dollars != null ? r.actual_dollars : r.dollars) + '</td>'
+        + '<td>' + sharesTxt + '</td>'
+        + '<td class="' + upCls + '">' + upTxt + filled + '</td>'
+        + '</tr>';
+    });
+    html += '</tbody></table>';
+    if (anyFilled) {
+      html += '<div style="padding:6px 16px;font-size:10px;color:#94a3b8;border-top:1px solid var(--panel-edge);">'
+        + '~ no stored target — pool median used</div>';
+    }
+    // Sector breakdown — small horizontal bars
+    const sb = sm.sector_breakdown || {};
+    const sbKeys = Object.keys(sb);
+    if (sbKeys.length) {
+      const maxV = Math.max.apply(null, sbKeys.map(function(k) { return sb[k]; })) || 1;
+      html += '<div style="padding:8px 0 10px;border-top:1px solid var(--panel-edge);">'
+        + '<div style="padding:2px 16px 4px;font-size:9px;font-weight:800;letter-spacing:0.8px;color:#64748b;text-transform:uppercase;">Sector breakdown</div>'
+        + sbKeys.map(function(k) {
+            return '<div class="builder-bars-row">'
+              + '<span class="bb-name">' + _builderEsc(k) + '</span>'
+              + '<span class="bb-track"><span class="bb-fill" style="display:block;width:'
+              +   Math.min(100, sb[k] / maxV * 100).toFixed(1) + '%;"></span></span>'
+              + '<span class="bb-pct">' + Number(sb[k]).toFixed(1) + '%</span>'
+              + '</div>';
+          }).join('')
+        + '</div>';
+    }
+    body.innerHTML = html;
+  }
+
+  function _renderBuilderResult(data) {
+    const wrap = document.getElementById('builder-result');
+    const body = document.getElementById('builder-result-body');
+    const sumEl = document.getElementById('builder-result-summary');
+    const warnEl = document.getElementById('builder-warnings');
+    if (!wrap || !body) return;
+    wrap.style.display = 'block';
+
+    const sm = data.summary || {};
+    if (sumEl) {
+      const projColor = (sm.projected_return_pct || 0) >= 0 ? '#16a34a' : '#dc2626';
+      sumEl.innerHTML = '<strong style="color:' + projColor + ';">'
+        + _builderFmtPct(sm.projected_return_pct, 2) + ' projected return</strong>'
+        + ' · ' + sm.total_positions + ' positions'
+        + ' · ' + sm.sectors_funded + ' sectors funded'
+        + (sm.unallocated_pct > 0.01 ? ' · ' + sm.unallocated_pct.toFixed(1) + '% unallocated' : '');
+    }
+    if (warnEl) {
+      if (sm.warnings && sm.warnings.length) {
+        warnEl.style.display = 'block';
+        warnEl.innerHTML = '⚠ ' + sm.warnings.map(_builderEsc).join('<br>⚠ ');
+      } else {
+        warnEl.style.display = 'none';
+      }
+    }
+
+    const sectors = data.sectors || [];
+    if (!sectors.length) {
+      body.innerHTML = '<div style="padding:24px;color:#94a3b8;text-align:center;font-size:12px;">No allocation produced — check that your selected sectors have saved reports.</div>';
+      return;
+    }
+    body.innerHTML = sectors.map(function(s) {
+      if (!s.positions || !s.positions.length) {
+        return '<div class="builder-result-sector">'
+          + '<div class="builder-result-sector-head">'
+          +   '<span class="builder-result-sector-name">' + _builderEsc(s.sector) + '</span>'
+          +   '<span class="builder-result-stat">target <strong>' + s.target_weight_pct.toFixed(1) + '%</strong></span>'
+          +   '<span class="builder-result-stat" style="color:#dc2626;">no candidates</span>'
+          + '</div></div>';
+      }
+      const rows = s.positions.map(function(p) {
+        const upCls = (p.upside_pct || 0) >= 0 ? 'upside-up' : 'upside-down';
+        const upTxt = p.upside_pct == null ? '—' : _builderFmtPct(p.upside_pct, 1);
+        // Source chip: REPORT vs COMP (from-saved-report's comp table)
+        let srcChip = '';
+        if (p.source === 'report') {
+          srcChip = '<span class="builder-src-chip builder-src-report" title="Saved DGA report subject">RPT</span>';
+        } else if (p.source === 'comp') {
+          srcChip = '<span class="builder-src-chip builder-src-comp" '
+            + 'title="Extracted from another saved report\'s comp table'
+            + (p.from_report ? ' (' + _builderEsc(p.from_report) + ')' : '')
+            + '. Upside derived from Yahoo analyst targets.">COMP</span>';
+        }
+        return '<tr>'
+          + '<td><span class="tk">' + _builderEsc(p.ticker) + '</span>' + srcChip + ' '
+          +   '<span style="font-size:10px;color:#94a3b8;">' + _builderEsc(p.name) + '</span></td>'
+          + '<td><strong>' + p.weight_pct.toFixed(2) + '%</strong></td>'
+          + '<td>' + _builderFmtUSD(p.dollars) + '</td>'
+          + '<td>' + (p.current_price != null ? '$' + p.current_price.toFixed(2) : '—') + '</td>'
+          + '<td>' + (p.price_target != null ? '$' + p.price_target.toFixed(2) : '—') + '</td>'
+          + '<td class="' + upCls + '">' + upTxt + '</td>'
+          + '<td style="font-size:10.5px;color:#475569;">' + _builderEsc(p.rating || '') + '</td>'
+          + '</tr>';
+      }).join('');
+      return '<div class="builder-result-sector">'
+        + '<div class="builder-result-sector-head">'
+        +   '<span class="builder-result-sector-name">' + _builderEsc(s.sector) + '</span>'
+        +   '<span class="builder-result-stat">target <strong>' + s.target_weight_pct.toFixed(1) + '%</strong></span>'
+        +   '<span class="builder-result-stat">allocated <strong>' + s.allocated_weight_pct.toFixed(2) + '%</strong> (' + _builderFmtUSD(s.allocated_dollars) + ')</span>'
+        + (s.weighted_expected_return_pct != null
+            ? '<span class="builder-result-stat">avg EV <strong style="color:' + ((s.weighted_expected_return_pct >= 0) ? '#16a34a' : '#dc2626') + ';">' + _builderFmtPct(s.weighted_expected_return_pct, 1) + '</strong></span>'
+            : '')
+        + '</div>'
+        + '<table class="builder-result-table">'
+        + '<thead><tr><th>Ticker</th><th>Weight</th><th>$ Alloc</th><th>Price</th><th>Target</th><th>Upside</th><th>Rating</th></tr></thead>'
+        + '<tbody>' + rows + '</tbody>'
+        + '</table>'
+        + '</div>';
+    }).join('');
+  }
+
+  async function buildBasket() {
+    const btn   = document.getElementById('builder-run-btn');
+    const stat  = document.getElementById('builder-status');
+    const total = Object.values(_builderSectorWeights).reduce(function(a,b){return a+(b||0);}, 0);
+    if (total <= 0) { if (stat) stat.textContent = 'Add at least one sector with weight > 0.'; return; }
+    if (Math.abs(total - 100) > 0.5 && stat) {
+      stat.textContent = 'Weights sum to ' + total.toFixed(0) + '% — will be normalized to 100%.';
+    } else if (stat) {
+      stat.textContent = '';
+    }
+    const body = {
+      sector_weights:        _builderSectorWeights,
+      basket_size:           parseFloat(document.getElementById('builder-basket-size').value) || 0,
+      method:                document.getElementById('builder-method').value,
+      max_per_stock_pct:     parseFloat(document.getElementById('builder-max-per-stock').value)  || 15,
+      max_stocks_per_sector: parseInt(document.getElementById('builder-max-per-sector').value)   || 6,
+      redistribute_empty:    document.getElementById('builder-redistribute').checked,
+    };
+    if (btn) { btn.disabled = true; btn.textContent = 'Building…'; }
+    try {
+      const r = await window.dgaFetch('/api/v2/builder/allocate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error('allocate ' + r.status + ': ' + txt);
+      }
+      const data = await r.json();
+      _builderLastRequest = body;     // track for save-scenario
+      _builderLastResult  = data;
+      _builderLastScenarioId = null;  // new build = new unsaved iteration
+      _renderBuilderResult(data);
+      if (stat) stat.textContent = 'Done.';
+    } catch (e) {
+      console.warn('[builder]', e);
+      if (stat) stat.textContent = 'Error: ' + e.message;
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '⚡ Build Basket'; }
+    }
+  }
+
+  // ── Save / Watchlist / Saved-Scenarios helpers ─────────────────────────────
+  function _setBuilderActionStatus(text, ok) {
+    const el = document.getElementById('builder-action-status');
+    if (!el) return;
+    if (!text) { el.style.display = 'none'; el.textContent = ''; return; }
+    el.style.display = 'block';
+    el.textContent = text;
+    if (ok === false) {
+      el.style.background = '#fef2f2';
+      el.style.color      = '#991b1b';
+      el.style.borderBottomColor = '#fecaca';
+    } else {
+      el.style.background = '#ecfdf5';
+      el.style.color      = '#065f46';
+      el.style.borderBottomColor = '#d1fae5';
+    }
+  }
+
+  async function _builderSaveScenario() {
+    if (!_builderLastResult || !_builderLastRequest) {
+      _setBuilderActionStatus('No basket to save — Build first.', false); return null;
+    }
+    const nameEl = document.getElementById('builder-scenario-name');
+    const name = (nameEl && nameEl.value || '').trim();
+    try {
+      const r = await window.dgaFetch('/api/v2/builder/scenarios', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name:    name || null,
+          request: _builderLastRequest,
+          result:  _builderLastResult,
+        }),
+      });
+      if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.detail || r.status); }
+      const sc = await r.json();
+      _builderLastScenarioId = sc.id;
+      if (nameEl) nameEl.value = '';
+      _setBuilderActionStatus('✓ Scenario "' + sc.name + '" saved.', true);
+      loadBuilderScenarios();   // refresh list
+      return sc;
+    } catch (e) {
+      _setBuilderActionStatus('Could not save: ' + e.message, false);
+      return null;
+    }
+  }
+
+  async function _builderBasketToWatchlist() {
+    if (!_builderLastResult) {
+      _setBuilderActionStatus('No basket to follow — Build first.', false); return;
+    }
+    // Auto-save scenario first if it hasn't been saved yet — that way the
+    // saved-scenarios list keeps a permanent record alongside the watchlist
+    let scenarioId = _builderLastScenarioId;
+    if (!scenarioId) {
+      const sc = await _builderSaveScenario();
+      if (!sc) return;
+      scenarioId = sc.id;
+    }
+    try {
+      const r = await window.dgaFetch(
+        '/api/v2/builder/scenarios/' + encodeURIComponent(scenarioId) + '/to-watchlist',
+        { method: 'POST' });
+      if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.detail || r.status); }
+      const d = await r.json();
+      const skipped = d.total_in_basket - d.added_count;
+      _setBuilderActionStatus(
+        '✓ Added ' + d.added_count + ' ticker' + (d.added_count !== 1 ? 's' : '') +
+        ' to your watchlist' + (skipped > 0 ? ' (' + skipped + ' already there)' : '') +
+        ' — follow the basket\'s performance in the Watchlist panel.',
+        true);
+      loadBuilderScenarios();
+    } catch (e) {
+      _setBuilderActionStatus('Could not sync to watchlist: ' + e.message, false);
+    }
+  }
+
+  async function _builderRestoreScenario(sc) {
+    if (!sc || !sc.request) return;
+
+    if (Array.isArray(sc.request.tickers)) {
+      // ── Pool-first construct scenario (ui377) ──────────────────────────
+      const req = sc.request;
+      const sizeEl = document.getElementById('builder-basket-size');
+      const capEl  = document.getElementById('builder-max-per-stock');
+      const secEl  = document.getElementById('builder-max-sector-pct');
+      if (sizeEl && req.basket_size) sizeEl.value = req.basket_size;
+      if (capEl  && req.max_per_stock_pct) capEl.value = req.max_per_stock_pct;
+      if (secEl) secEl.value = req.max_per_sector_pct || 0;
+      _builderConstructMethod = req.method || 'equal';
+      const seg = document.getElementById('builder-method-seg');
+      if (seg) seg.querySelectorAll('button[data-method]').forEach(function(b) {
+        b.classList.toggle('active', b.dataset.method === _builderConstructMethod);
+      });
+      const ex = document.getElementById('builder-method-explain');
+      if (ex) ex.textContent = _BUILDER_METHOD_EXPLAIN[_builderConstructMethod] || '';
+      // Re-apply the pool selection
+      Object.keys(_builderPoolSel).forEach(function(k) { _builderPoolSel[k] = false; });
+      req.tickers.forEach(function(t) { _builderPoolSel[t] = true; });
+      // If the scenario used comps, surface them
+      const cands = (_builderCandidatesCache && _builderCandidatesCache.candidates) || [];
+      if (!_builderIncludeComps && cands.some(function(c) { return c.source === 'comp' && _builderPoolSel[c.ticker]; })) {
+        _builderIncludeComps = true;
+        const cb = document.getElementById('builder-include-comps');
+        if (cb) cb.checked = true;
+      }
+      _renderBuilderPool();
+      _builderLastRequest    = req;
+      _builderLastResult     = sc.result;
+      _builderLastScenarioId = sc.id;
+      _renderConstructResult(sc.result);
+      _setBuilderActionStatus('Restored "' + sc.name + '" (saved ' + _builderFmtAge(sc.created_at) + ').', true);
+      setTimeout(function() {
+        const wrap = document.getElementById('builder-result');
+        if (wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 50);
+      return;
+    }
+
+    // ── Legacy sector-target scenario — restore into the Advanced panel ──
+    const adv = document.getElementById('builder-advanced');
+    if (adv) adv.open = true;
+    _builderSectorWeights = Object.assign({}, sc.request.sector_weights || {});
+    const sizeEl  = document.getElementById('builder-basket-size');
+    const methEl  = document.getElementById('builder-method');
+    const capEl   = document.getElementById('builder-max-per-stock');
+    const perSEl  = document.getElementById('builder-max-per-sector');
+    const redEl   = document.getElementById('builder-redistribute');
+    if (sizeEl) sizeEl.value = sc.request.basket_size || 1000000;
+    if (methEl) methEl.value = sc.request.method || 'ev_weighted';
+    if (capEl)  capEl.value  = sc.request.max_per_stock_pct  || 15;
+    if (perSEl) perSEl.value = sc.request.max_stocks_per_sector || 6;
+    if (redEl)  redEl.checked = sc.request.redistribute_empty !== false;
+    _renderBuilderSectors();
+    _refreshBuilderAddDropdown();
+    // Restore the result panel too
+    _builderLastRequest = sc.request;
+    _builderLastResult  = sc.result;
+    _builderLastScenarioId = sc.id;
+    _renderBuilderResult(sc.result);
+    _setBuilderActionStatus('Restored "' + sc.name + '" (saved ' + _builderFmtAge(sc.created_at) + ').', true);
+    // Scroll the result into view
+    setTimeout(function() {
+      const wrap = document.getElementById('builder-result');
+      if (wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
+  }
+
+  async function _builderDeleteScenario(scId, scName) {
+    if (!confirm('Delete scenario "' + scName + '"? This does NOT remove its tickers from your watchlist.')) return;
+    try {
+      const r = await window.dgaFetch('/api/v2/builder/scenarios/' + encodeURIComponent(scId), { method: 'DELETE' });
+      if (!r.ok) throw new Error('delete ' + r.status);
+      _setBuilderActionStatus('Scenario "' + scName + '" deleted.', true);
+      loadBuilderScenarios();
+    } catch (e) {
+      _setBuilderActionStatus('Could not delete: ' + e.message, false);
+    }
+  }
+
+  function _builderFmtAge(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    const min = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (min < 1)   return 'just now';
+    if (min < 60)  return min + 'm ago';
+    const hrs = Math.floor(min / 60);
+    if (hrs < 24)  return hrs + 'h ago';
+    const days = Math.floor(hrs / 24);
+    if (days < 2)  return 'yesterday';
+    if (days < 14) return days + 'd ago';
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
+  async function loadBuilderScenarios() {
+    const panel = document.getElementById('builder-scenarios-panel');
+    const list  = document.getElementById('builder-scenarios-list');
+    const count = document.getElementById('builder-scenarios-count');
+    if (!list || !panel) return;
+    try {
+      const r = await window.dgaFetch('/api/v2/builder/scenarios');
+      if (!r.ok) throw new Error('scenarios ' + r.status);
+      const d = await r.json();
+      const arr = d.scenarios || [];
+      if (count) count.textContent = arr.length + (arr.length === 1 ? ' saved basket' : ' saved baskets');
+      if (!arr.length) { panel.style.display = 'none'; return; }
+      panel.style.display = 'block';
+      list.innerHTML = arr.map(function(sc) {
+        const sm = (sc.result && sc.result.summary) || {};
+        // Two scenario shapes coexist: legacy sector-target allocations
+        // (projected_return_pct / total_positions / sector_weights) and
+        // pool-first constructs (expected_upside_pct / positions / tickers).
+        const isConstruct = !!(sc.request && Array.isArray(sc.request.tickers));
+        const projRet = sm.projected_return_pct != null ? sm.projected_return_pct : sm.expected_upside_pct;
+        const projColor = (projRet || 0) >= 0 ? '#16a34a' : '#dc2626';
+        const projTxt = projRet == null ? '—' : (projRet >= 0 ? '+' : '') + projRet.toFixed(2) + '%';
+        const tickerCount = (sm.total_positions != null) ? sm.total_positions
+          : (sm.positions != null ? sm.positions : '?');
+        const sw = sc.request && sc.request.sector_weights || {};
+        const sectorSummary = isConstruct
+          ? ((_BUILDER_METHOD_LABEL[sc.request.method] || sc.request.method || 'pool') + ' · pool of ' + sc.request.tickers.length)
+          : Object.keys(sw).slice(0, 3).join(', ');
+        const wl = sc.watchlist_synced
+          ? '<span class="builder-scenario-synced" title="Tickers added to your watchlist '
+            + (sc.watchlist_synced_at ? _builderFmtAge(sc.watchlist_synced_at) : '') + '">📌 WATCHLIST</span>'
+          : '';
+        return '<div class="builder-scenario-row" data-scid="' + _builderEsc(sc.id) + '">'
+          + '<div style="flex:1;min-width:0;">'
+          +   '<div class="builder-scenario-name">' + _builderEsc(sc.name) + wl + '</div>'
+          +   '<div class="builder-scenario-meta">'
+          +     _builderFmtAge(sc.created_at) + ' · ' + tickerCount + ' positions · '
+          +     '<span style="color:' + projColor + ';font-weight:700;">' + projTxt + '</span> proj. return'
+          +     (sectorSummary ? (isConstruct ? ' · ' : ' · sectors: ') + _builderEsc(sectorSummary) : '')
+          +   '</div>'
+          + '</div>'
+          + '<div class="builder-scenario-actions">'
+          +   '<button data-action="restore" data-scid="' + _builderEsc(sc.id) + '">↺ Restore</button>'
+          + (sc.watchlist_synced
+              ? ''
+              : '<button data-action="watchlist" data-scid="' + _builderEsc(sc.id) + '">📌 Watchlist</button>')
+          +   '<button data-action="delete"  class="danger" data-scid="' + _builderEsc(sc.id) + '" data-scname="' + _builderEsc(sc.name) + '">×</button>'
+          + '</div>'
+          + '</div>';
+      }).join('');
+
+      // Wire actions
+      list.querySelectorAll('.builder-scenario-actions button').forEach(function(btn) {
+        btn.addEventListener('click', async function(e) {
+          e.stopPropagation();
+          const id     = btn.getAttribute('data-scid');
+          const action = btn.getAttribute('data-action');
+          const sc = arr.find(function(x) { return x.id === id; });
+          if (!sc) return;
+          if (action === 'restore') {
+            _builderRestoreScenario(sc);
+          } else if (action === 'delete') {
+            _builderDeleteScenario(id, btn.getAttribute('data-scname'));
+          } else if (action === 'watchlist') {
+            try {
+              const rr = await window.dgaFetch(
+                '/api/v2/builder/scenarios/' + encodeURIComponent(id) + '/to-watchlist',
+                { method: 'POST' });
+              if (!rr.ok) throw new Error('watchlist ' + rr.status);
+              const dd = await rr.json();
+              _setBuilderActionStatus(
+                '✓ Added ' + dd.added_count + ' ticker(s) from "' + sc.name + '" to your watchlist.',
+                true);
+              loadBuilderScenarios();
+            } catch (e) {
+              _setBuilderActionStatus('Could not sync to watchlist: ' + e.message, false);
+            }
+          }
+        });
+      });
+
+      // Click row body → restore
+      list.querySelectorAll('.builder-scenario-row').forEach(function(row) {
+        row.addEventListener('click', function(e) {
+          if (e.target.closest('.builder-scenario-actions')) return;
+          const id = row.getAttribute('data-scid');
+          const sc = arr.find(function(x) { return x.id === id; });
+          if (sc) _builderRestoreScenario(sc);
+        });
+      });
+    } catch (e) {
+      console.warn('[builder-scenarios]', e);
+    }
+  }
+
+  function _initBuilderTab() {
+    if (_builderInitialized) {
+      // Refresh candidates pool + scenarios on tab re-activation
+      loadBuilderCandidates();
+      loadBuilderScenarios();
+      return;
+    }
+    _builderInitialized = true;
+    // Default sector weights (popular starting point)
+    // Default: ALL sectors present with flexible (even) weights, so a sleeve
+    // pushed from the AI Analyst can populate any sector and you just hit Build.
+    _builderSectorWeights = {};
+    BUILDER_SECTOR_OPTIONS.filter(s => s !== 'Other')
+      .forEach((s, i) => { _builderSectorWeights[s] = (i === 0 ? 10 : 9); });  // sums to 100
+    _refreshBuilderAddDropdown();
+    _renderBuilderSectors();
+    // Wire add-sector button
+    const addBtn = document.getElementById('builder-add-sector-btn');
+    if (addBtn) {
+      addBtn.addEventListener('click', function() {
+        const dd = document.getElementById('builder-add-sector');
+        const val = dd.value;
+        if (!val || _builderSectorWeights[val] != null) return;
+        _builderSectorWeights[val] = 10;
+        _renderBuilderSectors();
+        _refreshBuilderAddDropdown();
+        dd.value = '';
+      });
+    }
+    // Wire build button (legacy sector-target allocator, inside Advanced)
+    const runBtn = document.getElementById('builder-run-btn');
+    if (runBtn) runBtn.addEventListener('click', buildBasket);
+    // ── Pool-first controls (ui377) ─────────────────────────────────────
+    const cBtn = document.getElementById('builder-construct-btn');
+    if (cBtn) cBtn.addEventListener('click', buildConstruct);
+    const seg = document.getElementById('builder-method-seg');
+    if (seg) seg.querySelectorAll('button[data-method]').forEach(function(b) {
+      b.addEventListener('click', function() {
+        _builderConstructMethod = b.dataset.method || 'equal';
+        seg.querySelectorAll('button').forEach(function(x) { x.classList.toggle('active', x === b); });
+        const ex = document.getElementById('builder-method-explain');
+        if (ex) ex.textContent = _BUILDER_METHOD_EXPLAIN[_builderConstructMethod] || '';
+      });
+    });
+    const poolSearch = document.getElementById('builder-pool-search');
+    if (poolSearch) poolSearch.addEventListener('input', function() {
+      _builderPoolFilter = poolSearch.value.trim();
+      _renderBuilderPool();
+    });
+    const compsCb = document.getElementById('builder-include-comps');
+    if (compsCb) compsCb.addEventListener('change', function() {
+      _builderIncludeComps = compsCb.checked;
+      // Opting in checks the comps; opting out unchecks + hides them.
+      const cands = (_builderCandidatesCache && _builderCandidatesCache.candidates) || [];
+      cands.forEach(function(c) { if (c.source === 'comp') _builderPoolSel[c.ticker] = compsCb.checked; });
+      _renderBuilderPool();
+    });
+    const allBtn  = document.getElementById('builder-pool-all');
+    const noneBtn = document.getElementById('builder-pool-none');
+    if (allBtn)  allBtn.addEventListener('click', function() {
+      _builderVisibleCandidates().forEach(function(c) { _builderPoolSel[c.ticker] = true; });
+      _renderBuilderPool();
+    });
+    if (noneBtn) noneBtn.addEventListener('click', function() {
+      _builderVisibleCandidates().forEach(function(c) { _builderPoolSel[c.ticker] = false; });
+      _renderBuilderPool();
+    });
+    // Wire save-scenario + watchlist buttons
+    const saveBtn = document.getElementById('builder-save-btn');
+    const wlBtn   = document.getElementById('builder-watchlist-btn');
+    if (saveBtn) saveBtn.addEventListener('click', _builderSaveScenario);
+    if (wlBtn)   wlBtn.addEventListener('click',   _builderBasketToWatchlist);
+    // Wire the Candidate Pool refresh button (in-tab, no market sync)
+    const poolRefreshBtn = document.getElementById('builder-pool-refresh-btn');
+    if (poolRefreshBtn && !poolRefreshBtn._wired) {
+      poolRefreshBtn._wired = true;
+      poolRefreshBtn.addEventListener('click', _builderRefreshPool);
+    }
+    // Load candidates pool + previously saved scenarios
+    loadBuilderCandidates();
+    loadBuilderScenarios();
+  }
+
+  // ── LLM Lab ────────────────────────────────────────────────────────────────
+  // Full A/B testing rig: load any saved report's Grok vs Claude side-by-side,
+  // vote on which is better, see aggregate stats over time.
+  var _labInitialized   = false;
+  var _labCurrentTicker = null;
+  var _labCurrentData   = null;   // {grok, alt, ticker}
+  var _labPollTimer     = null;
+
+  function _labFmtRelDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '—';
+    const min = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (min < 1)   return 'just now';
+    if (min < 60)  return min + 'm ago';
+    const hrs = Math.floor(min / 60);
+    if (hrs < 24)  return hrs + 'h ago';
+    return Math.floor(hrs / 24) + 'd ago';
+  }
+
+  async function _labLoadReports() {
+    // Populate the ticker dropdown from saved reports (newest first — same
+    // sort order as the Research tab's Saved Reports list)
+    const sel = document.getElementById('lab-ticker-select');
+    if (!sel) return;
+    try {
+      const r = await window.dgaFetch('/api/reports');
+      if (!r.ok) throw new Error('reports ' + r.status);
+      const list = await r.json();
+      const arr  = Array.isArray(list) ? list : [];
+      sel.innerHTML = '<option value="">— select a saved report (' + arr.length + ' available) —</option>';
+      arr.forEach(function(rep) {
+        const opt = document.createElement('option');
+        opt.value = rep.ticker;
+        opt.textContent = rep.ticker + (rep.rating ? ' · ' + rep.rating : '')
+          + (rep.upside_pct != null ? ' · ' + (rep.upside_pct >= 0 ? '+' : '') + rep.upside_pct.toFixed(1) + '%' : '');
+        sel.appendChild(opt);
+      });
+    } catch (e) {
+      console.warn('[lab-reports]', e);
+    }
+  }
+
+  async function _labLoadComparison(ticker) {
+    _labCurrentTicker = ticker;
+    const wrap = document.getElementById('lab-compare');
+    if (!wrap) return;
+    wrap.style.display = 'block';
+
+    document.getElementById('lab-compare-title').textContent = '🔬 ' + ticker + ': Grok vs Claude';
+    document.getElementById('lab-grok-body').innerHTML = '<div style="padding:20px;color:#94a3b8;font-style:italic;">Loading Grok report…</div>';
+    document.getElementById('lab-claude-body').innerHTML = '<div style="padding:20px;color:#94a3b8;font-style:italic;">Loading Claude report…</div>';
+    document.getElementById('lab-runclaude-btn').style.display = 'none';
+
+    try {
+      const r = await window.dgaFetch('/api/reports/' + encodeURIComponent(ticker) + '/comparison?provider=claude');
+      if (!r.ok) throw new Error('comparison ' + r.status);
+      const data = await r.json();
+      _labCurrentData = data;
+      _labRenderComparison(data);
+    } catch (e) {
+      document.getElementById('lab-grok-body').innerHTML = '<div style="padding:20px;color:#dc2626;">Error: ' + e.message + '</div>';
+    }
+  }
+
+  function _labRenderComparison(data) {
+    const grok = data.grok || {};
+    const alt  = data.alt  || {};
+
+    // Meta lines
+    document.getElementById('lab-grok-meta').innerHTML   = (grok.model || 'grok') + ' · <strong>' + _labFmtRelDate(grok.generated_at) + '</strong>';
+    document.getElementById('lab-claude-meta').innerHTML = (alt.model  || 'claude') + ' · <strong>' + _labFmtRelDate(alt.generated_at)  + '</strong>';
+
+    // Top summary strip (same as compare modal)
+    const strip = document.getElementById('lab-summary-strip');
+    if (strip) {
+      if (grok.has_report && alt.has_report) {
+        const gs = grok.summary || {}, as = alt.summary || {};
+        let html = '<div>Grok: <strong>' + (gs.rating || '—') + '</strong>'
+          + ' · target <strong>' + (gs.price_target != null ? ('$' + Number(gs.price_target).toFixed(2)) : '—') + '</strong>'
+          + ' · upside <strong>' + (gs.upside_pct != null ? ((gs.upside_pct>=0?'+':'')+Number(gs.upside_pct).toFixed(1)+'%') : '—') + '</strong></div>';
+        html += '<div>Claude: <strong>' + (as.rating || '—') + '</strong>'
+          + ' · target <strong>' + (as.price_target != null ? ('$' + Number(as.price_target).toFixed(2)) : '—') + '</strong>'
+          + ' · upside <strong>' + (as.upside_pct != null ? ((as.upside_pct>=0?'+':'')+Number(as.upside_pct).toFixed(1)+'%') : '—') + '</strong></div>';
+        if (gs.price_target && as.price_target) {
+          const d = (Number(as.price_target) - Number(gs.price_target)) / Number(gs.price_target) * 100;
+          const cls = Math.abs(d) > 5 ? '#dc2626' : '#16a34a';
+          html += '<div>Δ Target: <strong style="color:' + cls + ';">' + ((d>=0?'+':'')+d.toFixed(1)+'%') + '</strong></div>';
+        }
+        strip.innerHTML = html;
+        strip.style.display = 'flex';
+      } else {
+        strip.style.display = 'none';
+      }
+    }
+
+    // Pane bodies
+    const gBody = document.getElementById('lab-grok-body');
+    const cBody = document.getElementById('lab-claude-body');
+    if (grok.has_report) {
+      _cmpRenderMdInto(gBody, grok.text);
+    } else {
+      gBody.innerHTML = '<div style="padding:20px;color:#94a3b8;font-style:italic;">No Grok report on disk for ' + data.ticker + '.</div>';
+    }
+    if (alt.has_report) {
+      _cmpRenderMdInto(cBody, alt.text);
+      document.getElementById('lab-runclaude-btn').style.display = 'none';
+    } else {
+      cBody.innerHTML = '<div style="padding:20px;color:#94a3b8;font-style:italic;">No Claude comparison yet — click "Run Claude analysis" above (~2-3 min).</div>';
+      document.getElementById('lab-runclaude-btn').style.display = '';
+    }
+
+    // Reset vote button state, prefill if a vote exists for this ticker
+    document.querySelectorAll('.lab-vote-btn').forEach(function(b) { b.dataset.cast = '0'; });
+    document.getElementById('lab-vote-status').style.display = 'none';
+    document.getElementById('lab-vote-note').value = '';
+    _labLoadExistingVote(data.ticker);
+  }
+
+  async function _labLoadExistingVote(ticker) {
+    try {
+      const r = await window.dgaFetch('/api/v2/lab/votes');
+      if (!r.ok) return;
+      const d = await r.json();
+      const existing = (d.votes || []).find(function(v) { return v.ticker === ticker; });
+      if (existing) {
+        document.querySelectorAll('.lab-vote-btn').forEach(function(b) {
+          b.dataset.cast = (b.dataset.winner === existing.winner) ? '1' : '0';
+        });
+        if (existing.note) document.getElementById('lab-vote-note').value = existing.note;
+        const st = document.getElementById('lab-vote-status');
+        st.style.display = 'inline'; st.textContent = '✓ Previously voted ' + _labFmtRelDate(existing.voted_at);
+      }
+    } catch (e) {}
+  }
+
+  async function _labRunClaude() {
+    const tk = _labCurrentTicker;
+    if (!tk) return;
+    const btn = document.getElementById('lab-runclaude-btn');
+    btn.disabled = true; btn.textContent = '⏳ Starting…';
+    try {
+      const r = await window.dgaFetch('/api/reports/' + encodeURIComponent(tk) + '/compare?provider=claude', { method: 'POST' });
+      if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.detail || r.status); }
+      const job = await r.json();
+      document.getElementById('lab-claude-body').innerHTML =
+        '<div style="padding:20px;color:#d97706;">'
+        + '<div style="display:flex;align-items:center;gap:8px;"><span class="cmp-wait-pulse"></span><strong>Claude running…</strong></div>'
+        + '<div style="margin-top:10px;font-size:11px;color:#94a3b8;" id="lab-run-status">Job ' + job.job_id.slice(0,8) + '… (this can take 30-60s to start streaming)</div>'
+        + '<div class="cmp-pane-body md-body" id="lab-claude-stream" style="margin-top:12px;max-height:50vh;overflow-y:auto;"></div>'
+        + '</div>';
+      _labPollClaudeJob(tk, job.job_id);
+    } catch (e) {
+      btn.disabled = false; btn.textContent = '⚡ Run Claude analysis';
+      alert('Could not start: ' + e.message);
+    }
+  }
+
+  async function _labPollClaudeJob(ticker, jobId) {
+    if (_labPollTimer) clearInterval(_labPollTimer);
+    const tick = async function() {
+      try {
+        const r = await window.dgaFetch('/api/jobs/' + encodeURIComponent(jobId));
+        if (!r.ok) return;
+        const job = await r.json();
+        const stat = document.getElementById('lab-run-status');
+        const stream = document.getElementById('lab-claude-stream');
+        const streamedLen = (job.streamed_text || '').length;
+        if (stat) {
+          stat.textContent = streamedLen > 0
+            ? 'Streaming · ' + streamedLen.toLocaleString() + ' chars'
+            : (job.progress && job.progress.label || 'Running…');
+        }
+        if (stream && streamedLen > 0) {
+          const wasAtBottom = (stream.scrollTop + stream.clientHeight) >= stream.scrollHeight - 30;
+          _cmpRenderMdInto(stream, job.streamed_text);
+          if (wasAtBottom) stream.scrollTop = stream.scrollHeight;
+        }
+        if (job.status === 'done' || job.status === 'failed') {
+          clearInterval(_labPollTimer); _labPollTimer = null;
+          const btn = document.getElementById('lab-runclaude-btn');
+          if (btn) { btn.disabled = false; btn.textContent = '⚡ Run Claude analysis'; }
+          if (job.status === 'failed') {
+            document.getElementById('lab-claude-body').innerHTML = '<div style="padding:20px;color:#dc2626;">Failed: ' + (job.error || 'unknown') + '</div>';
+            return;
+          }
+          // Reload the comparison so the final report shows formatted
+          _labLoadComparison(ticker);
+        }
+      } catch (e) {}
+    };
+    tick();
+    _labPollTimer = setInterval(tick, 1500);
+  }
+
+  async function _labVote(winner) {
+    if (!_labCurrentData || !_labCurrentTicker) return;
+    const note = document.getElementById('lab-vote-note').value.trim();
+    const gs = _labCurrentData.grok && _labCurrentData.grok.summary || {};
+    const as = _labCurrentData.alt  && _labCurrentData.alt.summary  || {};
+    try {
+      const r = await window.dgaFetch('/api/v2/lab/vote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ticker:        _labCurrentTicker,
+          winner:        winner,
+          note:          note || null,
+          grok_target:   gs.price_target || null,
+          claude_target: as.price_target || null,
+          grok_upside:   gs.upside_pct   || null,
+          claude_upside: as.upside_pct   || null,
+        }),
+      });
+      if (!r.ok) throw new Error('vote ' + r.status);
+      document.querySelectorAll('.lab-vote-btn').forEach(function(b) {
+        b.dataset.cast = (b.dataset.winner === winner) ? '1' : '0';
+      });
+      const st = document.getElementById('lab-vote-status');
+      st.style.display = 'inline'; st.textContent = '✓ Vote saved · ' + winner.toUpperCase();
+      _labLoadStats();        // refresh leaderboard
+      _labLoadHistory();      // refresh history
+    } catch (e) {
+      alert('Could not save vote: ' + e.message);
+    }
+  }
+
+  async function _labLoadStats() {
+    const lb = document.getElementById('lab-leaderboard');
+    if (!lb) return;
+    try {
+      const r = await window.dgaFetch('/api/v2/lab/stats');
+      if (!r.ok) throw new Error('stats ' + r.status);
+      const s = await r.json();
+      if (!s.total) {
+        lb.innerHTML = '<div style="font-size:11px;color:#94a3b8;font-style:italic;">No votes yet — load a comparison and cast one.</div>';
+        return;
+      }
+      let html = '<div style="font-size:11px;color:var(--text-primary);margin-bottom:8px;"><strong>' + s.total + '</strong> vote' + (s.total!==1?'s':'') + ' cast</div>';
+      // Bar
+      html += '<div class="lab-lb-bar">'
+        + '<div class="seg-grok"   style="width:' + s.grok_win_pct + '%;"></div>'
+        + '<div class="seg-tie"    style="width:' + s.tie_pct + '%;"></div>'
+        + '<div class="seg-claude" style="width:' + s.claude_win_pct + '%;"></div>'
+        + '</div>';
+      html += '<div class="lab-lb-row"><span style="color:var(--text-primary);font-weight:700;">GROK</span>'
+            + '<strong>' + s.grok_wins + ' wins · ' + s.grok_win_pct + '%</strong></div>';
+      html += '<div class="lab-lb-row"><span style="color:#d97706;font-weight:700;">CLAUDE</span>'
+            + '<strong>' + s.claude_wins + ' wins · ' + s.claude_win_pct + '%</strong></div>';
+      html += '<div class="lab-lb-row"><span style="color:#64748b;font-weight:700;">TIE</span>'
+            + '<strong>' + s.ties + ' · ' + s.tie_pct + '%</strong></div>';
+      // Avg deltas
+      if (s.avg_target_delta_pct != null) {
+        const sign = s.target_delta_sign;
+        const txt = (s.avg_target_delta_pct >= 0 ? '+' : '') + s.avg_target_delta_pct.toFixed(1) + '%';
+        const label = sign === 'claude_higher' ? 'Claude sets higher targets'
+                    : sign === 'grok_higher'   ? 'Grok sets higher targets'
+                    : 'Targets converge';
+        html += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid #e2e8f0;font-size:11px;color:#475569;">'
+          + label + ' on avg: <strong>' + txt + '</strong></div>';
+      }
+      lb.innerHTML = html;
+    } catch (e) {
+      console.warn('[lab-stats]', e);
+    }
+  }
+
+  async function _labLoadHistory() {
+    const wrap = document.getElementById('lab-history');
+    const list = document.getElementById('lab-history-list');
+    const cnt  = document.getElementById('lab-history-count');
+    if (!wrap || !list) return;
+    try {
+      const r = await window.dgaFetch('/api/v2/lab/votes');
+      if (!r.ok) return;
+      const d = await r.json();
+      const arr = d.votes || [];
+      if (cnt) cnt.textContent = arr.length + (arr.length === 1 ? ' vote' : ' votes');
+      if (!arr.length) { wrap.style.display = 'none'; return; }
+      wrap.style.display = 'block';
+      list.innerHTML = arr.map(function(v) {
+        return '<div class="lab-hist-row" data-vote-id="' + v.id + '">'
+          + '<span class="lab-hist-tk">' + v.ticker + '</span>'
+          + '<span class="lab-hist-winner ' + v.winner + '">' + v.winner.toUpperCase() + '</span>'
+          + '<span class="lab-hist-note" title="' + (v.note || '').replace(/"/g,'&quot;') + '">'
+          +   (v.note || '<em style="color:#94a3b8;">no note</em>')
+          + '</span>'
+          + '<span class="lab-hist-when">' + _labFmtRelDate(v.voted_at) + '</span>'
+          + '<button class="lab-hist-del" data-vote-id="' + v.id + '" title="Delete vote">×</button>'
+          + '</div>';
+      }).join('');
+      list.querySelectorAll('.lab-hist-del').forEach(function(btn) {
+        btn.addEventListener('click', async function(e) {
+          e.stopPropagation();
+          const id = btn.getAttribute('data-vote-id');
+          if (!confirm('Delete this vote?')) return;
+          try {
+            await window.dgaFetch('/api/v2/lab/votes/' + encodeURIComponent(id), { method: 'DELETE' });
+            _labLoadStats(); _labLoadHistory();
+          } catch (e) {}
+        });
+      });
+      list.querySelectorAll('.lab-hist-row').forEach(function(row) {
+        row.addEventListener('click', function(e) {
+          if (e.target.classList.contains('lab-hist-del')) return;
+          // Click a history row → load that comparison
+          const tk = row.querySelector('.lab-hist-tk').textContent.trim();
+          const sel = document.getElementById('lab-ticker-select');
+          if (sel) sel.value = tk;
+          _labLoadComparison(tk);
+        });
+      });
+    } catch (e) {}
+  }
+
+  function _initLabTab() {
+    if (_labInitialized) {
+      _labLoadReports(); _labLoadStats(); _labLoadHistory();
+      return;
+    }
+    _labInitialized = true;
+    _labLoadReports();
+    _labLoadStats();
+    _labLoadHistory();
+    // Wire load button
+    document.getElementById('lab-load-btn').addEventListener('click', function() {
+      const tk = document.getElementById('lab-ticker-select').value;
+      if (!tk) return;
+      _labLoadComparison(tk);
+    });
+    // Wire run-claude button
+    document.getElementById('lab-runclaude-btn').addEventListener('click', _labRunClaude);
+    // Wire vote buttons
+    document.querySelectorAll('.lab-vote-btn').forEach(function(b) {
+      b.addEventListener('click', function() { _labVote(b.dataset.winner); });
+    });
+    // Wire Enter key on note input → save note by re-submitting with current winner
+    const noteInput = document.getElementById('lab-vote-note');
+    if (noteInput) {
+      noteInput.addEventListener('keydown', function(ev) {
+        if (ev.key !== 'Enter') return;
+        ev.preventDefault();
+        // Find which winner is currently cast (set in _labVote / _labLoadExistingVote)
+        const castBtn = Array.from(document.querySelectorAll('.lab-vote-btn'))
+          .find(function(b) { return b.dataset.cast === '1'; });
+        if (!castBtn) {
+          const st = document.getElementById('lab-vote-status');
+          if (st) {
+            st.style.display = 'inline';
+            st.style.color = '#d97706';
+            st.textContent = '↑ Pick a winner first (Grok / Tie / Claude), then the note saves.';
+            setTimeout(function() {
+              st.style.color = '#16a34a';
+              st.style.display = 'none';
+            }, 3500);
+          }
+          return;
+        }
+        // Re-submit vote with same winner — backend treats this as an update
+        // and persists the (possibly new) note text.
+        _labVote(castBtn.dataset.winner);
+      });
+    }
+    // ── Wire podcast SCRIPT generator (v0) + AUDIO generator (v1) ──
+    _populatePodcastScriptPicker();
+    _populatePodcastSavedScripts();
+    _populatePodcastSavedAudio();
+    _wirePodcastAudio();
+    _loadPodcastSpeedTable();
+    _loadPodcastVoiceTable();
+    // Wire "open saved episode" — picks an existing MP3 + opens the player
+    const savedAud = document.getElementById('podcast-audio-saved');
+    if (savedAud) {
+      savedAud.addEventListener('change', function() {
+        const raw = savedAud.value;
+        if (!raw) return;
+        const [tk, fmt] = raw.includes('::') ? raw.split('::') : [raw, 'debate'];
+        const ep = (window._podcastEpisodes || []).find(function(e){
+          return e.ticker === tk && (e.format || 'debate') === fmt;
+        });
+        _showPodcastPlayer(tk, Object.assign({}, ep || {}, { format: fmt }));
+        const player = document.getElementById('podcast-audio-player');
+        if (player && player.scrollIntoView) {
+          player.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      });
+    }
+    // Bi-directional ticker sync: pick once in either dropdown, both update
+    const sScript = document.getElementById('podcast-script-ticker');
+    const sAudio  = document.getElementById('podcast-audio-ticker');
+    const sync = function(src, dst) {
+      if (!src || !dst) return;
+      src.addEventListener('change', function() {
+        if (!src.value) return;
+        if (Array.from(dst.options).some(function(o){ return o.value === src.value; })) {
+          dst.value = src.value;
+        }
+      });
+    };
+    sync(sScript, sAudio);
+    sync(sAudio,  sScript);
+    // Wire "open saved script" dropdown — fetches cached JSON and renders
+    const savedSel = document.getElementById('podcast-script-saved');
+    if (savedSel) {
+      savedSel.addEventListener('change', async function() {
+        const raw = savedSel.value;
+        if (!raw) return;
+        // Saved-script option values are encoded "TICKER::format" so we
+        // can disambiguate Debate vs Pre-Mortem for the same ticker.
+        const [tk, fmt] = raw.includes('::') ? raw.split('::') : [raw, 'debate'];
+        const out = document.getElementById('podcast-script-render');
+        const stats = document.getElementById('podcast-script-stats');
+        out.style.display = 'block';
+        out.innerHTML = '<div style="color:#64748b;font-size:12px;">Loading saved ' + fmt + ' script for ' + tk + '…</div>';
+        try {
+          const r = await window.dgaFetch('/api/podcast/' + encodeURIComponent(tk) + '/script?format=' + encodeURIComponent(fmt));
+          const d = await r.json();
+          if (!d.ok || !d.script) {
+            out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + (d.error || 'Failed') + '</div>';
+            return;
+          }
+          // Stamp alignment onto the script for the renderer's mode badge
+          if (d.alignment && d.alignment.roles && !d.script._alignment) {
+            d.script._alignment = {
+              episode_mode: d.alignment.roles.episode_mode,
+              bull_speaker: d.alignment.roles.bull_speaker,
+              bear_speaker: d.alignment.roles.bear_speaker,
+            };
+          }
+          // Stamp generation date so the header's 📅 pill renders correctly
+          if (d.generated_at && !d.script.generated_at) {
+            d.script.generated_at = d.generated_at;
+          }
+          _renderPodcastScript(d.script, d.validation, out);
+          if (d.da_brief) {
+            const bb = document.createElement('div');
+            bb.style.cssText = 'background:#fef3c7;border:1px solid #fde68a;border-radius:6px;padding:12px 14px;margin:12px 0;font-size:12px;color:#78350f;';
+            bb.innerHTML = '<div style="font-weight:800;letter-spacing:0.5px;margin-bottom:6px;color:#92400e;">😈 DEVIL\'S ADVOCATE BRIEF (Grok→Claude)</div>' +
+              '<div style="white-space:pre-wrap;line-height:1.55;">' +
+                d.da_brief.replace(/[<>&]/g, function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c];}) +
+              '</div>';
+            out.insertBefore(bb, out.firstChild.nextSibling);
+          }
+          const s = (d.validation && d.validation.stats) || {};
+          const fmtCost = function(v) {
+            if (v == null || isNaN(Number(v))) return '';
+            return ' · 💸 $' + Number(v).toFixed(2);
+          };
+          const scriptCost = fmtCost(d.script_cost_usd);
+          const audioCost  = d.audio_cost_usd != null ? ' · 🎧 $' + Number(d.audio_cost_usd).toFixed(2) : '';
+          stats.textContent = '📂 saved · ' + (s.word_count||0) + ' words · ' +
+            (s.approx_minutes||0) + ' min · ' + (s.turn_count||0) + ' turns · ' +
+            (s.curse_count||0) + ' curses · winner: ' + (s.winner||'?').toUpperCase() +
+            scriptCost + audioCost;
+          // If audio already exists for this (ticker, format), surface the player
+          try {
+            const sr = await window.dgaFetch('/api/podcast/list');
+            const sd = await sr.json();
+            const ep = (sd.episodes || []).find(function(e){
+              return e.ticker === tk && (e.format || 'debate') === fmt;
+            });
+            if (ep) {
+              _showPodcastPlayer(tk, {
+                format:       fmt,
+                duration_sec: ep.duration_sec, cost_usd: ep.cost_usd,
+                dropbox_path: ep.dropbox_path,
+              });
+            }
+          } catch(e) {}
+        } catch (e) {
+          out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + e.message + '</div>';
+        }
+      });
+    }
+    const scriptBtn   = document.getElementById('podcast-script-btn');
+    const scriptSel   = document.getElementById('podcast-script-ticker');
+    const scriptOut   = document.getElementById('podcast-script-render');
+    const scriptStats = document.getElementById('podcast-script-stats');
+    // Format dropdown — switches between single-ticker picker and Roundup multi-select
+    const fmtSel = document.getElementById('podcast-script-format');
+    const multiSel = document.getElementById('podcast-script-tickers-multi');
+    if (fmtSel) {
+      const applyFormatMode = function() {
+        const v = fmtSel.value;
+        const isMulti = (v === 'roundup' || v === 'portfolio_roundup');
+        // Multi-pick picker is a flex div, not a select — explicit display value
+        if (multiSel) multiSel.style.display = isMulti ? 'flex' : 'none';
+        if (scriptSel) scriptSel.style.display = isMulti ? 'none' : '';
+        if (isMulti) _populatePodcastRoundupTickers(v);
+      };
+      fmtSel.addEventListener('change', applyFormatMode);
+      applyFormatMode();
+    }
+
+    if (scriptBtn) {
+      scriptBtn.addEventListener('click', async function() {
+        const format = (fmtSel && fmtSel.value) || 'debate';
+        const picks = Array.from(window._podcastRoundupSelected || []);
+        if (format === 'roundup') {
+          if (picks.length < 2) { alert('Pick at least 2 tickers for a Roundup.'); return; }
+          if (picks.length > 4) { alert('Max 4 tickers for a Roundup.'); return; }
+          _startPodcastRoundupJob(picks, scriptBtn, scriptOut, scriptStats);
+        } else if (format === 'portfolio_roundup') {
+          if (picks.length < 5)  { alert('Pick at least 5 tickers for a Portfolio Roundup.'); return; }
+          if (picks.length > 35) { alert('Max 35 tickers for a Portfolio Roundup.'); return; }
+          _startPodcastPortfolioRoundupJob(picks, scriptBtn, scriptOut, scriptStats);
+        } else {
+          const tk = scriptSel.value;
+          if (!tk) { alert('Pick a ticker first.'); return; }
+          _startPodcastScriptJob(tk, scriptBtn, scriptOut, scriptStats, format);
+        }
+      });
+    }
+  }
+
+  // Maps server stage names → percentage on a single-bar gauge.
+  // No real "total" exists for script gen; these are heuristic checkpoints.
+  const PODCAST_SCRIPT_STAGE_PCT = {
+    queued:        4,
+    load:          10,
+    classify:      20,
+    da_research:   45,   // longest stage when present (Grok web search)
+    da_synth:      65,   // Claude synthesis of DA brief
+    macro_pull:    30,   // portfolio_roundup — Grok macro headlines
+    bolton_screen: 50,   // portfolio_roundup — Sonnet bolt-on screen
+    script_gen:    80,   // main Claude Opus call
+    persist:       95,
+    done:          100,
+    error:         0,
+  };
+
+  // Chip-style multi-picker state — Set of selected ticker symbols
+  window._podcastRoundupSelected = new Set();
+
+  async function _populatePodcastRoundupTickers(format) {
+    format = format || 'roundup';
+    const isPortfolio = format === 'portfolio_roundup';
+    const MAX_PICK = isPortfolio ? 35 : 4;
+    const MIN_PICK = isPortfolio ? 5  : 2;
+    const chipsEl = document.getElementById('ps-roundup-chips');
+    const countEl = document.getElementById('ps-roundup-count');
+    const headerEl = document.getElementById('ps-roundup-header');
+    if (!chipsEl) return;
+    if (headerEl) {
+      headerEl.textContent = isPortfolio
+        ? '🧰 Portfolio Roundup — click ' + MIN_PICK + '-' + MAX_PICK + ' tickers from your book'
+        : '📰 Roundup — click ' + MIN_PICK + '-' + MAX_PICK + ' tickers';
+    }
+    try {
+      const r = await window.dgaFetch('/api/reports');
+      const reports = await r.json();
+      // Portfolio Roundup is more permissive — single-provider reports OK too,
+      // since position_walk can lean on whichever exists. Regular Roundup
+      // still requires both providers (since it needs Rock take + Claudia rebuttal).
+      const eligible = isPortfolio
+        ? (reports || []).filter(function(x){ return x.generated_at || x.claude_generated_at; })
+        : (reports || []).filter(function(x){ return x.generated_at && x.claude_generated_at; });
+      if (!eligible.length) {
+        chipsEl.innerHTML = '<span style="font-size:11px;color:#94a3b8;font-style:italic;">No eligible tickers.</span>';
+        return;
+      }
+      const selected = window._podcastRoundupSelected;
+      const renderChip = function(tk) {
+        const isSel = selected.has(tk);
+        return '<button type="button" data-tk="' + tk + '" class="ps-rd-chip" ' +
+          'style="cursor:pointer;border:1px solid ' + (isSel ? '#92400e' : '#cbd5e1') + ';' +
+          'background:' + (isSel ? '#92400e' : '#fff') + ';' +
+          'color:' + (isSel ? '#fff' : '#0A1628') + ';' +
+          'font-weight:700;font-size:11.5px;padding:5px 10px;border-radius:14px;letter-spacing:0.4px;' +
+          'transition:all 0.12s;">' +
+          (isSel ? '✓ ' : '') + tk + '</button>';
+      };
+      const loadFromPositionsBtn = isPortfolio
+        ? '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;align-items:center;">' +
+          '<button id="ps-rd-load-positions" type="button" ' +
+            'style="background:#fff;border:1px dashed #0A1628;color:#0A1628;' +
+            'padding:5px 12px;border-radius:14px;font-size:11px;font-weight:700;cursor:pointer;">' +
+            '↓ Load from my live positions</button>' +
+          '<input id="ps-rd-upload-sleeve" type="text" placeholder="Sleeve name (optional)" ' +
+            'style="border:1px solid #cbd5e1;border-radius:6px;padding:5px 9px;font-size:11px;width:180px;">' +
+          '<input id="ps-rd-upload-file" type="file" accept=".csv,.tsv,.xlsx,.xls,.xlsm" style="display:none;">' +
+          '<button id="ps-rd-upload-btn" type="button" ' +
+            'style="background:#92400e;border:1px solid #78350f;color:#fff;' +
+            'padding:5px 12px;border-radius:14px;font-size:11px;font-weight:700;cursor:pointer;">' +
+            '📂 Upload portfolio (real weights)</button>' +
+          '<span style="font-size:10.5px;color:#64748b;">Uses ACTUAL weights — no invented concentrations.</span>' +
+          '</div>'
+        : '';
+      chipsEl.innerHTML = loadFromPositionsBtn +
+        '<div style="display:flex;flex-wrap:wrap;gap:6px;">' +
+        eligible.map(function(x){ return renderChip(x.ticker); }).join('') +
+        '</div>';
+      countEl.textContent = selected.size + ' / ' + MAX_PICK + ' selected';
+      // Wire chip clicks
+      chipsEl.querySelectorAll('.ps-rd-chip').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          const tk = btn.dataset.tk;
+          if (selected.has(tk)) {
+            selected.delete(tk);
+          } else {
+            if (selected.size >= MAX_PICK) {
+              btn.animate(
+                [{ transform:'translateX(0)' }, { transform:'translateX(-4px)' },
+                 { transform:'translateX(4px)' }, { transform:'translateX(0)' }],
+                { duration: 200 }
+              );
+              return;
+            }
+            selected.add(tk);
+          }
+          _populatePodcastRoundupTickers(format);
+        });
+      });
+      // Wire upload button (portfolio_roundup only) — POSTs the file to a
+      // dedicated endpoint that parses real weights and kicks off generation
+      // bypassing the chip picker entirely.
+      const upBtn  = document.getElementById('ps-rd-upload-btn');
+      const upFile = document.getElementById('ps-rd-upload-file');
+      const upName = document.getElementById('ps-rd-upload-sleeve');
+      if (upBtn && upFile) {
+        upBtn.addEventListener('click', function(){ upFile.click(); });
+        upFile.addEventListener('change', async function() {
+          const f = upFile.files && upFile.files[0];
+          if (!f) return;
+          const sleeve = (upName && upName.value || '').trim();
+          const scriptBtn   = document.getElementById('podcast-script-btn');
+          const scriptOut   = document.getElementById('podcast-script-render');
+          const scriptStats = document.getElementById('podcast-script-stats');
+          upBtn.disabled = true; upBtn.textContent = '⏳ Uploading…';
+          try {
+            const fd = new FormData();
+            fd.append('file', f);
+            fd.append('sleeve_name', sleeve);
+            const r = await window.dgaFetch('/api/podcast-portfolio-roundup/upload', {
+              method:'POST', body: fd,
+            });
+            const d = await r.json();
+            if (!d.ok) throw new Error(d.detail || d.error || 'Upload failed');
+            // Server already queued the job — drop into the polling UI using
+            // the returned ticker list (which is what builds the job_key).
+            _attachPortfolioRoundupPoll(d.tickers || [], scriptBtn, scriptOut, scriptStats);
+          } catch (e) {
+            alert('Upload failed: ' + e.message);
+          } finally {
+            upBtn.disabled = false; upBtn.textContent = '📂 Upload portfolio (real weights)';
+            upFile.value = '';
+          }
+        });
+      }
+      // Wire "Load from positions" (portfolio_roundup only) — pulls live tax_lots
+      const loadBtn = document.getElementById('ps-rd-load-positions');
+      if (loadBtn) {
+        loadBtn.addEventListener('click', async function() {
+          loadBtn.disabled = true; loadBtn.textContent = '⏳ Loading positions…';
+          try {
+            const pr = await window.dgaFetch('/api/v2/lp/positions');
+            const pd = await pr.json();
+            const pos = (pd.positions || []).slice(0, 35);
+            selected.clear();
+            pos.forEach(function(p){ if (p.ticker) selected.add(p.ticker.toUpperCase()); });
+            _populatePodcastRoundupTickers(format);
+          } catch (e) {
+            alert('Failed to load positions: ' + e.message);
+          } finally {
+            loadBtn.disabled = false;
+          }
+        });
+      }
+    } catch (e) {
+      chipsEl.innerHTML = '<span style="color:#dc2626;font-size:11px;">Failed to load: ' + e.message + '</span>';
+    }
+  }
+
+  function _startPodcastScriptJob(ticker, btn, out, statsEl, format) {
+    format = format || 'debate';
+    btn.disabled = true;
+    btn.textContent = '⏳ Working…';
+    if (statsEl) statsEl.textContent = '';
+    out.style.display = 'block';
+    out.innerHTML =
+      '<div style="display:flex;align-items:center;gap:10px;padding:14px;background:#0A1628;color:#fff;border-radius:8px;margin-bottom:10px;">' +
+        '<div style="flex:1;">' +
+          '<div id="ps-progress-label" style="font-size:13px;font-weight:700;letter-spacing:-0.1px;margin-bottom:8px;">Starting…</div>' +
+          '<div style="height:6px;background:rgba(255,255,255,0.15);border-radius:3px;overflow:hidden;">' +
+            '<div id="ps-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#5BB8D4,#84CCE3);transition:width .4s ease;"></div>' +
+          '</div>' +
+          '<div id="ps-progress-elapsed" style="font-size:10.5px;color:#84CCE3;margin-top:6px;font-family:\'SF Mono\',monospace;">0s elapsed</div>' +
+        '</div>' +
+        '<button id="ps-cancel-btn" type="button" title="Cancel this generation" ' +
+        'style="background:rgba(239,68,68,0.15);border:1px solid #fca5a5;color:#fca5a5;' +
+        'padding:6px 12px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;' +
+        'white-space:nowrap;">🛑 Cancel</button>' +
+      '</div>';
+
+    const labelEl = document.getElementById('ps-progress-label');
+    const barEl   = document.getElementById('ps-progress-bar');
+    const elapEl  = document.getElementById('ps-progress-elapsed');
+    const cancelBtn = document.getElementById('ps-cancel-btn');
+    const t0 = Date.now();
+    const tick = function() {
+      const sec = Math.round((Date.now() - t0) / 1000);
+      if (elapEl) elapEl.textContent = sec + 's elapsed';
+    };
+    const elapsedTimer = setInterval(tick, 1000);
+
+    let pollTimer = null;
+    const finish = function() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      clearInterval(elapsedTimer);
+      btn.disabled = false;
+      btn.textContent = '🎬 Generate script';
+    };
+
+    // Cancel wiring — POST to the cancel endpoint then keep polling until the
+    // worker confirms (the poll picks up status='cancelled' and renders below).
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', async function() {
+        if (cancelBtn.disabled) return;
+        cancelBtn.disabled = true;
+        cancelBtn.textContent = '⏳ Cancelling…';
+        try {
+          await window.dgaFetch('/api/podcast/' + encodeURIComponent(ticker) +
+                                 '/script/cancel', { method: 'POST' });
+          if (labelEl) labelEl.textContent = '🛑 Cancelling — waiting for worker to stop…';
+        } catch (e) {
+          alert('Cancel request failed: ' + e.message);
+          cancelBtn.disabled = false;
+          cancelBtn.textContent = '🛑 Cancel';
+        }
+      });
+    }
+
+    (async function() {
+      try {
+        const r0 = await window.dgaFetch('/api/podcast/' + ticker + '/script?format=' + encodeURIComponent(format), { method: 'POST' });
+        const d0 = await r0.json();
+        if (!d0.ok) throw new Error(d0.error || 'Failed to start');
+      } catch (e) {
+        out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + e.message + '</div>';
+        finish();
+        return;
+      }
+
+      // Poll the status endpoint every 1.5s until done/error.
+      // Guard rails (added ui151):
+      //   • If stage stays 'idle' for >30s, the job dict has no entry —
+      //     almost certainly a server restart between POST and poll. Bail.
+      //   • Hard timeout at 8 min total so we can never run for 56 minutes
+      //     into the void like the user just experienced.
+      let idleSince = null;
+      pollTimer = setInterval(async function() {
+        const elapsed = (Date.now() - t0) / 1000;
+        if (elapsed > 480) {
+          out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ Timed out after 8 min — the worker likely crashed or stalled. Check Railway logs and try Generate again.</div>';
+          finish(); return;
+        }
+        try {
+          const r = await window.dgaFetch('/api/podcast/' + ticker + '/script-status');
+          const d = await r.json();
+          if (d.stage === 'idle') {
+            idleSince = idleSince || Date.now();
+            if ((Date.now() - idleSince) > 30000) {
+              out.innerHTML = '<div style="color:#d97706;font-size:12px;">⚠ Job not found on server (was Railway redeployed mid-job?). Click <strong>🎬 Generate script</strong> again to retry.</div>';
+              finish(); return;
+            }
+          } else {
+            idleSince = null;
+          }
+          const pct = PODCAST_SCRIPT_STAGE_PCT[d.stage] != null ? PODCAST_SCRIPT_STAGE_PCT[d.stage] : 50;
+          if (labelEl) labelEl.textContent = d.label || d.stage || 'Working…';
+          if (barEl)   barEl.style.width   = pct + '%';
+          if (d.status === 'done' && d.result) {
+            finish();
+            _onPodcastScriptDone(d.result, out, statsEl);
+          } else if (d.status === 'cancelled') {
+            out.innerHTML = '<div style="color:#92400e;background:#fef3c7;border:1px solid #fde68a;padding:10px 14px;border-radius:6px;font-size:12px;">' +
+              '🛑 Cancelled. Generation stopped — you weren\'t charged for the full Opus call.</div>';
+            finish();
+          } else if (d.status === 'error') {
+            out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' +
+              (d.label || d.error || 'Generation failed') + '</div>';
+            finish();
+          }
+        } catch (e) {
+          // Transient network blip — keep polling
+        }
+      }, 1500);
+    })();
+  }
+
+  function _startPodcastRoundupJob(tickers, btn, out, statsEl) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Working…';
+    if (statsEl) statsEl.textContent = '';
+    out.style.display = 'block';
+    out.innerHTML =
+      '<div style="display:flex;align-items:center;gap:10px;padding:14px;background:#0A1628;color:#fff;border-radius:8px;margin-bottom:10px;">' +
+        '<div style="flex:1;">' +
+          '<div id="ps-progress-label" style="font-size:13px;font-weight:700;margin-bottom:8px;">📰 Roundup: ' + tickers.join(' · ') + ' — Starting…</div>' +
+          '<div style="height:6px;background:rgba(255,255,255,0.15);border-radius:3px;overflow:hidden;">' +
+            '<div id="ps-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#5BB8D4,#84CCE3);transition:width .4s ease;"></div>' +
+          '</div>' +
+          '<div id="ps-progress-elapsed" style="font-size:10.5px;color:#84CCE3;margin-top:6px;font-family:\'SF Mono\',monospace;">0s elapsed</div>' +
+        '</div>' +
+      '</div>';
+    const labelEl = document.getElementById('ps-progress-label');
+    const barEl   = document.getElementById('ps-progress-bar');
+    const elapEl  = document.getElementById('ps-progress-elapsed');
+    const t0 = Date.now();
+    const tickerKey = 'ROUNDUP_' + tickers.map(function(t){return t.toUpperCase();}).join(',');
+    const elapsedTimer = setInterval(function() {
+      const sec = Math.round((Date.now() - t0) / 1000);
+      if (elapEl) elapEl.textContent = sec + 's elapsed';
+    }, 1000);
+    let pollTimer = null;
+    const finish = function() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      clearInterval(elapsedTimer);
+      btn.disabled = false;
+      btn.textContent = '🎬 Generate script';
+    };
+    (async function() {
+      try {
+        const r0 = await window.dgaFetch('/api/podcast-roundup/script', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tickers: tickers }),
+        });
+        const d0 = await r0.json();
+        if (!d0.ok) throw new Error(d0.error || 'Failed to start roundup');
+      } catch (e) {
+        out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + e.message + '</div>';
+        finish(); return;
+      }
+      let idleSince = null;
+      pollTimer = setInterval(async function() {
+        const elapsed = (Date.now() - t0) / 1000;
+        if (elapsed > 480) {
+          out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ Roundup timed out after 8 min. Worker likely crashed or stalled. Try Generate again.</div>';
+          finish(); return;
+        }
+        try {
+          const r = await window.dgaFetch('/api/podcast/' + encodeURIComponent(tickerKey) + '/script-status');
+          const d = await r.json();
+          if (d.stage === 'idle') {
+            idleSince = idleSince || Date.now();
+            if ((Date.now() - idleSince) > 30000) {
+              out.innerHTML = '<div style="color:#d97706;font-size:12px;">⚠ Roundup job not found on server (was Railway redeployed mid-job?). Click <strong>🎬 Generate script</strong> again.</div>';
+              finish(); return;
+            }
+          } else {
+            idleSince = null;
+          }
+          const pct = PODCAST_SCRIPT_STAGE_PCT[d.stage] != null ? PODCAST_SCRIPT_STAGE_PCT[d.stage] : 50;
+          if (labelEl) labelEl.textContent = d.label || d.stage || 'Working…';
+          if (barEl)   barEl.style.width = pct + '%';
+          if (d.status === 'done' && d.result) {
+            finish();
+            _onPodcastScriptDone(d.result, out, statsEl);
+          } else if (d.status === 'error') {
+            out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + (d.label || d.error || 'failed') + '</div>';
+            finish();
+          }
+        } catch (e) { /* transient — keep polling */ }
+      }, 1500);
+    })();
+  }
+
+  function _startPodcastPortfolioRoundupJob(tickers, btn, out, statsEl) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Working…';
+    if (statsEl) statsEl.textContent = '';
+    out.style.display = 'block';
+    out.innerHTML =
+      '<div style="display:flex;align-items:center;gap:10px;padding:14px;background:#0A1628;color:#fff;border-radius:8px;margin-bottom:10px;">' +
+        '<div style="flex:1;">' +
+          '<div id="ps-progress-label" style="font-size:13px;font-weight:700;margin-bottom:8px;">🧰 Portfolio Roundup (' + tickers.length + ' positions) — Starting…</div>' +
+          '<div style="height:6px;background:rgba(255,255,255,0.15);border-radius:3px;overflow:hidden;">' +
+            '<div id="ps-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#5BB8D4,#84CCE3);transition:width .4s ease;"></div>' +
+          '</div>' +
+          '<div id="ps-progress-elapsed" style="font-size:10.5px;color:#84CCE3;margin-top:6px;font-family:\'SF Mono\',monospace;">0s elapsed · expect 3-4 min (Grok macro + Sonnet bolt-ons + Opus script)</div>' +
+        '</div>' +
+      '</div>';
+    const labelEl = document.getElementById('ps-progress-label');
+    const barEl   = document.getElementById('ps-progress-bar');
+    const elapEl  = document.getElementById('ps-progress-elapsed');
+    const t0 = Date.now();
+    const tickerKey = 'PORTFOLIO_' + tickers.map(function(t){return t.toUpperCase();}).join(',');
+    const elapsedTimer = setInterval(function() {
+      const sec = Math.round((Date.now() - t0) / 1000);
+      if (elapEl) elapEl.textContent = sec + 's elapsed';
+    }, 1000);
+    let pollTimer = null;
+    const finish = function() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      clearInterval(elapsedTimer);
+      btn.disabled = false;
+      btn.textContent = '🎬 Generate script';
+    };
+    (async function() {
+      try {
+        const r0 = await window.dgaFetch('/api/podcast-portfolio-roundup/script', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tickers: tickers }),
+        });
+        const d0 = await r0.json();
+        if (!d0.ok) throw new Error(d0.error || 'Failed to start Portfolio Roundup');
+      } catch (e) {
+        out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + e.message + '</div>';
+        finish(); return;
+      }
+      let idleSince = null;
+      pollTimer = setInterval(async function() {
+        const elapsed = (Date.now() - t0) / 1000;
+        // Portfolio Roundup hard timeout is more generous — 12 min, since it
+        // runs THREE LLM calls (Grok macro + Sonnet bolt-on + Opus script)
+        if (elapsed > 720) {
+          out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ Portfolio Roundup timed out after 12 min. Try again.</div>';
+          finish(); return;
+        }
+        try {
+          const r = await window.dgaFetch('/api/podcast/' + encodeURIComponent(tickerKey) + '/script-status');
+          const d = await r.json();
+          if (d.stage === 'idle') {
+            idleSince = idleSince || Date.now();
+            if ((Date.now() - idleSince) > 30000) {
+              out.innerHTML = '<div style="color:#d97706;font-size:12px;">⚠ Portfolio Roundup job not found on server (Railway restart?). Try Generate again.</div>';
+              finish(); return;
+            }
+          } else { idleSince = null; }
+          const pct = PODCAST_SCRIPT_STAGE_PCT[d.stage] != null ? PODCAST_SCRIPT_STAGE_PCT[d.stage] : 50;
+          if (labelEl) labelEl.textContent = d.label || d.stage || 'Working…';
+          if (barEl)   barEl.style.width = pct + '%';
+          if (d.status === 'done' && d.result) {
+            finish();
+            _onPodcastScriptDone(d.result, out, statsEl);
+          } else if (d.status === 'error') {
+            out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + (d.label || d.error || 'failed') + '</div>';
+            finish();
+          }
+        } catch (e) { /* transient */ }
+      }, 1800);
+    })();
+  }
+
+  // Attach the polling UI to an ALREADY-QUEUED Portfolio Roundup job
+  // (e.g. after a portfolio-file upload). Skips the kickoff POST.
+  function _attachPortfolioRoundupPoll(tickers, btn, out, statsEl) {
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Working…'; }
+    if (statsEl) statsEl.textContent = '';
+    out.style.display = 'block';
+    out.innerHTML =
+      '<div style="display:flex;align-items:center;gap:10px;padding:14px;background:#0A1628;color:#fff;border-radius:8px;margin-bottom:10px;">' +
+        '<div style="flex:1;">' +
+          '<div id="ps-progress-label" style="font-size:13px;font-weight:700;margin-bottom:8px;">📂 Uploaded portfolio (' + tickers.length + ' positions) — Starting…</div>' +
+          '<div style="height:6px;background:rgba(255,255,255,0.15);border-radius:3px;overflow:hidden;">' +
+            '<div id="ps-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#5BB8D4,#84CCE3);transition:width .4s ease;"></div>' +
+          '</div>' +
+          '<div id="ps-progress-elapsed" style="font-size:10.5px;color:#84CCE3;margin-top:6px;font-family:\'SF Mono\',monospace;">0s elapsed · expect 3-4 min</div>' +
+        '</div>' +
+      '</div>';
+    const labelEl = document.getElementById('ps-progress-label');
+    const barEl   = document.getElementById('ps-progress-bar');
+    const elapEl  = document.getElementById('ps-progress-elapsed');
+    const t0 = Date.now();
+    const tickerKey = 'PORTFOLIO_' + tickers.map(function(t){return t.toUpperCase();}).join(',');
+    const elapsedTimer = setInterval(function() {
+      const sec = Math.round((Date.now() - t0) / 1000);
+      if (elapEl) elapEl.textContent = sec + 's elapsed';
+    }, 1000);
+    let pollTimer = null;
+    const finish = function() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      clearInterval(elapsedTimer);
+      if (btn) { btn.disabled = false; btn.textContent = '🎬 Generate script'; }
+    };
+    let idleSince = null;
+    pollTimer = setInterval(async function() {
+      const elapsed = (Date.now() - t0) / 1000;
+      if (elapsed > 720) {
+        out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ Portfolio Roundup timed out after 12 min. Try again.</div>';
+        finish(); return;
+      }
+      try {
+        const r = await window.dgaFetch('/api/podcast/' + encodeURIComponent(tickerKey) + '/script-status');
+        const d = await r.json();
+        if (d.stage === 'idle') {
+          idleSince = idleSince || Date.now();
+          if ((Date.now() - idleSince) > 30000) {
+            out.innerHTML = '<div style="color:#d97706;font-size:12px;">⚠ Upload job not found on server (Railway restart?). Try again.</div>';
+            finish(); return;
+          }
+        } else { idleSince = null; }
+        const pct = PODCAST_SCRIPT_STAGE_PCT[d.stage] != null ? PODCAST_SCRIPT_STAGE_PCT[d.stage] : 50;
+        if (labelEl) labelEl.textContent = d.label || d.stage || 'Working…';
+        if (barEl)   barEl.style.width = pct + '%';
+        if (d.status === 'done' && d.result) {
+          finish();
+          _onPodcastScriptDone(d.result, out, statsEl);
+        } else if (d.status === 'error') {
+          out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + (d.label || d.error || 'failed') + '</div>';
+          finish();
+        }
+      } catch (e) { /* transient */ }
+    }, 1800);
+  }
+
+  function _onPodcastScriptDone(d, out, statsEl) {
+    if (!d.script) {
+      out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + (d.error || 'No script returned') + '</div>';
+      return;
+    }
+    if (d.alignment && d.alignment.roles && !d.script._alignment) {
+      d.script._alignment = {
+        episode_mode: d.alignment.roles.episode_mode,
+        bull_speaker: d.alignment.roles.bull_speaker,
+        bear_speaker: d.alignment.roles.bear_speaker,
+      };
+    }
+    // Fresh-generation: stamp current time as production date if backend
+    // hasn't supplied one (so the header date pill shows "today" right away).
+    if (!d.script.generated_at) {
+      d.script.generated_at = d.generated_at || new Date().toISOString();
+    }
+    _renderPodcastScript(d.script, d.validation, out);
+    if (d.alignment && d.alignment.da_brief) {
+      const briefBlock = document.createElement('div');
+      briefBlock.style.cssText = 'background:#fef3c7;border:1px solid #fde68a;border-radius:6px;padding:12px 14px;margin:12px 0;font-size:12px;color:#78350f;';
+      briefBlock.innerHTML = '<div style="font-weight:800;letter-spacing:0.5px;margin-bottom:6px;color:#92400e;">😈 DEVIL\'S ADVOCATE BRIEF (Grok researched, Claude synthesized)</div>' +
+        '<div style="white-space:pre-wrap;font-family:-apple-system,sans-serif;line-height:1.55;">' +
+          d.alignment.da_brief.replace(/[<>&]/g, function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c];}) +
+        '</div>';
+      out.insertBefore(briefBlock, out.firstChild.nextSibling);
+    }
+    const s = (d.validation && d.validation.stats) || {};
+    if (statsEl) {
+      // Real cost from the API response (cost_usd is now populated by the
+      // generator's accumulated Claude+Grok usage tracking)
+      const costStr = (d.cost_usd != null) ? ' · 💸 $' + Number(d.cost_usd).toFixed(2) : '';
+      statsEl.textContent = '📊 ' + (s.word_count||0) + ' words · ' +
+        (s.approx_minutes||0) + ' min · ' + (s.turn_count||0) + ' turns · ' +
+        (s.curse_count||0) + ' curses · winner: ' + (s.winner||'?').toUpperCase() + costStr;
+    }
+    _populatePodcastSavedScripts();
+    // Memo-export button is injected by _renderPodcastScript itself (so
+    // it appears on saved-script loads too, not only on fresh generation).
+  }
+
+  async function _populatePodcastScriptPicker() {
+    const sels = ['podcast-script-ticker', 'podcast-audio-ticker']
+      .map(function(id) { return document.getElementById(id); })
+      .filter(Boolean);
+    if (!sels.length) return;
+    try {
+      const r = await window.dgaFetch('/api/reports');
+      const reports = await r.json();
+      const both = (reports || []).filter(function(x) {
+        return x.generated_at && x.claude_generated_at;
+      });
+      sels.forEach(function(sel) {
+        sel.innerHTML = '<option value="">— select a ticker (' + both.length + ' eligible) —</option>' +
+          both.map(function(x) { return '<option value="' + x.ticker + '">' + x.ticker + '</option>'; }).join('');
+      });
+    } catch (e) {
+      sels.forEach(function(sel) {
+        sel.innerHTML = '<option value="">— failed to load tickers —</option>';
+      });
+    }
+  }
+
+  async function _populatePodcastSavedScripts() {
+    const sel = document.getElementById('podcast-script-saved');
+    if (!sel) return;
+    try {
+      const r = await window.dgaFetch('/api/podcast/scripts');
+      const d = await r.json();
+      const scripts = (d && d.scripts) || [];
+      const fmtAgo = function(iso) {
+        if (!iso) return '';
+        const t = new Date(iso).getTime();
+        if (!t) return '';
+        const mins = Math.round((Date.now() - t) / 60000);
+        if (mins < 60) return mins + 'm ago';
+        if (mins < 1440) return Math.round(mins/60) + 'h ago';
+        return Math.round(mins/1440) + 'd ago';
+      };
+      // Absolute date in "May 25" or "May 25 '26" form so the user can see
+      // when an episode was actually produced. Year shown only when not current.
+      const fmtDateShort = function(iso) {
+        if (!iso) return '';
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return '';
+        const mo = d.toLocaleString('en-US', { month: 'short' });
+        const day = d.getDate();
+        const yr = d.getFullYear();
+        const curYr = new Date().getFullYear();
+        return yr === curYr ? `${mo} ${day}` : `${mo} ${day} '${String(yr).slice(-2)}`;
+      };
+      const fmtWhen = function(iso) {
+        const abs = fmtDateShort(iso);
+        const ago = fmtAgo(iso);
+        return abs && ago ? `${abs} · ${ago}` : (abs || ago);
+      };
+      const modeIcons = { debate:'⚔️', stress_test:'🔬', devils_advocate:'😈', spread:'📏', mixed:'❓' };
+      // Format icons take priority over mode icons when the script has a format
+      const fmtIcons = { debate:'⚔️', pre_mortem:'🪦', memo:'📋', catalysts:'📅', quick_hit:'⚡', roundup:'📰', portfolio_roundup:'🧰' };
+      sel.innerHTML = '<option value="">📂 Open a saved script… (' + scripts.length + ')</option>' +
+        scripts.map(function(s) {
+          // Synthetic tickers (PORTFOLIO_/ROUNDUP_) get clean labels.
+          // Prefer the user-set/engine-friendly episode_title when available;
+          // fall back to the synthetic key transformation.
+          const isUgly = /^PORTFOLIO_\d+TICKERS_\d+$/i.test(s.ticker);
+          let displayTk;
+          if (s.ticker.startsWith('ROUNDUP_')) {
+            displayTk = '📰 ' + s.ticker.replace('ROUNDUP_', '').split(',').join('·');
+          } else if (isUgly) {
+            // Prefer the renamed title if user has set one; else fall back
+            displayTk = (s.title && !/^PORTFOLIO_\d+TICKERS_\d+$/i.test(s.title))
+              ? s.title : 'Portfolio Roundup';
+          } else {
+            displayTk = s.ticker;
+          }
+          const fmtIcon = (s.format && fmtIcons[s.format]) ? (' ' + fmtIcons[s.format]) :
+                          ((s.mode && modeIcons[s.mode]) ? (' ' + modeIcons[s.mode]) : '');
+          const winner = s.winner ? (' · 🏆 ' + s.winner.toUpperCase()) : '';
+          const audio  = s.has_audio ? ' · 🎧' : '';
+          // Show real costs when known. Script cost only shows for scripts
+          // generated AFTER ui156 (older rows have NULL script_cost_usd).
+          const sCost  = (s.script_cost_usd != null && s.script_cost_usd > 0)
+            ? ' · 💸 $' + Number(s.script_cost_usd).toFixed(2) : '';
+          const aCost  = (s.audio_cost_usd != null && s.audio_cost_usd > 0)
+            ? ' / 🎧 $' + Number(s.audio_cost_usd).toFixed(2) : '';
+          const fmtKey = s.format || 'debate';
+          return '<option value="' + s.ticker + '::' + fmtKey + '">' + displayTk + fmtIcon +
+                 winner + audio + sCost + aCost + ' · ' + fmtWhen(s.generated_at) + '</option>';
+        }).join('');
+    } catch (e) {
+      sel.innerHTML = '<option value="">— failed to load saved scripts —</option>';
+    }
+  }
+
+  async function _loadPodcastVoiceTable() {
+    const el = document.getElementById('podcast-voice-table');
+    if (!el) return;
+    try {
+      const r = await window.dgaFetch('/api/podcast/voice-config');
+      const d = await r.json();
+      _renderPodcastVoiceTable(d, el);
+    } catch (e) {
+      el.innerHTML = '<div style="color:#dc2626;font-size:11px;">Failed to load: ' + e.message + '</div>';
+    }
+  }
+
+  function _renderPodcastVoiceTable(cfg, container) {
+    const voices = cfg.voices || {};
+    const available = cfg.available || [];
+    const speakers = Object.keys(voices);   // ['opus', 'rock', 'claudia']
+    const voiceBlurbs = {
+      alloy:   'neutral, balanced',
+      ash:     'rich, slightly raspy male',
+      ballad:  'soft, melodic',
+      coral:   'warm female',
+      echo:    'warm, conversational male',
+      fable:   'British male, storyteller cadence',
+      nova:    'bright, energetic female',
+      onyx:    'deep male, gravitas',
+      sage:    'wise, measured',
+      shimmer: 'soft, measured female',
+      verse:   'expressive, modern',
+    };
+    const speakerLabels = {
+      opus:    'Opus (host) — sets up the show, runs the rounds, calls a winner',
+      rock:    'Rock (Grok analyst) — British, punchy, contrarian',
+      claudia: 'Claudia (Claude analyst) — female, measured, skeptic',
+    };
+    let html = '';
+    speakers.forEach(function(sp) {
+      const opts = available.map(function(v) {
+        const blurb = voiceBlurbs[v] ? ' — ' + voiceBlurbs[v] : '';
+        return '<option value="' + v + '"' + (v===voices[sp]?' selected':'') + '>' + v + blurb + '</option>';
+      }).join('');
+      html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">' +
+        '<div style="min-width:180px;">' +
+          '<div style="font-weight:800;text-transform:capitalize;color:var(--text-primary);font-size:13px;">' + sp + '</div>' +
+          '<div style="font-size:10.5px;color:#64748b;line-height:1.4;">' + (speakerLabels[sp] || '') + '</div>' +
+        '</div>' +
+        '<select data-speaker="' + sp + '" style="flex:1;min-width:240px;font-size:12px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;">' + opts + '</select>' +
+        '<button class="podcast-voice-sample" data-speaker="' + sp + '" title="Play a sample of the selected voice" ' +
+          'style="background:#0A1628;color:#fff;border:none;padding:6px 12px;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;min-width:78px;">▶ Sample</button>' +
+      '</div>';
+    });
+    html += '<audio id="podcast-voice-sample-el" style="display:none;"></audio>';
+    html += '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;">' +
+      '<button id="podcast-voice-save" class="builder-btn-primary" style="width:auto;padding:8px 14px;font-size:12px;">💾 Save cast</button>' +
+      '<button id="podcast-voice-reset" style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:8px 14px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;">↺ Reset to defaults</button>' +
+      '<span id="podcast-voice-status" style="font-size:11px;color:#16a34a;font-weight:600;"></span>' +
+      '<span style="font-size:10.5px;color:#94a3b8;margin-left:auto;">Changes apply to the NEXT generated audio.</span>' +
+      '</div>';
+    container.innerHTML = html;
+
+    // ▶ Sample buttons — fetch the cached MP3 for the currently-selected
+    //   (speaker, voice) combo and play it via the hidden <audio> element.
+    //   Uses dgaFetch so the auth token is attached; converts blob → object URL.
+    container.querySelectorAll('.podcast-voice-sample').forEach(function(btn) {
+      btn.addEventListener('click', async function() {
+        const sp = btn.dataset.speaker;
+        const sel = container.querySelector('select[data-speaker="' + sp + '"]');
+        if (!sel) return;
+        const v = sel.value;
+        const origLabel = btn.textContent;
+        btn.disabled = true; btn.textContent = '⏳';
+        try {
+          const r = await window.dgaFetch('/api/podcast/voice-sample?speaker=' +
+            encodeURIComponent(sp) + '&voice=' + encodeURIComponent(v));
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          const blob = await r.blob();
+          const url = URL.createObjectURL(blob);
+          const el = document.getElementById('podcast-voice-sample-el');
+          // Stop any currently-playing sample
+          el.pause(); el.currentTime = 0;
+          el.src = url;
+          el.onended = function() { URL.revokeObjectURL(url); };
+          await el.play();
+        } catch (e) {
+          alert('Sample failed: ' + e.message);
+        } finally {
+          btn.disabled = false; btn.textContent = origLabel;
+        }
+      });
+    });
+
+    document.getElementById('podcast-voice-save').addEventListener('click', async function() {
+      const body = { voices: {} };
+      container.querySelectorAll('select[data-speaker]').forEach(function(sel) {
+        body.voices[sel.dataset.speaker] = sel.value;
+      });
+      const st = document.getElementById('podcast-voice-status');
+      st.textContent = '⏳ Saving…'; st.style.color = '#64748b';
+      try {
+        const r = await window.dgaFetch('/api/podcast/voice-config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) throw new Error(r.status);
+        st.style.color = '#16a34a';
+        st.textContent = '✓ Saved · used on next generate';
+        setTimeout(function(){ st.textContent = ''; }, 4000);
+      } catch (e) {
+        st.style.color = '#dc2626';
+        st.textContent = '❌ ' + e.message;
+      }
+    });
+    document.getElementById('podcast-voice-reset').addEventListener('click', async function() {
+      if (!confirm('Reset cast to default voices (Opus=onyx, Rock=fable, Claudia=nova)?')) return;
+      const r = await window.dgaFetch('/api/podcast/voice-config/reset', { method: 'POST' });
+      const d = await r.json();
+      _renderPodcastVoiceTable(d, container);
+    });
+  }
+
+  async function _loadPodcastSpeedTable() {
+    const el = document.getElementById('podcast-speed-table');
+    if (!el) return;
+    try {
+      const r = await window.dgaFetch('/api/podcast/speed-config');
+      const d = await r.json();
+      _renderPodcastSpeedTable(d, el);
+    } catch (e) {
+      el.innerHTML = '<div style="color:#dc2626;font-size:11px;">Failed to load: ' + e.message + '</div>';
+    }
+  }
+
+  function _renderPodcastSpeedTable(cfg, container) {
+    const speakers   = Object.keys(cfg.speaker || {});           // ['alec','rock','claudia']
+    const intensities = Object.keys(cfg.intensity || {});         // ['calm','normal','heated']
+    const voices = cfg.voices || {};
+    const fmt = function(n) { return Number(n).toFixed(2); };
+
+    const speakerCell = function(sp) {
+      const v = cfg.speaker[sp];
+      return '<input data-kind="speaker" data-key="' + sp + '" type="number" step="0.01" ' +
+        'min="' + cfg.min + '" max="' + cfg.max + '" value="' + fmt(v) + '" ' +
+        'style="width:64px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;font-family:\'SF Mono\',monospace;text-align:center;">';
+    };
+    const intensityCell = function(it) {
+      const v = cfg.intensity[it];
+      return '<input data-kind="intensity" data-key="' + it + '" type="number" step="0.01" ' +
+        'min="' + cfg.min + '" max="' + cfg.max + '" value="' + fmt(v) + '" ' +
+        'style="width:64px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;font-family:\'SF Mono\',monospace;text-align:center;">';
+    };
+
+    let html = '<div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">';
+    // Intensity column
+    html += '<div><div style="font-size:10.5px;font-weight:800;color:#64748b;letter-spacing:1px;margin-bottom:6px;">INTENSITY</div>';
+    intensities.forEach(function(it) {
+      html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">' +
+        '<span style="display:inline-block;width:62px;text-transform:capitalize;font-weight:600;">' + it + '</span>' +
+        intensityCell(it) + '</div>';
+    });
+    html += '</div>';
+
+    // Speaker column
+    html += '<div><div style="font-size:10.5px;font-weight:800;color:#64748b;letter-spacing:1px;margin-bottom:6px;">SPEAKER BASELINE</div>';
+    speakers.forEach(function(sp) {
+      const voice = voices[sp] ? (' (' + voices[sp] + ')') : '';
+      html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">' +
+        '<span style="display:inline-block;width:100px;text-transform:capitalize;font-weight:600;">' + sp + '<span style="color:#94a3b8;font-weight:500;font-size:11px;">' + voice + '</span></span>' +
+        speakerCell(sp) + '</div>';
+    });
+    html += '</div>';
+
+    // Computed grid: speaker × intensity = final speed
+    html += '<div style="flex:1;min-width:280px;"><div style="font-size:10.5px;font-weight:800;color:#64748b;letter-spacing:1px;margin-bottom:6px;">COMPUTED FINAL SPEED (clamped ' + cfg.min + '–' + cfg.max + ')</div>';
+    html += '<table style="border-collapse:collapse;font-size:11px;font-family:\'SF Mono\',monospace;">';
+    html += '<tr><th style="padding:4px 8px;color:#64748b;font-weight:600;text-align:left;"></th>';
+    intensities.forEach(function(it) {
+      html += '<th style="padding:4px 10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">' + it + '</th>';
+    });
+    html += '</tr>';
+    speakers.forEach(function(sp) {
+      html += '<tr><td style="padding:4px 8px;font-weight:700;color:var(--text-primary);text-transform:capitalize;">' + sp + '</td>';
+      intensities.forEach(function(it) {
+        const raw = cfg.intensity[it] * cfg.speaker[sp];
+        const clamped = Math.max(cfg.min, Math.min(cfg.max, raw));
+        const isClamped = Math.abs(raw - clamped) > 0.001;
+        html += '<td data-cell="' + sp + ':' + it + '" style="padding:4px 10px;text-align:center;' +
+          (isClamped ? 'color:#d97706;font-weight:700;' : 'color:var(--text-primary);') + '">' +
+          fmt(clamped) + (isClamped ? ' ⚠' : '') + '</td>';
+      });
+      html += '</tr>';
+    });
+    html += '</table></div>';
+    html += '</div>';
+
+    html += '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;">' +
+      '<button id="podcast-speed-save" class="builder-btn-primary" style="width:auto;padding:8px 14px;font-size:12px;">💾 Save</button>' +
+      '<button id="podcast-speed-reset" style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:8px 14px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;">↺ Reset to defaults</button>' +
+      '<span id="podcast-speed-status" style="font-size:11px;color:#16a34a;font-weight:600;"></span>' +
+      '<span style="font-size:10.5px;color:#94a3b8;margin-left:auto;">Changes apply to the NEXT generated audio (cached scripts skip Claude — only TTS spend ~$0.35–0.50).</span>' +
+      '</div>';
+
+    container.innerHTML = html;
+
+    // Live recompute when any input changes
+    const recompute = function() {
+      const newCfg = { intensity: {}, speaker: {}, min: cfg.min, max: cfg.max, voices: cfg.voices };
+      container.querySelectorAll('input').forEach(function(inp) {
+        const v = parseFloat(inp.value);
+        if (!isFinite(v)) return;
+        newCfg[inp.dataset.kind][inp.dataset.key] = v;
+      });
+      // Re-render only the computed grid cells, not the whole table
+      speakers.forEach(function(sp) {
+        intensities.forEach(function(it) {
+          const cell = container.querySelector('td[data-cell="' + sp + ':' + it + '"]');
+          if (!cell) return;
+          const raw = newCfg.intensity[it] * newCfg.speaker[sp];
+          const clamped = Math.max(cfg.min, Math.min(cfg.max, raw));
+          const isClamped = Math.abs(raw - clamped) > 0.001;
+          cell.textContent = fmt(clamped) + (isClamped ? ' ⚠' : '');
+          cell.style.color = isClamped ? '#d97706' : '#1e293b';
+          cell.style.fontWeight = isClamped ? '700' : 'normal';
+        });
+      });
+    };
+    container.querySelectorAll('input').forEach(function(inp) {
+      inp.addEventListener('input', recompute);
+    });
+
+    document.getElementById('podcast-speed-save').addEventListener('click', async function() {
+      const body = { intensity: {}, speaker: {} };
+      container.querySelectorAll('input').forEach(function(inp) {
+        const v = parseFloat(inp.value);
+        if (isFinite(v)) body[inp.dataset.kind][inp.dataset.key] = v;
+      });
+      const st = document.getElementById('podcast-speed-status');
+      st.textContent = '⏳ Saving…';
+      try {
+        const r = await window.dgaFetch('/api/podcast/speed-config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) throw new Error(r.status);
+        st.textContent = '✓ Saved · used on next generate';
+        setTimeout(function(){ st.textContent = ''; }, 4000);
+      } catch (e) {
+        st.style.color = '#dc2626';
+        st.textContent = '❌ ' + e.message;
+      }
+    });
+
+    document.getElementById('podcast-speed-reset').addEventListener('click', async function() {
+      if (!confirm('Reset all speed values to engine defaults?')) return;
+      const r = await window.dgaFetch('/api/podcast/speed-config/reset', { method: 'POST' });
+      const d = await r.json();
+      _renderPodcastSpeedTable(d, container);
+    });
+  }
+
+  async function _populatePodcastSavedAudio() {
+    const sel = document.getElementById('podcast-audio-saved');
+    if (!sel) return;
+    try {
+      const r = await window.dgaFetch('/api/podcast/list');
+      const d = await r.json();
+      const eps = (d && d.episodes) || [];
+      window._podcastEpisodes = eps;   // cache for the change-handler
+      const fmtAgo = function(iso) {
+        if (!iso) return '';
+        const t = new Date(iso).getTime();
+        if (!t) return '';
+        const mins = Math.round((Date.now() - t) / 60000);
+        if (mins < 60) return mins + 'm ago';
+        if (mins < 1440) return Math.round(mins/60) + 'h ago';
+        return Math.round(mins/1440) + 'd ago';
+      };
+      const fmtDateShort = function(iso) {
+        if (!iso) return '';
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return '';
+        const mo = d.toLocaleString('en-US', { month: 'short' });
+        const day = d.getDate();
+        const yr = d.getFullYear();
+        const curYr = new Date().getFullYear();
+        return yr === curYr ? `${mo} ${day}` : `${mo} ${day} '${String(yr).slice(-2)}`;
+      };
+      const fmtWhen = function(iso) {
+        const abs = fmtDateShort(iso); const ago = fmtAgo(iso);
+        return abs && ago ? `${abs} · ${ago}` : (abs || ago);
+      };
+      const fmtIcons = { debate:'⚔️', pre_mortem:'🪦', memo:'📋', catalysts:'📅', quick_hit:'⚡', roundup:'📰', portfolio_roundup:'🧰' };
+      sel.innerHTML = '<option value="">🎧 Open a saved episode… (' + eps.length + ')</option>' +
+        eps.map(function(e) {
+          const fmt = e.format || 'debate';
+          const ic  = fmtIcons[fmt] || '';
+          const dur = e.duration_sec ? (' · ' + Math.round(e.duration_sec) + 's') : '';
+          const cost = (e.cost_usd != null) ? (' · $' + Number(e.cost_usd).toFixed(2)) : '';
+          // Clean label: prefer episode title for synthetic tickers (PORTFOLIO_/ROUNDUP_)
+          const isUgly = /^PORTFOLIO_\d+TICKERS_\d+$/i.test(e.ticker);
+          let displayTk;
+          if (e.ticker.startsWith('ROUNDUP_')) {
+            displayTk = '📰 ' + e.ticker.replace('ROUNDUP_', '').split(',').join('·');
+          } else if (isUgly) {
+            displayTk = (e.title && !/^PORTFOLIO_\d+TICKERS_\d+$/i.test(e.title))
+              ? e.title : 'Portfolio Roundup';
+          } else {
+            displayTk = e.ticker;
+          }
+          return '<option value="' + e.ticker + '::' + fmt + '">' + displayTk + ' ' + ic +
+                 dur + cost + ' · ' + fmtWhen(e.generated_at) + '</option>';
+        }).join('');
+    } catch (e) {
+      sel.innerHTML = '<option value="">— failed to load episodes —</option>';
+    }
+  }
+
+  // ── Podcast AUDIO generator (v1) ─────────────────────────────────
+  let _podcastAudioPoll = null;
+
+  function _wirePodcastAudio() {
+    const btn = document.getElementById('podcast-audio-btn');
+    if (!btn || btn.dataset.wired) return;
+    btn.dataset.wired = '1';
+    btn.addEventListener('click', async function() {
+      const tk = document.getElementById('podcast-audio-ticker').value;
+      const model = document.getElementById('podcast-audio-model').value || 'tts-1-hd';
+      // Audio inherits format from whichever script is currently rendered.
+      // The format dropdown on the SCRIPT row is the source of truth — EXCEPT
+      // for synthetic multi-ticker keys (PORTFOLIO_*, ROUNDUP_*) which carry
+      // their format implicitly. Otherwise picking a Portfolio Roundup audio
+      // while the script dropdown still says "Debate" sends the wrong format
+      // and the server's cached-script lookup misses.
+      let fmt = (document.getElementById('podcast-script-format') || {}).value || 'debate';
+      if (tk && tk.startsWith('PORTFOLIO_')) fmt = 'portfolio_roundup';
+      else if (tk && tk.startsWith('ROUNDUP_'))  fmt = 'roundup';
+      if (!tk) { alert('Pick a ticker first.'); return; }
+      btn.disabled = true;
+      btn.textContent = '⏳ Generating…';
+      document.getElementById('podcast-audio-progress').style.display = 'block';
+      document.getElementById('podcast-audio-player').style.display = 'none';
+      _setPodcastProgress('Starting…', 0);
+      try {
+        const r = await window.dgaFetch('/api/podcast/' + tk + '/generate?tts_model=' + encodeURIComponent(model) + '&format=' + encodeURIComponent(fmt), { method: 'POST' });
+        const d = await r.json();
+        if (!d.ok) throw new Error(d.error || 'Failed to start');
+        _startPodcastProgressPoll(tk, fmt);
+      } catch (e) {
+        _setPodcastProgress('❌ ' + e.message, 0);
+        btn.disabled = false;
+        btn.textContent = '🎧 Generate audio';
+      }
+    });
+  }
+
+  function _setPodcastProgress(label, pct) {
+    const lbl = document.getElementById('podcast-audio-progress-label');
+    const bar = document.getElementById('podcast-audio-progress-bar');
+    if (lbl) lbl.textContent = label || '';
+    if (bar) bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  }
+
+  function _startPodcastProgressPoll(ticker, format) {
+    format = format || 'debate';
+    if (_podcastAudioPoll) clearInterval(_podcastAudioPoll);
+    const btn = document.getElementById('podcast-audio-btn');
+    const tick = async function() {
+      try {
+        const r = await window.dgaFetch('/api/podcast/' + ticker + '/status?format=' + encodeURIComponent(format));
+        const d = await r.json();
+        const pct = (d.total && d.current)
+          ? Math.min(96, (d.current / d.total) * 95)
+          : (d.stage === 'queued' ? 4 : d.stage === 'start' ? 8 : d.stage === 'stitch' ? 97 : 12);
+        _setPodcastProgress(d.label || d.stage || 'Working…', pct);
+        if (d.status === 'done') {
+          clearInterval(_podcastAudioPoll); _podcastAudioPoll = null;
+          _setPodcastProgress(d.label || '✓ Done', 100);
+          _showPodcastPlayer(ticker, Object.assign({}, d, { format: format }));
+          if (btn) { btn.disabled = false; btn.textContent = '🎧 Generate audio'; }
+          // Refresh the saved-episodes dropdown so the new ep appears
+          _populatePodcastSavedAudio();
+        } else if (d.status === 'error') {
+          clearInterval(_podcastAudioPoll); _podcastAudioPoll = null;
+          _setPodcastProgress(d.label || '❌ Failed', 0);
+          if (btn) { btn.disabled = false; btn.textContent = '🎧 Generate audio'; }
+        }
+      } catch (e) {
+        // transient — keep polling
+      }
+    };
+    tick();
+    _podcastAudioPoll = setInterval(tick, 1800);
+  }
+
+  function _showPodcastPlayer(ticker, status) {
+    const wrap  = document.getElementById('podcast-audio-player');
+    const title = document.getElementById('podcast-audio-player-title');
+    const meta  = document.getElementById('podcast-audio-player-meta');
+    const el    = document.getElementById('podcast-audio-el');
+    if (!wrap || !el) return;
+    wrap.style.display = 'block';
+    const fmt = (status && status.format) || 'debate';
+    let epTitle = (status && status.title) ||
+                  (window._podcastEpisodes || []).find(function(e){
+                    return e.ticker === ticker && (e.format||'debate') === fmt;
+                  })?.title;
+    // Friendly fallback when the title is missing OR is the raw synthetic key
+    if (!epTitle || /^PORTFOLIO_\d+TICKERS_\d+$/i.test(epTitle)) {
+      if (ticker.startsWith('PORTFOLIO_')) {
+        epTitle = 'Portfolio Roundup';
+      } else if (ticker.startsWith('ROUNDUP_')) {
+        epTitle = 'Roundup · ' + ticker.replace('ROUNDUP_', '').split(',').join(' · ');
+      } else {
+        epTitle = ticker + ': ' + fmt;
+      }
+    }
+    if (title) {
+      // Build a date suffix from the episode's generated_at (status has it on
+      // fresh runs; the cached episode list has it on saved replays).
+      const ep = (window._podcastEpisodes || []).find(function(e){
+        return e.ticker === ticker && (e.format||'debate') === fmt;
+      }) || {};
+      const genIso = (status && status.generated_at) || ep.generated_at;
+      let when = '';
+      if (genIso) {
+        try {
+          const dd = new Date(genIso);
+          if (!isNaN(dd.getTime())) {
+            const mo = dd.toLocaleString('en-US', { month: 'short' });
+            const day = dd.getDate(); const yr = dd.getFullYear();
+            const curYr = new Date().getFullYear();
+            when = (yr === curYr ? `${mo} ${day}` : `${mo} ${day} '${String(yr).slice(-2)}`);
+          }
+        } catch (_) {}
+      }
+      title.innerHTML = '🎙️ ' + epTitle.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[c])
+        + (when ? '  <span style="font-size:10.5px;font-weight:600;color:#84CCE3;background:rgba(255,255,255,0.10);padding:2px 8px;border-radius:10px;letter-spacing:0.3px;margin-left:6px;vertical-align:middle;">📅 ' + when + '</span>' : '');
+    }
+    // Wire the "Export Memo" button to the SAME ticker the player is showing.
+    // Re-bound on every player swap so it always points at the right script.
+    const memoBtn = document.getElementById('podcast-audio-export-memo-btn');
+    if (memoBtn) {
+      memoBtn.onclick = function() {
+        if (typeof window._openMemoExportModal === 'function') {
+          window._openMemoExportModal(ticker, epTitle);
+        } else {
+          alert('Memo export not loaded yet — try refreshing.');
+        }
+      };
+    }
+    // 🔗 Share link — mint a public HMAC-signed URL for this episode,
+    // show it in a prompt with Copy/Open Email/Open SMS quick actions.
+    const shareBtn = document.getElementById('podcast-audio-share-btn');
+    if (shareBtn) {
+      shareBtn.onclick = async function() {
+        const orig = shareBtn.textContent;
+        shareBtn.disabled = true; shareBtn.textContent = '⏳ Generating…';
+        try {
+          const r = await window.dgaFetch(
+            '/api/podcast/' + encodeURIComponent(ticker) +
+            '/share-link?format=' + encodeURIComponent(fmt) + '&ttl_hours=720',
+            { method: 'POST' });
+          const j = await r.json();
+          if (!j.ok) throw new Error(j.detail || j.error || 'Failed');
+          _showShareLinkModal(j.url, epTitle, j.expires_in_hours || 720);
+        } catch (e) {
+          alert('Could not generate share link: ' + e.message);
+        } finally {
+          shareBtn.disabled = false; shareBtn.textContent = orig;
+        }
+      };
+    }
+    // Format-aware URL + cache-bust on regeneration
+    el.src = '/api/podcast/' + ticker + '/audio.mp3?format=' + encodeURIComponent(fmt) + '&t=' + Date.now();
+    el.load();
+    // Apply remembered playback rate (and re-apply once metadata loads —
+    // some browsers reset the rate on src change)
+    const savedRate = parseFloat(localStorage.getItem('dga_podcast_rate') || '1') || 1;
+    el.playbackRate = savedRate;
+    el.addEventListener('loadedmetadata', function once() {
+      el.playbackRate = savedRate;
+      el.removeEventListener('loadedmetadata', once);
+    });
+    _setPodcastSpeedActive(savedRate);
+    if (meta) {
+      const parts = [];
+      if (status && status.duration_sec) parts.push(Math.round(status.duration_sec) + 's');
+      if (status && status.cost_usd != null) parts.push('$' + Number(status.cost_usd).toFixed(3));
+      if (status && status.dropbox_path) parts.push('Dropbox ✓');
+      meta.textContent = parts.length ? parts.join(' · ') : 'Ready';
+    }
+    _wirePodcastSpeedButtons();
+    // Wire 🗑️ Audio delete — wipes ONLY the MP3 (script kept so user can
+    // re-generate audio without re-paying Claude). Refreshes saved-audio
+    // dropdown and hides the player on success.
+    const delBtn = document.getElementById('podcast-audio-delete-btn');
+    if (delBtn && !delBtn.dataset.wired) {
+      delBtn.dataset.wired = '1';
+      delBtn.addEventListener('click', async function() {
+        const curTk  = ticker;
+        const curFmt = fmt;
+        if (!confirm(
+          'Delete the audio MP3 for ' + curTk + ' (' + curFmt + ')?\n\n' +
+          '• Removes the file from disk + Dropbox.\n' +
+          '• Keeps the script — you can re-generate audio without re-spending Claude.\n\n' +
+          'Cannot be undone.'
+        )) return;
+        const orig = delBtn.textContent;
+        delBtn.disabled = true; delBtn.textContent = '⏳';
+        try {
+          const r = await window.dgaFetch(
+            '/api/podcast/' + encodeURIComponent(curTk) +
+            '?format=' + encodeURIComponent(curFmt) + '&what=audio',
+            { method: 'DELETE' }
+          );
+          const d = await r.json();
+          if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+          try { el.pause(); } catch {}
+          el.src = '';
+          wrap.style.display = 'none';
+          if (typeof _populatePodcastSavedAudio === 'function')   _populatePodcastSavedAudio();
+          if (typeof _populatePodcastSavedScripts === 'function') _populatePodcastSavedScripts();
+        } catch (e) {
+          alert('Delete failed: ' + e.message);
+        } finally {
+          delBtn.disabled = false; delBtn.textContent = orig;
+        }
+      });
+    }
+  }
+
+  function _setPodcastSpeedActive(rate) {
+    document.querySelectorAll('.podcast-speed-btn').forEach(function(b) {
+      const isActive = Math.abs(parseFloat(b.dataset.rate) - rate) < 0.01;
+      b.classList.toggle('podcast-speed-active', isActive);
+      b.style.background = isActive ? '#5BB8D4' : 'transparent';
+      b.style.color      = isActive ? '#0A1628' : '#84CCE3';
+    });
+  }
+
+  function _wirePodcastSpeedButtons() {
+    if (window._podcastSpeedWired) return;
+    window._podcastSpeedWired = true;
+    document.querySelectorAll('.podcast-speed-btn').forEach(function(b) {
+      b.addEventListener('click', function() {
+        const rate = parseFloat(b.dataset.rate) || 1;
+        const el = document.getElementById('podcast-audio-el');
+        if (el) el.playbackRate = rate;
+        localStorage.setItem('dga_podcast_rate', String(rate));
+        _setPodcastSpeedActive(rate);
+      });
+    });
+  }
+
+  function _renderPodcastScript(script, validation, container) {
+    const bubbleColors = {
+      // ui142 cast: Opus (host) / Rock (British, Grok) / Claudia (female, Claude)
+      opus:    { bg: '#f1f5f9', name: '#0A1628', label: 'OPUS (host)'        },
+      rock:    { bg: '#fef3c7', name: '#b45309', label: 'ROCK 🇬🇧 (Grok)'   },
+      claudia: { bg: '#fce7f3', name: '#9d174d', label: 'CLAUDIA (Claude)'   },
+      // Legacy fallbacks for older saved scripts
+      alec:    { bg: '#f1f5f9', name: '#0A1628', label: 'OPUS (host)'        },
+      alex:    { bg: '#f1f5f9', name: '#0A1628', label: 'OPUS (host)'        },
+      claude:  { bg: '#fce7f3', name: '#9d174d', label: 'CLAUDIA (Claude)'   },
+    };
+    const intensityIcon = { calm: '🔉', normal: '', heated: '🔥' };
+    const esc = function(s) { return (s||'').replace(/[&<>]/g, function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c];}); };
+    const parts = [];
+    // Clean up synthetic tickers in the displayed title — strip the
+    // "PORTFOLIO_18TICKERS_1779732287" ugliness in favor of whatever the
+    // user has set (or the engine's friendly default).
+    const _titleDisplay = (function() {
+      const t = (script.episode_title || '').trim();
+      if (t && !/^PORTFOLIO_\d+TICKERS_\d+$/i.test(t)) return t;
+      // Fallback for missing or ugly titles
+      if ((script.ticker || '').startsWith('PORTFOLIO_')) {
+        const n = (script.tickers || []).length;
+        return n ? n + ' Tickers · Portfolio Roundup' : 'Portfolio Roundup';
+      }
+      if ((script.ticker || '').startsWith('ROUNDUP_')) {
+        return 'Roundup · ' + script.ticker.replace('ROUNDUP_', '').split(',').join(' · ');
+      }
+      return script.ticker || 'Episode';
+    })();
+    // Production date — show absolute date next to the title so user knows when made.
+    // Falls back gracefully when the script has no generated_at (fresh runs from the
+    // generator don't carry it yet; saved-script loads do).
+    const _genIso = script.generated_at || script._generated_at || '';
+    let _whenLabel = '';
+    if (_genIso) {
+      try {
+        const dd = new Date(_genIso);
+        if (!isNaN(dd.getTime())) {
+          const mo = dd.toLocaleString('en-US', { month: 'short' });
+          const day = dd.getDate(); const yr = dd.getFullYear();
+          const curYr = new Date().getFullYear();
+          _whenLabel = (yr === curYr ? `${mo} ${day}` : `${mo} ${day} '${String(yr).slice(-2)}`);
+        }
+      } catch (_) {}
+    }
+    parts.push('<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">' +
+      '<div style="font-size:18px;font-weight:800;color:var(--text-primary);flex:1;min-width:200px;display:flex;align-items:center;gap:6px;">' +
+        '<span>' + esc(_titleDisplay) + '</span>' +
+        (_whenLabel ? '<span style="font-size:11px;font-weight:600;color:#64748b;background:#f1f5f9;padding:2px 8px;border-radius:10px;letter-spacing:0.3px;" title="Date produced">📅 ' + _whenLabel + '</span>' : '') +
+        '<button data-tk="' + esc(script.ticker || '') + '" data-fmt="' + esc(script.format || 'debate') + '" data-cur="' + esc(_titleDisplay) + '" class="podcast-rename-script" title="Rename this episode" style="background:transparent;border:none;color:#94a3b8;font-size:13px;cursor:pointer;padding:2px 4px;line-height:1;">✏️</button>' +
+      '</div>' +
+      '<button data-tk="' + esc(script.ticker || '') + '" data-fmt="' + esc(script.format || 'debate') + '" class="podcast-edit-script" style="background:transparent;color:#0A1628;border:1px solid #0A1628;padding:8px 12px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;">✏️ Edit script</button>' +
+      '<button data-tk="' + esc(script.ticker || '') + '" data-fmt="' + esc(script.format || 'debate') + '" class="podcast-make-audio-inline" style="background:#0A1628;color:#fff;border:none;padding:8px 14px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:0.3px;">🎧 Make audio for this script →</button>' +
+      '<button data-tk="' + esc(script.ticker || '') + '" data-fmt="' + esc(script.format || 'debate') + '" class="podcast-delete-script" title="Delete this entire episode (script + audio if any)" style="background:transparent;color:#dc2626;border:1px solid #dc2626;padding:8px 10px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;">🗑️</button>' +
+    '</div>');
+    // Header badge + role line.
+    // For DEBATE: show debate-mode badge (⚔️/🔬/😈/📏/❓) + bull/bear seats + winner.
+    // For non-debate (memo/catalysts/pre_mortem/quick_hit): show the FORMAT badge
+    // (📋/📅/🪦/⚡) only — bull/bear/winner are debate concepts and don't apply.
+    const align = script._alignment || {};
+    const fmtName = (script.format || 'debate').toLowerCase();
+    const debateModeBadges = {
+      debate:          { bg: '#dbeafe', fg: '#1e40af', label: '⚔️ DEBATE' },
+      stress_test:     { bg: '#fef3c7', fg: '#92400e', label: '🔬 STRESS TEST' },
+      devils_advocate: { bg: '#fce7f3', fg: '#9d174d', label: '😈 DEVIL\'S ADVOCATE' },
+      spread:          { bg: '#e0f2fe', fg: '#075985', label: '📏 THE SPREAD' },
+      mixed:           { bg: '#f1f5f9', fg: '#475569', label: '❓ MIXED SIGNALS' },
+    };
+    const formatBadges = {
+      memo:              { bg: '#dbeafe', fg: '#1e40af', label: '📋 INVESTMENT MEMO' },
+      catalysts:         { bg: '#fef3c7', fg: '#92400e', label: '📅 CATALYSTS CALENDAR' },
+      pre_mortem:        { bg: '#fee2e2', fg: '#991b1b', label: '🪦 PRE-MORTEM' },
+      quick_hit:         { bg: '#fef9c3', fg: '#854d0e', label: '⚡ QUICK HIT' },
+      roundup:           { bg: '#e0f2fe', fg: '#075985', label: '📰 ROUNDUP' },
+      portfolio_roundup: { bg: '#f3e8ff', fg: '#6b21a8', label: '🧰 PORTFOLIO ROUNDUP' },
+    };
+    let modeLine = '';
+    if (fmtName === 'debate') {
+      const mb = debateModeBadges[align.episode_mode] || debateModeBadges.debate;
+      modeLine = '<span style="display:inline-block;background:' + mb.bg + ';color:' + mb.fg +
+        ';font-weight:800;font-size:10px;padding:3px 8px;border-radius:4px;letter-spacing:0.8px;margin-right:8px;">' + mb.label + '</span>';
+      if (align.bull_speaker && align.bear_speaker) {
+        modeLine += '<span style="color:#94a3b8;">Bull seat: <strong style="color:#16a34a;">' + align.bull_speaker.toUpperCase() + '</strong> · Bear seat: <strong style="color:#dc2626;">' + align.bear_speaker.toUpperCase() + '</strong></span>';
+      }
+      // Debate ends with a winner — show it
+      parts.push('<div style="font-size:11px;color:#64748b;margin-bottom:16px;">' + modeLine +
+        (modeLine ? '<span style="color:#cbd5e1;margin:0 8px;">·</span>' : '') +
+        '🏆 Winner: <strong>' + (script.winner||'?').toUpperCase() + '</strong></div>');
+    } else {
+      // Non-debate: format badge only, no bull/bear/winner
+      const fb = formatBadges[fmtName] || { bg:'#f1f5f9', fg:'#475569', label: fmtName.toUpperCase() };
+      modeLine = '<span style="display:inline-block;background:' + fb.bg + ';color:' + fb.fg +
+        ';font-weight:800;font-size:10px;padding:3px 8px;border-radius:4px;letter-spacing:0.8px;">' + fb.label + '</span>';
+      parts.push('<div style="font-size:11px;color:#64748b;margin-bottom:16px;">' + modeLine + '</div>');
+    }
+    if (validation && validation.warnings && validation.warnings.length) {
+      parts.push('<div style="background:#fef3c7;border:1px solid #fde68a;border-radius:4px;padding:8px 10px;margin-bottom:14px;font-size:11px;color:#78350f;">' +
+        '⚠ ' + validation.warnings.map(esc).join(' · ') + '</div>');
+    }
+    (script.sections || []).forEach(function(sec) {
+      const secLabel = (sec.id || '').replace(/_/g,' ').toUpperCase();
+      parts.push('<div style="font-size:10.5px;font-weight:800;color:#64748b;letter-spacing:1.5px;margin:18px 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:4px;">' + esc(secLabel) + '</div>');
+      (sec.turns || []).forEach(function(t) {
+        const c = bubbleColors[(t.speaker||'').toLowerCase()] || bubbleColors.alec;
+        const icon = intensityIcon[(t.intensity||'normal').toLowerCase()] || '';
+        parts.push(
+          '<div style="background:' + c.bg + ';border-radius:8px;padding:9px 12px;margin-bottom:7px;font-size:13px;line-height:1.5;color:#1e293b;">' +
+            '<div style="font-size:10px;font-weight:800;color:' + c.name + ';letter-spacing:0.8px;margin-bottom:3px;">' +
+              c.label + (icon ? ' ' + icon : '') +
+            '</div>' +
+            esc(t.text) +
+          '</div>'
+        );
+      });
+    });
+    container.innerHTML = parts.join('');
+    // Wire the inline "Make audio for this script" button(s)
+    container.querySelectorAll('.podcast-make-audio-inline').forEach(function(b) {
+      b.addEventListener('click', function() {
+        const tk = b.dataset.tk;
+        if (!tk) return;
+        // Sync to the audio-row ticker picker + scroll there
+        const audSel = document.getElementById('podcast-audio-ticker');
+        if (audSel) {
+          if (!Array.from(audSel.options).some(function(o){ return o.value === tk; })) {
+            const opt = document.createElement('option');
+            opt.value = tk; opt.textContent = tk;
+            audSel.appendChild(opt);
+          }
+          audSel.value = tk;
+        }
+        const audBtn = document.getElementById('podcast-audio-btn');
+        const audBlock = document.getElementById('podcast-audio-progress') || document.getElementById('podcast-audio-player');
+        if (audBlock && audBlock.scrollIntoView) {
+          audBlock.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        if (audBtn) audBtn.click();
+      });
+    });
+    // Wire the "Edit script" button — switches into editable form
+    container.querySelectorAll('.podcast-edit-script').forEach(function(b) {
+      b.addEventListener('click', function() {
+        _renderPodcastScriptEditor(script, validation, container);
+      });
+    });
+    // Wire the ✏️ rename button — updates episode title (column + script_json)
+    container.querySelectorAll('.podcast-rename-script').forEach(function(b) {
+      b.addEventListener('click', async function() {
+        const tk  = b.dataset.tk;
+        const fmt = b.dataset.fmt || 'debate';
+        const cur = b.dataset.cur || '';
+        const next = prompt('Rename this episode:', cur);
+        if (next === null) return;            // cancel
+        const clean = (next || '').trim();
+        if (!clean) { alert('Title cannot be empty.'); return; }
+        if (clean === cur)  return;            // no change
+        const orig = b.textContent;
+        b.disabled = true; b.textContent = '⏳';
+        try {
+          const r = await window.dgaFetch(
+            '/api/podcast/' + encodeURIComponent(tk) + '/title?format=' + encodeURIComponent(fmt),
+            { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ title: clean }) }
+          );
+          const d = await r.json();
+          if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+          // Patch the in-memory script + re-render the header label without
+          // a full reload. Walk up to find the <span> sibling.
+          const headerSpan = b.previousElementSibling;
+          if (headerSpan) headerSpan.textContent = clean;
+          b.dataset.cur = clean;
+          script.episode_title = clean;
+          if (typeof _populatePodcastSavedScripts === 'function') _populatePodcastSavedScripts();
+          if (typeof _populatePodcastSavedAudio === 'function')   _populatePodcastSavedAudio();
+        } catch (e) {
+          alert('Rename failed: ' + e.message);
+        } finally {
+          b.disabled = false; b.textContent = orig;
+        }
+      });
+    });
+    // Wire the 🗑️ delete button — deletes ENTIRE episode (script + audio)
+    container.querySelectorAll('.podcast-delete-script').forEach(function(b) {
+      b.addEventListener('click', async function() {
+        const tk = b.dataset.tk;
+        const fmt = b.dataset.fmt || 'debate';
+        if (!tk) return;
+        if (!confirm(
+          'Delete this entire episode?\n\n' +
+          '• Ticker:  ' + tk + '\n' +
+          '• Format:  ' + fmt + '\n' +
+          '• Removes: script, audio MP3 on disk + Dropbox, DB row.\n\n' +
+          'Cannot be undone.'
+        )) return;
+        b.disabled = true; b.textContent = '⏳';
+        try {
+          const r = await window.dgaFetch(
+            '/api/podcast/' + encodeURIComponent(tk) +
+            '?format=' + encodeURIComponent(fmt) + '&what=all',
+            { method: 'DELETE' }
+          );
+          const d = await r.json();
+          if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+          container.innerHTML = '<div style="color:#16a34a;font-size:12px;padding:14px;">✓ Deleted ' + tk + ' (' + fmt + ').</div>';
+          if (typeof _populatePodcastSavedScripts === 'function') _populatePodcastSavedScripts();
+          if (typeof _populatePodcastSavedAudio === 'function')   _populatePodcastSavedAudio();
+        } catch (e) {
+          alert('Delete failed: ' + e.message);
+          b.disabled = false; b.textContent = '🗑️';
+        }
+      });
+    });
+
+    // 📄 "Export as DGA Memo" — turns this script into a branded PDF
+    // memo (saved under the 📄 Memos tab). Lives at the top of every
+    // rendered script so it's reachable from both fresh-generated AND
+    // saved-script views.
+    try {
+      const jobKey  = script.ticker || (validation && validation.ticker);
+      const epTitle = script.episode_title || jobKey || '';
+      if (jobKey && typeof window._openMemoExportModal === 'function') {
+        // Avoid duplicating the button if re-rendered into the same container
+        const existing = container.querySelector('.podcast-export-memo-btn');
+        if (existing) existing.remove();
+        const memoBtn = document.createElement('button');
+        memoBtn.type = 'button';
+        memoBtn.className = 'podcast-export-memo-btn';
+        memoBtn.textContent = '📄 Export as DGA Memo';
+        memoBtn.title = 'Render this script as a DGA Capital branded PDF — save to the Memos tab and email it from there.';
+        memoBtn.style.cssText = 'margin:6px 0 12px 0;background:#0A1628;border:1px solid #0A1628;color:#fff;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.2px;';
+        memoBtn.onclick = () => window._openMemoExportModal(jobKey, epTitle);
+        container.insertBefore(memoBtn, container.firstChild);
+      }
+    } catch (e) { console.warn('[memo btn]', e); }
+  }
+
+  // ── Editable view: same script structure, every turn becomes
+  //    (speaker dropdown) + (intensity dropdown) + (textarea) + (× delete).
+  //    "+ Add turn" button at the end of each section. Save → PUT
+  //    /api/podcast/{ticker}/script → re-render in read mode.
+  function _renderPodcastScriptEditor(originalScript, validation, container) {
+    // Work on a deep clone so cancel reverts cleanly
+    const script = JSON.parse(JSON.stringify(originalScript || {}));
+    const speakers = ['opus', 'rock', 'claudia'];
+    const intensities = ['calm', 'normal', 'heated'];
+    const speakerColors = {
+      opus:    { bg: '#f1f5f9', name: '#0A1628' },
+      rock:    { bg: '#fef3c7', name: '#b45309' },
+      claudia: { bg: '#fce7f3', name: '#9d174d' },
+    };
+    const esc = function(s) { return (s||'').replace(/[&<>]/g, function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c];}); };
+
+    function rebuild() {
+      const parts = [];
+      parts.push('<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">' +
+        '<input id="ps-ed-title" value="' + esc(script.episode_title || '') + '" placeholder="Episode title" ' +
+          'style="flex:1;min-width:200px;font-size:16px;font-weight:800;color:var(--text-primary);border:1px solid #cbd5e1;border-radius:5px;padding:6px 10px;">' +
+        '<select id="ps-ed-winner" style="font-size:12px;padding:6px 10px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;">' +
+          '<option value="rock"' + (script.winner==='rock'?' selected':'') + '>🏆 Winner: ROCK</option>' +
+          '<option value="claudia"' + (script.winner==='claudia'?' selected':'') + '>🏆 Winner: CLAUDIA</option>' +
+        '</select>' +
+        '<button id="ps-ed-save" style="background:#16a34a;color:#fff;border:none;padding:8px 14px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;">💾 Save</button>' +
+        '<button id="ps-ed-cancel" style="background:transparent;color:#64748b;border:1px solid #cbd5e1;padding:8px 14px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;">Cancel</button>' +
+      '</div>');
+      parts.push('<div id="ps-ed-status" style="font-size:11px;color:#64748b;margin-bottom:10px;">Editing — changes apply to the next audio generation only.</div>');
+
+      (script.sections || []).forEach(function(sec, secIdx) {
+        const secLabel = (sec.id || '').replace(/_/g,' ').toUpperCase();
+        parts.push('<div style="font-size:10.5px;font-weight:800;color:#64748b;letter-spacing:1.5px;margin:14px 0 6px;border-bottom:1px solid #e2e8f0;padding-bottom:4px;">' + esc(secLabel) + '</div>');
+        (sec.turns || []).forEach(function(t, turnIdx) {
+          const sp = (t.speaker || 'alec').toLowerCase();
+          const c = speakerColors[sp] || speakerColors.alec;
+          const speakerOpts = speakers.map(function(s){
+            return '<option value="' + s + '"' + (s===sp?' selected':'') + '>' + s.toUpperCase() + '</option>';
+          }).join('');
+          const intensityOpts = intensities.map(function(i){
+            const cur = (t.intensity || 'normal').toLowerCase();
+            return '<option value="' + i + '"' + (i===cur?' selected':'') + '>' + i + '</option>';
+          }).join('');
+          parts.push(
+            '<div data-sec="' + secIdx + '" data-turn="' + turnIdx + '" ' +
+                 'style="background:' + c.bg + ';border-radius:8px;padding:8px 10px;margin-bottom:6px;border:1px solid ' + c.name + '22;">' +
+              '<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;">' +
+                '<select class="ps-ed-speaker" style="font-size:10px;font-weight:800;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;background:#fff;color:' + c.name + ';letter-spacing:0.5px;">' + speakerOpts + '</select>' +
+                '<select class="ps-ed-intensity" style="font-size:10px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;background:#fff;color:#475569;">' + intensityOpts + '</select>' +
+                '<button class="ps-ed-del" title="Delete this turn" style="margin-left:auto;background:transparent;color:#dc2626;border:none;font-size:14px;cursor:pointer;padding:2px 6px;">×</button>' +
+              '</div>' +
+              '<textarea class="ps-ed-text" rows="2" ' +
+                'style="width:100%;border:1px solid #cbd5e1;border-radius:4px;padding:6px 8px;font-size:13px;line-height:1.45;color:var(--text-primary);font-family:inherit;resize:vertical;">' + esc(t.text || '') + '</textarea>' +
+            '</div>'
+          );
+        });
+        parts.push('<button class="ps-ed-add" data-sec="' + secIdx + '" style="background:transparent;border:1px dashed #cbd5e1;color:#64748b;padding:6px 10px;font-size:11px;font-weight:600;border-radius:5px;cursor:pointer;margin-bottom:6px;">+ Add turn</button>');
+      });
+
+      container.innerHTML = parts.join('');
+      attachHandlers();
+    }
+
+    function collectFromDOM() {
+      // Sync DOM values back into the script object
+      script.episode_title = document.getElementById('ps-ed-title').value.trim();
+      script.winner = document.getElementById('ps-ed-winner').value;
+      container.querySelectorAll('[data-sec][data-turn]').forEach(function(node) {
+        const sIdx = parseInt(node.dataset.sec, 10);
+        const tIdx = parseInt(node.dataset.turn, 10);
+        const t = script.sections[sIdx].turns[tIdx];
+        if (!t) return;
+        t.speaker   = node.querySelector('.ps-ed-speaker').value;
+        t.intensity = node.querySelector('.ps-ed-intensity').value;
+        t.text      = node.querySelector('.ps-ed-text').value.trim();
+      });
+    }
+
+    function attachHandlers() {
+      // Delete turn
+      container.querySelectorAll('.ps-ed-del').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          collectFromDOM();
+          const node = btn.closest('[data-sec][data-turn]');
+          const sIdx = parseInt(node.dataset.sec, 10);
+          const tIdx = parseInt(node.dataset.turn, 10);
+          script.sections[sIdx].turns.splice(tIdx, 1);
+          rebuild();
+        });
+      });
+      // Add turn
+      container.querySelectorAll('.ps-ed-add').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          collectFromDOM();
+          const sIdx = parseInt(btn.dataset.sec, 10);
+          const sec = script.sections[sIdx];
+          // Default speaker = whatever the LAST turn in this section was, or alec
+          const lastSp = (sec.turns && sec.turns.length)
+            ? sec.turns[sec.turns.length-1].speaker
+            : 'alec';
+          sec.turns.push({ speaker: lastSp, intensity: 'normal', text: '' });
+          rebuild();
+        });
+      });
+      // Save
+      document.getElementById('ps-ed-save').addEventListener('click', async function() {
+        collectFromDOM();
+        const st = document.getElementById('ps-ed-status');
+        st.textContent = '⏳ Saving…'; st.style.color = '#64748b';
+        try {
+          const r = await window.dgaFetch('/api/podcast/' + script.ticker + '/script', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ script: script }),
+          });
+          const d = await r.json();
+          if (!r.ok || !d.ok) {
+            st.style.color = '#dc2626';
+            st.textContent = '❌ ' + (d.error || (d.validation && d.validation.errors && d.validation.errors.join(' · ')) || ('HTTP ' + r.status));
+            return;
+          }
+          // Re-render in read mode
+          if (script._alignment && !d.script._alignment) d.script._alignment = script._alignment;
+          _renderPodcastScript(d.script, d.validation, container);
+          // Refresh saved-scripts dropdown so updated_at reorders it
+          _populatePodcastSavedScripts();
+        } catch (e) {
+          st.style.color = '#dc2626';
+          st.textContent = '❌ ' + e.message;
+        }
+      });
+      // Cancel
+      document.getElementById('ps-ed-cancel').addEventListener('click', function() {
+        _renderPodcastScript(originalScript, validation, container);
+      });
+    }
+
+    rebuild();
+  }
+
+  async function loadBrief() {
+    const el = document.getElementById('brief-content');
+    const meta = document.getElementById('brief-meta');
+    el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading…</div>';
+    try {
+      const r = await window.dgaFetch('/api/daily-brief/latest');
+      const d = await r.json();
+      if (!d.exists || !d.markdown) {
+        el.innerHTML = '<div class="tab-empty">No pulse yet. Click Run Daily Pulse to generate one.</div>';
+        return;
+      }
+      if (meta) meta.textContent = fmtDate(d.generated_at);
+      renderMd(el, d.markdown);
+    } catch { el.innerHTML = '<div class="tab-error">Failed to load brief.</div>'; }
+  }
+
+  async function triggerBrief() {
+    const btn = document.getElementById('run-brief-btn');
+    if (!btn || btn.disabled) return;
+    const meta = llmDescribe('daily_brief');
+    btn.disabled = true;
+    btn.textContent = '⏳ ' + (meta.provider === 'volume' ? meta.model : 'Grok') + '…';
+    llmToast('daily_brief', 'Starting daily brief');
+    // Surface progress in the content area so the user can SEE it working.
+    const el = document.getElementById('brief-content');
+    if (el) {
+      el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> '
+        + meta.action + ' · <strong>' + meta.model + '</strong> · ' + meta.cost
+        + (meta.note ? '<br><span style="font-size:11px;opacity:0.85;">' + meta.note + '</span>' : '')
+        + '</div>';
+    }
+    try {
+      const r = await window.dgaFetch('/api/daily-brief', { method: 'POST' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const job = await r.json();
+      pollJob(job.job_id, '/api/daily-brief/', btn, '📰 Run', function (j) {
+        loadBrief();
+        const res = (j && j.result) || {};
+        const used = res.model || meta.model;
+        const prov = res.provider || meta.provider;
+        if (el && el.querySelector('.tab-loading')) {
+          /* loadBrief will replace */
+        }
+        try {
+          window.toast && window.toast(
+            'Brief done · ' + prov + ' · ' + used + (res.cost_usd != null ? ' · $' + Number(res.cost_usd).toFixed(3) : ' · ' + meta.cost),
+            { type: 'info', ttl: 4000 }
+          );
+        } catch (_) {}
+        llmStampControl(btn, 'daily_brief');
+      }, function () {
+        llmStampControl(btn, 'daily_brief');
+      });
+    } catch (e) {
+      btn.disabled = false; btn.textContent = '📰 Run';
+      llmStampControl(btn, 'daily_brief');
+      if (el) el.innerHTML = '<div class="tab-error">Couldn’t start the brief: ' + ((e && e.message) || e) + '</div>';
+    }
+  }
+  // The Run button uses inline onclick, which runs in GLOBAL scope — so
+  // triggerBrief must be on window or the click silently throws "not defined"
+  // and nothing happens. Expose it (matches the file's window.* convention).
+  window.triggerBrief = triggerBrief;
+
+  async function loadIntel() {
+    const el   = document.getElementById('intel-content');
+    const meta = document.getElementById('intel-meta');
+    el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading…</div>';
+    try {
+      const r = await window.dgaFetch('/api/intelligence/latest');
+      const d = await r.json();
+      if (!d.exists || !d.markdown) {
+        el.innerHTML = '<div class="tab-empty">No intelligence run yet. Pick a sector and click Run.</div>';
+        return;
+      }
+      if (meta) meta.textContent = (d.sector || '') + (d.generated_at ? ' · ' + fmtDate(d.generated_at) : '');
+      renderMd(el, d.markdown);
+    } catch { el.innerHTML = '<div class="tab-error">Failed to load intelligence.</div>'; }
+  }
+
+  async function triggerIntel() {
+    const btn    = document.getElementById('run-intel-btn');
+    const sector = document.getElementById('intel-sector')?.value || 'Tech';
+    if (!btn || btn.disabled) return;
+    const meta = llmDescribe('intelligence');
+    btn.disabled = true;
+    btn.textContent = '⏳ ' + meta.model.slice(0, 16) + '…';
+    llmToast('intelligence', 'Starting ' + sector + ' intel');
+    const el = document.getElementById('intel-content');
+    if (el) {
+      el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> '
+        + meta.action + ' · <strong>' + meta.model + '</strong> · ' + meta.cost + '</div>';
+    }
+    try {
+      const r = await window.dgaFetch('/api/intelligence', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sector }),
+      });
+      if (!r.ok) throw new Error(r.status);
+      const job = await r.json();
+      pollJob(job.job_id, '/api/intelligence/', btn, '🧠 Run',
+        function (j) {
+          loadIntel();
+          const res = (j && j.result) || {};
+          try {
+            window.toast && window.toast(
+              'Intel done · ' + (res.provider || meta.provider) + ' · ' + (res.model || meta.model) + ' · ' + meta.cost,
+              { type: 'info', ttl: 4000 }
+            );
+          } catch (_) {}
+          llmStampControl(btn, 'intelligence');
+        },
+        function () { llmStampControl(btn, 'intelligence'); }
+      );
+    } catch {
+      btn.disabled = false; btn.textContent = '🧠 Run';
+      llmStampControl(btn, 'intelligence');
+    }
+  }
+  document.getElementById('run-intel-btn')?.addEventListener('click', triggerIntel);
+
+  // ══════════════════════════════════════════════════════════════
+  // SHARED SCAN UTILITIES  (used by Saved-Reports inline scan + Ticker Scan widget)
+  // ══════════════════════════════════════════════════════════════
+
+  // Render a single scan result object {sentiment, markdown, price, pct_change} into `el`
+  function _renderOneScanResult(el, ticker, res) {
+    const sent = (res.sentiment || 'UNKNOWN').toUpperCase();
+    const md   = res.markdown || '';
+    let mdHtml = md
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+      .replace(/\n/g,'<br>');
+    el.innerHTML =
+      '<div class="scan-card" style="margin-top:6px;">' +
+        '<div class="scan-card-head">' +
+          '<div>' +
+            '<div class="scan-tk">' + ticker + '</div>' +
+            '<div class="scan-px">' + (res.price != null ? '$' + fmtPx(res.price) : '—') +
+              '<span class="scan-chg ' + cssClass(res.pct_change) + '">' + fmtPct(res.pct_change) + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<span class="scan-sent ' + sent + '">' + sent + '</span>' +
+        '</div>' +
+        '<div class="scan-card-body">' + (mdHtml || '<span style="color:var(--dim)">No data</span>') + '</div>' +
+      '</div>';
+  }
+
+  // Poll a scan job and call onResult(ticker, res) as each ticker completes, onDone() when finished
+  function _pollScanJob(jobId, onResult, onDone, onFail) {
+    const iv = setInterval(async () => {
+      try {
+        const rp = await window.dgaFetch('/api/scan/' + jobId);
+        const jp = await rp.json();
+        if (jp.results) {
+          Object.entries(jp.results).forEach(([tk, r]) => onResult(tk, r));
+        }
+        if (jp.status === 'done' || jp.status === 'failed') {
+          clearInterval(iv);
+          if (jp.status === 'done') onDone(jp);
+          else { if (onFail) onFail(jp.error || 'Scan failed'); }
+        }
+      } catch(e) { clearInterval(iv); if (onFail) onFail(String(e)); }
+    }, 3500);
+    return iv;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 🌡️ MARKET PULSE — shared card module (Research + Ideas, ui377)
+  // One render pipeline mounted into both tabs. Loading the card only ever
+  // GETs /api/scan/latest — a scan (which costs money) starts ONLY from the
+  // Run Pulse button, after a cost-estimate confirm.
+  // ══════════════════════════════════════════════════════════════
+  const _PULSE_EXPLAIN = 'Market Pulse runs a Grok live web/X sentiment scan on EVERY watchlist ticker, '
+    + 'tagging each Bullish / Bearish / Neutral with a one-line driver. Results persist until the next run '
+    + '— scheduled in Settings → Automation, or run manually with the Run Pulse button. '
+    + 'Opening this card never starts a scan.';
+  let _PULSE_COST_PER_TICKER = 0.02;   // ~$0.02/ticker Grok live-search (estimate)
+  const _PULSE_PREFIXES = [];            // mounted card id-prefixes
+  let _pulseLatest    = {};              // merged ticker → result
+  let _pulseScannedAt = null;
+  let _pulseWlCount   = null;            // cached watchlist size for the estimate
+  let _pulseRunning   = false;
+
+  function _pulseMount(mountId, prefix) {
+    const mount = document.getElementById(mountId);
+    if (!mount || mount.dataset.mounted === '1') return;
+    mount.dataset.mounted = '1';
+    _PULSE_PREFIXES.push(prefix);
+    if (mount.id === prefix + '-panel') {
+      // STATIC panel (Research: a real data-wid widget the drag system owns).
+      // Markup already exists — just fill the explainer + wire events below.
+      const _info = document.getElementById(prefix + '-info');
+      const _exp  = document.getElementById(prefix + '-exp');
+      if (_info) _info.title = _PULSE_EXPLAIN;
+      if (_exp)  _exp.textContent = _PULSE_EXPLAIN;
+    } else mount.innerHTML =
+      '<section class="panel" id="' + prefix + '-panel">'
+      + '<header class="panel-head">'
+      +   '<span class="panel-title">🌡️ Market Pulse</span>'
+      +   '<button type="button" class="info-star" id="' + prefix + '-info" title="' + _sieEsc(_PULSE_EXPLAIN) + '">*</button>'
+      +   '<span class="panel-badge" id="' + prefix + '-ts">—</span>'
+      +   '<span id="' + prefix + '-est" style="margin-left:auto;font-size:9.5px;color:var(--mid);font-weight:600;"></span>'
+      +   '<button id="' + prefix + '-run" class="tab-btn" style="margin-left:8px;font-size:9px;white-space:nowrap;">🌡️ Run Pulse</button>'
+      + '</header>'
+      + '<div class="info-explainer" id="' + prefix + '-exp">' + _sieEsc(_PULSE_EXPLAIN) + '</div>'
+      + '<div id="' + prefix + '-status" style="display:none;padding:6px 14px;font-size:10.5px;color:var(--mid);border-bottom:1px solid var(--panel-edge);"></div>'
+      + '<div id="' + prefix + '-rows" style="max-height:420px;overflow-y:auto;">'
+      +   '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">Loading latest pulse…</div>'
+      + '</div>'
+      + '</section>';
+    // (*) info star — hover shows the title attr; click toggles the inline
+    // explainer paragraph (touch devices have no hover).
+    const info = document.getElementById(prefix + '-info');
+    const exp  = document.getElementById(prefix + '-exp');
+    if (info && exp) info.addEventListener('click', function() { exp.classList.toggle('open'); });
+    const runBtn = document.getElementById(prefix + '-run');
+    if (runBtn) runBtn.addEventListener('click', function() { _pulseRun(prefix); });
+    _pulseCostEstimate(prefix);
+  }
+
+  async function _pulseCostEstimate(prefix, fresh) {
+    const el = document.getElementById(prefix + '-est');
+    if (!el) return;
+    try {
+      if (_pulseWlCount == null || fresh) {
+        // Same endpoint the Watchlist panel uses — count drives the estimate.
+        const r = await window.dgaFetch('/api/watchlist');
+        if (!r.ok) throw new Error(r.status);
+        const d = await r.json();
+        _pulseWlCount = (d.tickers || []).length;
+      }
+      const n = _pulseWlCount;
+      el.textContent = '≈ ' + n + ' ticker' + (n === 1 ? '' : 's') + ' · est. $' + (n * _PULSE_COST_PER_TICKER).toFixed(2);
+      el.title = 'Estimate only — ~$0.02 per ticker for the Grok live-search scan. Actual cost varies with how much the model searches.';
+    } catch { el.textContent = ''; }
+  }
+
+  // "Today's Move:" line from the scan markdown; fallback = first substantive line.
+  function _pulseSummary(md) {
+    if (!md) return '';
+    const lines = String(md).split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+    let line = lines.find(function(l) { return /today'?s move\s*:/i.test(l); });
+    if (line) line = line.replace(/^[-*#>\s]*\**\s*today'?s move\s*:?\**\s*:?\s*/i, '');
+    if (!line) {
+      line = lines.find(function(l) {
+        return !/^#{1,4}\s/.test(l) && l.replace(/[*_\-#>\s]/g, '').length > 12;
+      });
+    }
+    return (line || '').replace(/\*\*?/g, '').slice(0, 170);
+  }
+
+  // Minimal markdown → HTML for the expanded pulse detail (same dialect the
+  // pulse-detail modal uses; kept small on purpose).
+  function _pulseMdHtml(text) {
+    const LINK_STYLE = 'color:#5BB8D4;text-decoration:underline;font-weight:600;';
+    return String(text || '')
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/^### (.+)$/gm, '<div style="font-size:11px;font-weight:800;color:var(--blue);letter-spacing:1px;margin:8px 0 3px;text-transform:uppercase;">$1</div>')
+      .replace(/^## (.+)$/gm,  '<div style="font-size:12px;font-weight:800;color:var(--text-primary);margin:9px 0 3px;">$1</div>')
+      .replace(/^# (.+)$/gm,   '<div style="font-size:13px;font-weight:800;color:var(--text-primary);margin:9px 0 3px;">$1</div>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer" style="' + LINK_STYLE + '">$1</a>')
+      .replace(/^- (.+)$/gm, '<div style="padding:2px 0 2px 12px;border-left:2px solid var(--blue);margin:3px 0;">$1</div>')
+      .replace(/\n{2,}/g, '<div style="height:7px;"></div>')
+      .replace(/\n/g, ' ');
+  }
+
+  function _pulseRenderRows(prefix) {
+    const rows = document.getElementById(prefix + '-rows');
+    const ts   = document.getElementById(prefix + '-ts');
+    if (!rows) return;
+    if (ts) {
+      if (_pulseScannedAt) {
+        const age = Math.round((Date.now() - new Date(_pulseScannedAt)) / 60000);
+        ts.textContent = isNaN(age) ? '—'
+          : (age < 60 ? '⟳ ' + age + 'm ago'
+             : age < 60 * 48 ? '⟳ ' + Math.round(age / 60) + 'h ago'
+             : '⟳ ' + Math.round(age / 1440) + 'd ago');
+      } else ts.textContent = '—';
+    }
+    const entries = Object.entries(_pulseLatest || {});
+    if (!entries.length) {
+      rows.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">'
+        + 'No pulse yet — click Run Pulse to scan your watchlist.</div>';
+      return;
+    }
+    entries.sort(function(a, b) { return a[0] < b[0] ? -1 : 1; });
+    rows.innerHTML = entries.map(function(pair) {
+      const tk = pair[0], res = pair[1] || {};
+      const sent = String(res.sentiment || 'UNKNOWN').toUpperCase();
+      const sentCls = (sent === 'BULLISH' || sent === 'BEARISH' || sent === 'NEUTRAL') ? sent : 'UNKNOWN';
+      const sum = res.error ? ('⚠ ' + res.error) : (_pulseSummary(res.markdown) || 'Scan result available.');
+      const day = res.pct_change;
+      return '<div class="pulse-row" data-pulse-tk="' + _sieEsc(tk) + '" title="Click to expand the full scan">'
+        +   '<span class="pulse-tk">' + _sieEsc(tk) + '</span>'
+        +   '<span class="pulse-pill ' + sentCls + '">' + sentCls + '</span>'
+        +   (day != null ? '<span class="pulse-day ' + cssClass(day) + '">' + fmtPct(day) + '</span>' : '')
+        +   '<span class="pulse-sum">' + _sieEsc(sum) + '</span>'
+        + '</div>'
+        + '<div class="pulse-detail"></div>';
+    }).join('');
+    // Row click → toggle full markdown inline (accordion)
+    rows.querySelectorAll('.pulse-row').forEach(function(row) {
+      row.addEventListener('click', function() {
+        const det = row.nextElementSibling;
+        if (!det || !det.classList.contains('pulse-detail')) return;
+        if (det.classList.contains('open')) { det.classList.remove('open'); return; }
+        if (!det.dataset.filled) {
+          const res = (_pulseLatest || {})[row.getAttribute('data-pulse-tk')] || {};
+          det.innerHTML = _pulseMdHtml(res.markdown || res.error || 'No detail available.');
+          det.dataset.filled = '1';
+        }
+        det.classList.add('open');
+      });
+    });
+  }
+
+  function _pulseRenderAll() { _PULSE_PREFIXES.forEach(_pulseRenderRows); }
+
+  async function _pulseLoadLatest() {
+    try {
+      const r = await window.dgaFetch('/api/scan/latest');
+      if (!r.ok) throw new Error(r.status);
+      const d = await r.json();
+      _pulseLatest    = (d.exists && d.results) ? d.results : {};
+      _pulseScannedAt = d.scanned_at || null;
+    } catch (e) { console.warn('[pulse]', e); }
+    _pulseRenderAll();
+  }
+
+  function _pulseSetRunState(running, label) {
+    _PULSE_PREFIXES.forEach(function(px) {
+      const btn = document.getElementById(px + '-run');
+      if (btn) { btn.disabled = running; btn.textContent = running ? '⏳ Scanning…' : '🌡️ Run Pulse'; }
+      const st = document.getElementById(px + '-status');
+      if (st) {
+        st.style.display = label ? 'block' : 'none';
+        st.textContent = label || '';
+      }
+    });
+  }
+
+  async function _pulseRun(prefix) {
+    if (_pulseRunning) return;
+    // Refresh the count so the confirm shows the real spend.
+    await _pulseCostEstimate(prefix, true);
+    const n = _pulseWlCount || 0;
+    if (!n) {
+      _pulseSetRunState(false, 'Watchlist is empty — add tickers first.');
+      return;
+    }
+    const meta = llmDescribe('pulse');
+    const volOn = !!(window.DGA_LLM && window.DGA_LLM.volume && window.DGA_LLM.volume.enabled);
+    // Per-ticker cost: volume ballpark or Grok live estimate
+    let per = _PULSE_COST_PER_TICKER;
+    try {
+      const pv = (window.DGA_LLM && window.DGA_LLM.est && window.DGA_LLM.est.pulse_volume) || null;
+      if (volOn && Array.isArray(pv) && pv[0] != null)
+        per = (Number(pv[0]) + Number(pv[1] || pv[0])) / 2;
+    } catch (_) {}
+    const est = (n * per).toFixed(2);
+    const okGo = await dgaConfirm({
+      title: 'Run Market Pulse',
+      message: 'Scan ' + n + ' watchlist ticker' + (n === 1 ? '' : 's') + '?\n\n'
+        + 'Model: ' + meta.model + ' (' + meta.provider + ')\n'
+        + 'Est. cost ≈ $' + est + ' for this run'
+        + (volOn
+          ? ' (volume LLM + free headlines — no Grok live search).'
+          : ' (Grok live web/X search — estimate only).')
+        + (meta.note ? '\n' + meta.note : ''),
+      confirmLabel: 'Run scan',
+      danger: false,
+    });
+    if (!okGo) return;
+    _pulseRunning = true;
+    llmToast('pulse', 'Starting market pulse');
+    _pulseSetRunState(true, 'Queuing · ' + meta.model + '…');
+    try {
+      const r = await window.dgaFetch('/api/scan', { method: 'POST' });   // empty body → watchlist union server-side
+      if (!r.ok) { const e = await r.json().catch(function(){return {};}); throw new Error(e.detail || ('HTTP ' + r.status)); }
+      const job = await r.json();
+      const total = (job.tickers || []).length || n;
+      const seen = new Set();   // tickers finished in THIS run
+      _pollScanJob(job.job_id,
+        function(tk, res) {
+          // Stream: merge each finished ticker into the shared card(s).
+          seen.add(tk);
+          _pulseLatest[tk] = res;
+          _pulseScannedAt = new Date().toISOString();
+          const used = (res && res.model) ? res.model : meta.model;
+          _pulseSetRunState(true, used + ' · ' + seen.size + '/' + total + ' done');
+          _pulseRenderAll();
+        },
+        function() {
+          _pulseRunning = false;
+          _pulseSetRunState(false, '');
+          _pulseLoadLatest();   // reload the merged persisted pulse
+          try {
+            window.toast && window.toast('Pulse done · ' + meta.provider + ' · ' + meta.model + ' · ~$' + est, { type: 'info', ttl: 4000 });
+          } catch (_) {}
+        },
+        function(err) {
+          _pulseRunning = false;
+          _pulseSetRunState(false, '❌ ' + err);
+        });
+    } catch (e) {
+      _pulseRunning = false;
+      _pulseSetRunState(false, '❌ ' + (e.message || e));
+    }
+  }
+
+  // ── 📰 Daily Morning Brief on the Ideas tab (ui377) ──────────────
+  // Latest brief only on load — generating a new one is ALWAYS a button click.
+  async function _ideasLoadBrief() {
+    const el   = document.getElementById('ideas-brief-content');
+    const meta = document.getElementById('ideas-brief-meta');
+    if (!el) return;
+    el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading…</div>';
+    try {
+      const r = await window.dgaFetch('/api/daily-brief/latest');
+      const d = await r.json();
+      if (!d.exists || !d.markdown) {
+        el.innerHTML = '<div class="tab-empty">No brief yet — click Run to generate one (never runs automatically).</div>';
+        return;
+      }
+      if (meta) meta.textContent = fmtDate(d.generated_at);
+      renderMd(el, d.markdown);
+    } catch { el.innerHTML = '<div class="tab-error">Failed to load brief.</div>'; }
+  }
+
+  async function _ideasRunBrief() {
+    const btn = document.getElementById('ideas-brief-run');
+    if (!btn || btn.disabled) return;
+    const meta = llmDescribe('daily_brief');
+    btn.disabled = true;
+    btn.textContent = '⏳ ' + meta.model.slice(0, 14) + '…';
+    llmToast('daily_brief', 'Starting daily brief');
+    const el = document.getElementById('ideas-brief-content');
+    if (el) {
+      el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> '
+        + meta.action + ' · <strong>' + meta.model + '</strong> · ' + meta.cost + '</div>';
+    }
+    try {
+      const r = await window.dgaFetch('/api/daily-brief', { method: 'POST' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const job = await r.json();
+      // Refresh BOTH brief views (Ideas card + the Research-tab Daily Pulse card).
+      pollJob(job.job_id, '/api/daily-brief/', btn, '📰 Run', function (j) {
+        _ideasLoadBrief(); loadBrief();
+        const res = (j && j.result) || {};
+        try {
+          window.toast && window.toast(
+            'Brief done · ' + (res.provider || meta.provider) + ' · ' + (res.model || meta.model) + ' · ' + meta.cost,
+            { type: 'info', ttl: 4000 }
+          );
+        } catch (_) {}
+        llmStampControl(btn, 'daily_brief');
+      }, function () { llmStampControl(btn, 'daily_brief'); });
+    } catch (e) {
+      btn.disabled = false; btn.textContent = '📰 Run';
+      llmStampControl(btn, 'daily_brief');
+      if (el) el.innerHTML = '<div class="tab-error">Couldn’t start the brief: ' + ((e && e.message) || e) + '</div>';
+    }
+  }
+
+  // ── Per-row scan buttons in Saved Reports ────────────────────────
+  // Called after renderReports() re-builds the tbody
+  function _wireRepScanButtons() {
+    const tbody = document.getElementById('reports-tbody');
+    if (!tbody) return;
+    tbody.querySelectorAll('tr[data-ticker]').forEach(tr => {
+      // Don't double-wire
+      if (tr.dataset.scanWired) return;
+      tr.dataset.scanWired = '1';
+
+      const ticker = tr.getAttribute('data-ticker');
+      // Inject ⚡ scan btn into first cell (after the existing content)
+      const firstTd = tr.children[0];
+      if (!firstTd) return;
+      const btn = document.createElement('button');
+      btn.textContent = '⚡';
+      btn.title = 'Scan latest news for ' + ticker;
+      btn.style.cssText = 'background:none;border:none;cursor:pointer;font-size:11px;padding:0 0 0 4px;opacity:0.6;vertical-align:middle;';
+      firstTd.appendChild(btn);
+
+      // Expandable result row (hidden until scan runs)
+      const resultRow = document.createElement('tr');
+      resultRow.style.display = 'none';
+      const resultTd = document.createElement('td');
+      resultTd.setAttribute('colspan', '3');
+      resultTd.style.cssText = 'padding:0 8px 8px;';
+      resultRow.appendChild(resultTd);
+      tr.insertAdjacentElement('afterend', resultRow);
+
+      let scanning = false;
+      let scanOpen = false;
+
+      btn.addEventListener('click', async function(e) {
+        e.stopPropagation();  // don't open the report modal
+        if (scanning) return;
+
+        // Toggle: if already open and not scanning, close it
+        if (scanOpen && resultRow.style.display !== 'none') {
+          resultRow.style.display = 'none';
+          scanOpen = false;
+          btn.textContent = '⚡';
+          btn.style.opacity = '0.6';
+          return;
+        }
+
+        scanning = true;
+        btn.textContent = '⏳';
+        btn.style.opacity = '1';
+        resultRow.style.display = '';
+        resultTd.innerHTML = '<div style="font-size:11px;color:var(--dim);padding:6px 0;">Scanning ' + ticker + '…</div>';
+
+        try {
+          const r = await window.dgaFetch('/api/scan/ticker', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ticker}),
+          });
+          if (!r.ok) { const e = await r.json(); throw new Error(e.detail || r.status); }
+          const job = await r.json();
+
+          _pollScanJob(job.job_id,
+            function(tk, res) { _renderOneScanResult(resultTd, tk, res); },
+            function(jp) {
+              scanning = false; scanOpen = true;
+              btn.textContent = '✕';  // click again to close
+              btn.style.opacity = '1';
+            },
+            function(err) {
+              scanning = false;
+              resultTd.innerHTML = '<div style="font-size:11px;color:var(--red);padding:6px 0;">❌ ' + err + '</div>';
+              btn.textContent = '⚡'; btn.style.opacity = '0.6';
+            }
+          );
+        } catch(err) {
+          scanning = false;
+          resultTd.innerHTML = '<div style="font-size:11px;color:var(--red);padding:6px 0;">❌ ' + err.message + '</div>';
+          btn.textContent = '⚡'; btn.style.opacity = '0.6';
+        }
+      });
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // TRACKER TAB
+  // ══════════════════════════════════════════════════════════════
+  async function loadTrackerTab() {
+    loadSnapshots();
+    loadPaperPortfolios();
+  }
+
+  async function loadSnapshots() {
+    const el = document.getElementById('snap-content');
+    const badge = document.getElementById('snap-count');
+    try {
+      const r = await window.dgaFetch('/api/track/live/snapshots');
+      const d = await r.json();
+      const snaps = d.snapshots || [];
+      if (badge) badge.textContent = String(snaps.length);
+      if (!snaps.length) {
+        el.innerHTML = '<div class="tab-empty">No YTD snapshots yet. Upload a Fidelity positions CSV from the mobile app to create one.</div>';
+        return;
+      }
+      el.innerHTML = `
+        <table class="data-table">
+          <thead><tr><th>Date</th><th>NAV</th><th>Portfolio Return</th><th>Personal Return</th><th>Holdings</th></tr></thead>
+          <tbody>
+            ${snaps.slice(0,15).map(s => `
+              <tr>
+                <td>${fmtDate(s.generated_at || s.created_at)}</td>
+                <td class="tabular">${s.total_market_value != null ? fmtUSD(s.total_market_value) : '—'}</td>
+                <td class="tabular ${cssClass(s.twrr ?? s.ytd_pct)}" title="Time-Weighted Return (TWRR)">${fmtPct(s.twrr ?? s.ytd_pct)}</td>
+                <td class="tabular ${cssClass(s.xirr)}" title="Your Personal Return (XIRR)">${fmtPct(s.xirr)}</td>
+                <td>${s.n_holdings || s.holdings?.length || '—'}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>`;
+    } catch { el.innerHTML = '<div class="tab-error">Could not load snapshots.</div>'; }
+  }
+
+  async function loadPaperPortfolios() {
+    const el = document.getElementById('paper-content');
+    const badge = document.getElementById('paper-count');
+    try {
+      const r = await window.dgaFetch('/api/track');
+      const d = await r.json();
+      const items = d.portfolios || [];
+      if (badge) badge.textContent = String(items.length);
+      if (!items.length) {
+        el.innerHTML = '<div class="tab-empty">No paper portfolios yet.</div>';
+        return;
+      }
+      el.innerHTML = `
+        <table class="data-table">
+          <thead><tr><th>Name</th><th>Return</th><th>vs SPY</th><th>Created</th></tr></thead>
+          <tbody>
+            ${items.map(p => `
+              <tr>
+                <td style="font-weight:700;color:var(--text-primary)">${p.name || '—'}</td>
+                <td class="tabular ${cssClass(p.total_return_pct)}">${fmtPct(p.total_return_pct)}</td>
+                <td class="tabular ${cssClass(p.vs_spy_pct)}">${fmtPct(p.vs_spy_pct)}</td>
+                <td>${fmtDate(p.created_at)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>`;
+    } catch { el.innerHTML = '<div class="tab-error">Could not load paper portfolios.</div>'; }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // POSITIONS TAB — live GP watchlist
+  // ══════════════════════════════════════════════════════════════
+  var _gpPosTimer = null;
+
+  var _gpChartLoaded = false;
+  var _gpPosTimer = null;
+
+  async function loadGPPositions() {
+    // Load positions and chart in parallel on first open
+    await Promise.all([
+      _refreshGPPositions(),
+      // Load chart if never loaded, or if data exists but SVG is blank (e.g. was drawn at 0-width)
+      (function () {
+        const svg = document.getElementById('gp-chart-svg');
+        const svgEmpty = !svg || !svg.innerHTML.trim();
+        if (_gpChartLoaded && _gpChartData && svgEmpty) {
+          // Has data but SVG blank — just redraw with correct dimensions
+          setTimeout(function () { _drawPortfolioChart(_gpChartData); }, 0);
+          return Promise.resolve();
+        }
+        return _gpChartLoaded ? Promise.resolve() : _loadPortfolioChart('ytd').then(function () { _gpChartLoaded = true; });
+      }()),
+    ]);
+    // Auto-refresh positions every 30 seconds; chart refreshes only on period change
+    if (_gpPosTimer) clearInterval(_gpPosTimer);
+    _gpPosTimer = setInterval(function () {
+      if (document.getElementById('tab-positions')?.classList.contains('active')) {
+        _refreshGPPositions();
+      }
+    }, 30000);
+  }
+
+  async function _refreshGPPositions() {
+    try {
+      const r = await window.dgaFetch('/api/v2/lp/me/positions');
+      if (!r.ok) throw new Error('positions ' + r.status);
+      const data = await r.json();
+      _renderGPWatchlist(data);
+    } catch (e) {
+      console.warn('[gp-positions]', e);
+      const grid = document.getElementById('gp-acct-grid');
+      if (grid) grid.innerHTML = '<div style="padding:20px;color:#94a3b8;font-size:13px;">Could not load positions.</div>';
+    }
+  }
+
+  // ── Portfolio chart ──────────────────────────────────────────────
+  var _gpChartPeriod = 'ytd';
+  var _gpChartData   = null;
+
+  function _drawPortfolioChart(data) {
+    const svg     = document.getElementById('gp-chart-svg');
+    const loading = document.getElementById('gp-chart-loading');
+    const lblStart= document.getElementById('gp-chart-lbl-start');
+    const lblEnd  = document.getElementById('gp-chart-lbl-end');
+    if (!svg) return;
+
+    if (!data || !data.dates || data.dates.length < 2) {
+      const errMsg = data && data.error ? ('Chart error: ' + data.error) : 'No chart data available — run a YTD upload to populate positions';
+      if (loading) { loading.style.display = 'flex'; loading.textContent = errMsg; }
+      svg.innerHTML = '';
+      return;
+    }
+    if (loading) loading.style.display = 'none';
+
+    const wrap = document.getElementById('gp-chart-wrap');
+    const W = (wrap ? wrap.offsetWidth : 0) || 800;
+    const H = (wrap ? wrap.offsetHeight : 0) || 170;
+    svg.setAttribute('width',   W);
+    svg.setAttribute('height',  H);
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    // Bottom padding now reserves room for x-axis tick labels.
+    const PAD_L = 8, PAD_R = 8, PAD_T = 12, PAD_B = 20;
+    const W2 = W - PAD_L - PAD_R;
+    const H2 = H - PAD_T - PAD_B;
+
+    const vals  = data.values;
+    const dates = data.dates;
+    const minV  = data.min_val;
+    const maxV  = data.max_val;
+    const range = maxV - minV || 1;
+
+    const n = vals.length;
+    const pts = vals.map(function (v, i) {
+      const x = PAD_L + (i / (n - 1)) * W2;
+      const y = PAD_T + H2 - ((v - minV) / range) * H2;
+      return [x, y];
+    });
+
+    function pathD(pts) {
+      if (pts.length < 2) return '';
+      let d = 'M' + pts[0][0] + ',' + pts[0][1];
+      for (let i = 1; i < pts.length; i++) {
+        const cp1x = (pts[i-1][0] + pts[i][0]) / 2;
+        const cp1y = pts[i-1][1];
+        const cp2x = cp1x;
+        const cp2y = pts[i][1];
+        d += ' C' + cp1x + ',' + cp1y + ' ' + cp2x + ',' + cp2y + ' ' + pts[i][0] + ',' + pts[i][1];
+      }
+      return d;
+    }
+
+    const isUp    = (data.change_abs || 0) >= 0;
+    const lineClr = isUp ? '#5BB8D4' : '#dc2626';
+
+    const linePath = pathD(pts);
+    const last  = pts[pts.length-1];
+    const first = pts[0];
+    const baselineY = PAD_T + H2;
+    const areaPath = linePath
+      + ' L' + last[0]  + ',' + baselineY
+      + ' L' + first[0] + ',' + baselineY + ' Z';
+
+    // ── X-axis tick labels (4-5 evenly spaced) ─────────────────────────────
+    function fmtTickDate(iso) {
+      // 'YYYY-MM-DD' → 'MMM D'
+      const d = new Date(iso.slice(0,10) + 'T00:00:00Z');
+      if (isNaN(d.getTime())) return iso.slice(5,10);
+      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      return months[d.getUTCMonth()] + ' ' + d.getUTCDate();
+    }
+    let xTicksSvg = '';
+    const tickCount = Math.min(6, Math.max(2, Math.floor(W / 110)));
+    for (let t = 0; t < tickCount; t++) {
+      const ratio = tickCount === 1 ? 0 : t / (tickCount - 1);
+      const idx   = Math.round(ratio * (n - 1));
+      const xPos  = PAD_L + ratio * W2;
+      const anchor = t === 0 ? 'start' : (t === tickCount - 1 ? 'end' : 'middle');
+      xTicksSvg += '<text x="' + xPos + '" y="' + (H - 4)
+                + '" font-size="9" fill="#94a3b8" text-anchor="' + anchor + '"'
+                + ' font-family="-apple-system, system-ui, sans-serif">'
+                + fmtTickDate(dates[idx]) + '</text>';
+    }
+
+    svg.innerHTML =
+      '<defs>'
+        + '<linearGradient id="gpChartGrad" x1="0" y1="0" x2="0" y2="1">'
+          + '<stop offset="0%" stop-color="' + lineClr + '" stop-opacity="0.25"/>'
+          + '<stop offset="100%" stop-color="' + lineClr + '" stop-opacity="0.01"/>'
+        + '</linearGradient>'
+      + '</defs>'
+      + '<path d="' + areaPath + '" fill="url(#gpChartGrad)" stroke="none"/>'
+      + '<path d="' + linePath + '" fill="none" stroke="' + lineClr + '" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>'
+      + '<circle cx="' + last[0] + '" cy="' + last[1] + '" r="4" fill="' + lineClr + '"/>'
+      // Hover overlay elements (initially hidden)
+      + '<line id="gpHoverLine" x1="0" y1="' + PAD_T + '" x2="0" y2="' + baselineY + '" stroke="#94a3b8" stroke-width="1" stroke-dasharray="2,3" style="display:none;pointer-events:none;"/>'
+      + '<circle id="gpHoverDot" cx="0" cy="0" r="4" fill="#fff" stroke="' + lineClr + '" stroke-width="2" style="display:none;pointer-events:none;"/>'
+      + xTicksSvg;
+
+    if (lblStart) lblStart.textContent = fmtTickDate(dates[0]);
+    if (lblEnd)   lblEnd.textContent   = fmtTickDate(dates[n - 1]);
+
+    // ── Hover tooltip ───────────────────────────────────────────────────────
+    let tooltip = document.getElementById('gp-chart-tooltip');
+    if (!tooltip) {
+      tooltip = document.createElement('div');
+      tooltip.id = 'gp-chart-tooltip';
+      tooltip.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;'
+        + 'background:#0A1628;color:#fff;font-size:11px;padding:6px 10px;'
+        + 'border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.2);'
+        + 'font-family:-apple-system,system-ui,sans-serif;display:none;'
+        + 'white-space:nowrap;line-height:1.4;';
+      document.body.appendChild(tooltip);
+    }
+    const hLine = svg.querySelector('#gpHoverLine');
+    const hDot  = svg.querySelector('#gpHoverDot');
+
+    function _fmtUSDfull(v) {
+      return v.toLocaleString('en-US', { style:'currency', currency:'USD', maximumFractionDigits: 0 });
+    }
+    function _fmtLongDate(iso) {
+      const d = new Date(iso.slice(0,10) + 'T00:00:00Z');
+      if (isNaN(d.getTime())) return iso;
+      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      return months[d.getUTCMonth()] + ' ' + d.getUTCDate() + ', ' + d.getUTCFullYear();
+    }
+
+    function _onMove(evt) {
+      const rect = svg.getBoundingClientRect();
+      const xInSvg = evt.clientX - rect.left;
+      // Convert SVG-pixel x → data index
+      const xPlot = Math.max(PAD_L, Math.min(PAD_L + W2, xInSvg * (W / rect.width)));
+      const ratio = (xPlot - PAD_L) / W2;
+      const idx   = Math.round(ratio * (n - 1));
+      if (idx < 0 || idx >= n) return;
+      const v   = vals[idx];
+      const iso = dates[idx];
+      const px  = pts[idx][0], py = pts[idx][1];
+      if (hLine) { hLine.setAttribute('x1', px); hLine.setAttribute('x2', px); hLine.style.display = ''; }
+      if (hDot)  { hDot.setAttribute('cx', px); hDot.setAttribute('cy', py); hDot.style.display = ''; }
+      const startV = vals[0] || 1;
+      const dPct = ((v - startV) / startV * 100);
+      const dPctStr = (dPct >= 0 ? '+' : '') + dPct.toFixed(2) + '%';
+      const dPctClr = dPct >= 0 ? '#5BB8D4' : '#dc2626';
+      tooltip.innerHTML =
+        '<div style="font-weight:700;font-size:13px;">' + _fmtUSDfull(v) + '</div>'
+        + '<div style="opacity:0.7;font-size:10px;margin-top:2px;">' + _fmtLongDate(iso) + '</div>'
+        + '<div style="color:' + dPctClr + ';font-size:10px;margin-top:1px;">' + dPctStr + ' since start</div>';
+      tooltip.style.display = 'block';
+      // Position next to cursor, flip if off-screen right/bottom
+      const ttW = tooltip.offsetWidth  || 160;
+      const ttH = tooltip.offsetHeight || 60;
+      let tx = evt.clientX + 14;
+      let ty = evt.clientY - 16;
+      if (tx + ttW > window.innerWidth  - 8) tx = evt.clientX - ttW - 10;
+      if (ty + ttH > window.innerHeight - 8) ty = evt.clientY - ttH - 4;
+      tooltip.style.left = Math.max(8, tx) + 'px';
+      tooltip.style.top  = Math.max(8, ty) + 'px';
+    }
+    function _onLeave() {
+      if (hLine) hLine.style.display = 'none';
+      if (hDot)  hDot.style.display  = 'none';
+      tooltip.style.display = 'none';
+    }
+    // Remove any previously bound handlers (re-renders) before binding new ones
+    if (svg._dgHoverBound) {
+      svg.removeEventListener('mousemove', svg._dgHoverBound.m);
+      svg.removeEventListener('mouseleave', svg._dgHoverBound.l);
+    }
+    svg._dgHoverBound = { m: _onMove, l: _onLeave };
+    svg.addEventListener('mousemove',  _onMove);
+    svg.addEventListener('mouseleave', _onLeave);
+  }
+
+  // Tracks which fund the chart is currently scoped to (null = all accounts).
+  var _gpChartFundId = null;
+
+  async function _loadPortfolioChart(period, fundId) {
+    _gpChartPeriod = period || _gpChartPeriod || 'ytd';
+    // If called with explicit `undefined`, keep prior scope; with `null`, reset to all.
+    if (arguments.length >= 2) _gpChartFundId = fundId || null;
+    const loading = document.getElementById('gp-chart-loading');
+    const svg     = document.getElementById('gp-chart-svg');
+    if (loading) { loading.style.display = 'flex'; loading.textContent = 'Loading chart…'; }
+    if (svg) svg.innerHTML = '';
+
+    // Update active period button
+    document.querySelectorAll('.gp-chart-period-btn').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.period === _gpChartPeriod);
+    });
+
+    try {
+      let url = '/api/v2/gp/portfolio-chart?period=' + encodeURIComponent(_gpChartPeriod);
+      if (_gpChartFundId) url += '&fund_id=' + encodeURIComponent(_gpChartFundId);
+      const r = await window.dgaFetch(url);
+      if (!r.ok) throw new Error('chart ' + r.status);
+      _gpChartData = await r.json();
+      setTimeout(function () { _drawPortfolioChart(_gpChartData); }, 0);
+    } catch (e) {
+      console.warn('[gp-chart]', e);
+      if (loading) loading.textContent = 'Chart unavailable';
+    }
+  }
+
+  // ── Wire period buttons + chart strip toggle ────────────────────
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('.gp-chart-period-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () { _loadPortfolioChart(btn.dataset.period); });
+    });
+    // Redraw chart when the collapsible strip is opened (offsetWidth is 0 while collapsed)
+    const chartStrip = document.querySelector('.fid-chart-strip');
+    if (chartStrip) {
+      chartStrip.addEventListener('toggle', function () {
+        if (chartStrip.open && _gpChartData) {
+          setTimeout(function () { _drawPortfolioChart(_gpChartData); }, 0);
+        }
+      });
+    }
+    // Redraw on window resize so the chart fills the new width
+    window.addEventListener('resize', function () {
+      if (_gpChartData) setTimeout(function () { _drawPortfolioChart(_gpChartData); }, 50);
+    });
+  });
+
+  // ── Fidelity-style positions renderer ────────────────────────────────────
+  let _fidAllPositions = [];   // full dataset — kept for sidebar-click re-filter
+  let _fidActiveAcct   = '__all__';  // currently selected sidebar account
+  let _fidSortCol = 'value', _fidSortDir = -1;
+
+  // ── Account sidebar order (persisted in localStorage) ────────────────────
+  let _fidAcctOrder = [];
+  try { _fidAcctOrder = JSON.parse(localStorage.getItem('_dga_acct_order') || '[]'); } catch(e) {}
+  function _saveAcctOrder(arr) {
+    _fidAcctOrder = arr.slice();
+    try { localStorage.setItem('_dga_acct_order', JSON.stringify(_fidAcctOrder)); } catch(e) {}
+  }
+
+  function _renderGPWatchlist(data) {
+    const positions = (data.positions || []).slice().sort(function (a, b) {
+      return (b.market_value || 0) - (a.market_value || 0);
+    });
+    _fidAllPositions = positions;
+
+    // ── Sidebar totals ───────────────────────────────────────────
+    const totalMV = data.total_market_value || 0;
+    const totalEl = document.getElementById('fid-sidebar-total-val');
+    const dayEl   = document.getElementById('fid-sidebar-total-day');
+    const subEl   = document.getElementById('fid-sidebar-total-sub');
+    const asofEl  = document.getElementById('fid-sidebar-asof');
+    if (totalEl) totalEl.textContent = totalMV > 0 ? fmtUSD(totalMV) : '—';
+    if (asofEl)  asofEl.textContent  = 'As of ' + new Date().toLocaleString('en-US', { ..._PT, month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) + ' PT';
+
+    // ── Aggregate day change ─────────────────────────────────────
+    const totalMV_ref = data.total_market_value || 0;
+
+    // Aggregate day change
+    let dayChangeAbs = 0, validDay = false;
+    positions.forEach(function (p) {
+      if (p.day_change_abs != null && p.total_qty != null) {
+        dayChangeAbs += p.day_change_abs * (p.total_qty || 0);
+        validDay = true;
+      }
+    });
+    if (dayEl && validDay) {
+      const pct  = totalMV_ref > 0 ? (dayChangeAbs / (totalMV_ref - dayChangeAbs) * 100) : 0;
+      const isUp = dayChangeAbs >= 0;
+      const clr  = isUp ? '#16a34a' : '#dc2626';
+      dayEl.innerHTML = '<span style="color:' + clr + ';font-weight:700;">'
+        + (isUp ? '+' : '') + fmtUSD(dayChangeAbs) + ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)</span>'
+        + '<span style="color:#94a3b8;font-size:10px;"> today</span>';
+    }
+
+    // Header stats chips
+    const gainers = positions.filter(function(p) { return (p.day_change_pct||0) > 0; }).length;
+    const losers  = positions.filter(function(p) { return (p.day_change_pct||0) < 0; }).length;
+    let totalUnreal = 0, hasUnreal = false;
+    positions.forEach(function(p) { if (p.unrealized_gain != null) { totalUnreal += p.unrealized_gain; hasUnreal = true; } });
+    const sc = document.getElementById('fid-stat-count');
+    const sg = document.getElementById('fid-stat-gainers');
+    const sl = document.getElementById('fid-stat-losers');
+    const su = document.getElementById('fid-stat-unrealized');
+    if (sc) sc.textContent = positions.length;
+    if (sg) sg.textContent = gainers;
+    if (sl) sl.textContent = losers;
+    if (su) {
+      su.textContent = hasUnreal ? ((totalUnreal >= 0 ? '+' : '') + fmtUSD(totalUnreal)) : '—';
+      su.style.color = hasUnreal ? (totalUnreal >= 0 ? '#16a34a' : '#dc2626') : '#94a3b8';
+    }
+
+    // ── Group by account for sidebar ─────────────────────────────
+    // Also captures each group's fund_id so clicking the sidebar can refetch
+    // a per-account portfolio chart.
+    const groups = {}, groupOrder = [];
+    positions.forEach(function(p) {
+      const grp = p.account_name || p.fund_name || 'Portfolio';
+      if (!groups[grp]) {
+        groups[grp] = { positions: [], navSum: 0, daySum: 0, dayValid: false, fund_id: p.fund_id || null };
+        groupOrder.push(grp);
+      }
+      if (!groups[grp].fund_id && p.fund_id) groups[grp].fund_id = p.fund_id;
+      groups[grp].positions.push(p);
+      if (p.market_value) groups[grp].navSum += p.market_value;
+      if (p.day_change_abs != null && p.total_qty != null) {
+        groups[grp].daySum  += p.day_change_abs * p.total_qty;
+        groups[grp].dayValid = true;
+      }
+    });
+
+    // ── Apply saved account order ─────────────────────────────────
+    // New accounts (not yet in saved order) are appended at the end.
+    if (_fidAcctOrder.length) {
+      groupOrder.sort(function(a, b) {
+        var ia = _fidAcctOrder.indexOf(a);
+        var ib = _fidAcctOrder.indexOf(b);
+        if (ia < 0) ia = 9999;
+        if (ib < 0) ib = 9999;
+        return ia - ib;
+      });
+    }
+
+    // ── Update summary block (clickable "All Accounts" replacement) ──────────
+    const summaryEl = document.getElementById('fid-sidebar-summary');
+    if (subEl) subEl.textContent = positions.length + ' positions · ' + groupOrder.length + ' account' + (groupOrder.length !== 1 ? 's' : '');
+    if (summaryEl) {
+      // Mark active when no individual account is selected
+      summaryEl.classList.toggle('active', _fidActiveAcct === '__all__');
+      // One-time listener guard
+      if (!summaryEl._allAcctBound) {
+        summaryEl._allAcctBound = true;
+        summaryEl.addEventListener('click', function() {
+          // Deselect any individual account
+          document.querySelectorAll('#fid-acct-list .fid-acct-item').forEach(function(i) { i.classList.remove('active'); });
+          summaryEl.classList.add('active');
+          _fidActiveAcct = '__all__';
+          const nameEl = document.getElementById('fid-sel-acct-name');
+          if (nameEl) nameEl.textContent = 'All Accounts';
+          const allPos = _fidAllPositions;
+          const allUnreal = allPos.reduce(function(s,p){ return s+(p.unrealized_gain||0); },0);
+          const allGainers = allPos.filter(function(p){ return (p.day_change_pct||0)>0; }).length;
+          const allLosers  = allPos.filter(function(p){ return (p.day_change_pct||0)<0; }).length;
+          const sc = document.getElementById('fid-stat-count');
+          const sg = document.getElementById('fid-stat-gainers');
+          const sl = document.getElementById('fid-stat-losers');
+          const su = document.getElementById('fid-stat-unrealized');
+          if (sc) sc.textContent = allPos.length;
+          if (sg) sg.textContent = allGainers;
+          if (sl) sl.textContent = allLosers;
+          if (su) { su.textContent = (allUnreal>=0?'+':'')+fmtUSDFull(allUnreal); su.style.color = allUnreal>=0?'#16a34a':'#dc2626'; }
+          _renderFidTable(allPos);
+          // Refetch the chart in aggregate (no fund_id scope)
+          _loadPortfolioChart(_gpChartPeriod, null);
+        });
+      }
+    }
+
+    // ── Build sidebar account list (individual accounts only) ─────────────
+    const acctList = document.getElementById('fid-acct-list');
+    if (acctList) {
+      let html = '';
+
+      groupOrder.forEach(function(grp, idx) {
+        const g = groups[grp];
+        let dayRow = '';
+        if (g.dayValid) {
+          const pct  = g.navSum > 0 ? (g.daySum / (g.navSum - g.daySum) * 100) : 0;
+          const isUp = g.daySum >= 0;
+          const clr  = isUp ? '#16a34a' : '#dc2626';
+          dayRow = '<div class="fid-acct-day" style="color:' + clr + ';">' + (isUp?'+':'') + fmtUSD(g.daySum) + ' (' + (pct>=0?'+':'') + pct.toFixed(2) + '%)</div>';
+        }
+        // Up/down reorder buttons (disabled at boundaries)
+        const upDis  = idx === 0             ? ' disabled' : '';
+        const dnDis  = idx === groupOrder.length - 1 ? ' disabled' : '';
+        const sortBtns = '<div class="fid-acct-sort-btns">'
+          + '<button class="fid-sort-btn" data-sort-move="up"' + upDis + ' title="Move up">▲</button>'
+          + '<button class="fid-sort-btn" data-sort-move="down"' + dnDis + ' title="Move down">▼</button>'
+          + '</div>';
+        html += '<div class="fid-acct-item" data-acct="' + _esc(grp) + '" data-sort-idx="' + idx + '">'
+          + '<div class="fid-acct-row">'
+          + '<div class="fid-acct-name">' + _esc(grp) + '</div>'
+          + '<div style="display:flex;align-items:center;gap:4px;">'
+          + sortBtns
+          + '<div class="fid-acct-val">' + (g.navSum > 0 ? fmtUSD(g.navSum) : '—') + '</div>'
+          + '</div>'
+          + '</div>'
+          + '<div class="fid-acct-row fid-acct-row2">'
+          + '<div class="fid-acct-sub">' + g.positions.length + ' position' + (g.positions.length!==1?'s':'') + '</div>'
+          + dayRow
+          + '</div></div>';
+      });
+      acctList.innerHTML = html;
+
+      // Sidebar click → filter table (ignore clicks on sort buttons)
+      acctList.querySelectorAll('.fid-acct-item').forEach(function(item) {
+        item.addEventListener('click', function(e) {
+          // Don't trigger account selection when clicking sort buttons
+          if (e.target.closest('.fid-acct-sort-btns')) return;
+          acctList.querySelectorAll('.fid-acct-item').forEach(function(i) { i.classList.remove('active'); });
+          item.classList.add('active');
+          // Summary block loses "all" active state when a specific account is chosen
+          const sumEl2 = document.getElementById('fid-sidebar-summary');
+          if (sumEl2) sumEl2.classList.remove('active');
+          const acct = item.dataset.acct;
+          _fidActiveAcct = acct;   // persist selection across re-renders
+          const nameEl = document.getElementById('fid-sel-acct-name');
+          const filterPos = (groups[acct] || {}).positions || [];
+          if (nameEl) nameEl.textContent = acct;
+          // Update header stats for this account
+          const acctUnreal = filterPos.reduce(function(s,p){ return s + (p.unrealized_gain||0); }, 0);
+          const acctGainers = filterPos.filter(function(p){ return (p.day_change_pct||0)>0; }).length;
+          const acctLosers  = filterPos.filter(function(p){ return (p.day_change_pct||0)<0; }).length;
+          if (sc) sc.textContent = filterPos.length;
+          if (sg) sg.textContent = acctGainers;
+          if (sl) sl.textContent = acctLosers;
+          if (su) { su.textContent = (acctUnreal>=0?'+':'') + fmtUSDFull(acctUnreal); su.style.color = acctUnreal>=0?'#16a34a':'#dc2626'; }
+          _renderFidTable(filterPos);
+          // Refetch the chart scoped to this account's fund_id
+          const acctFid = (groups[acct] || {}).fund_id || null;
+          _loadPortfolioChart(_gpChartPeriod, acctFid);
+        });
+      });
+
+      // ── Sort button handlers ──────────────────────────────────────
+      acctList.querySelectorAll('.fid-sort-btn').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation(); // don't trigger account selection
+          const item = btn.closest('.fid-acct-item');
+          if (!item) return;
+          const idx  = parseInt(item.dataset.sortIdx, 10);
+          const dir  = btn.dataset.sortMove === 'up' ? -1 : 1;
+          const newIdx = idx + dir;
+          if (newIdx < 0 || newIdx >= groupOrder.length) return;
+          // Swap in groupOrder
+          const tmp = groupOrder[idx];
+          groupOrder[idx]    = groupOrder[newIdx];
+          groupOrder[newIdx] = tmp;
+          _saveAcctOrder(groupOrder);
+          // Re-render sidebar only (fast, no API call)
+          // Rebuild HTML in-place by calling the sidebar build portion again
+          _renderGPWatchlist({ positions: _fidAllPositions, total_market_value: data.total_market_value });
+        });
+      });
+    }
+
+    // ── Restore previously selected account (survives auto-refresh) ───────────
+    if (_fidActiveAcct !== '__all__') {
+      const savedItem = acctList ? acctList.querySelector('.fid-acct-item[data-acct="' + _fidActiveAcct + '"]') : null;
+      if (savedItem) {
+        acctList.querySelectorAll('.fid-acct-item').forEach(function(i) { i.classList.remove('active'); });
+        savedItem.classList.add('active');
+        if (summaryEl) summaryEl.classList.remove('active');
+        const filterPos = (groups[_fidActiveAcct] || {}).positions || [];
+        const nameEl = document.getElementById('fid-sel-acct-name');
+        if (nameEl) nameEl.textContent = _fidActiveAcct;
+        const acctUnreal = filterPos.reduce(function(s,p){ return s + (p.unrealized_gain||0); }, 0);
+        const acctGainers = filterPos.filter(function(p){ return (p.day_change_pct||0)>0; }).length;
+        const acctLosers  = filterPos.filter(function(p){ return (p.day_change_pct||0)<0; }).length;
+        if (sc) sc.textContent = filterPos.length;
+        if (sg) sg.textContent = acctGainers;
+        if (sl) sl.textContent = acctLosers;
+        if (su) { su.textContent = (acctUnreal>=0?'+':'') + fmtUSDFull(acctUnreal); su.style.color = acctUnreal>=0?'#16a34a':'#dc2626'; }
+        _renderFidTable(filterPos);
+        // Sync chart scope to restored account (only if scope changed to avoid loop)
+        const restoreFid = (groups[_fidActiveAcct] || {}).fund_id || null;
+        if (restoreFid !== _gpChartFundId) _loadPortfolioChart(_gpChartPeriod, restoreFid);
+      } else {
+        // Account no longer exists — fall back to all
+        _fidActiveAcct = '__all__';
+        _renderFidTable(positions);
+      }
+    } else {
+      _renderFidTable(positions);
+    }
+  }
+
+  // ── Table renderer ────────────────────────────────────────────────────────
+  function _renderFidTable(positions) {
+    const tbody = document.getElementById('fid-pos-tbody');
+    if (!tbody) return;
+    if (!positions || !positions.length) {
+      tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:48px;color:#94a3b8;">No positions.</td></tr>';
+      return;
+    }
+    // Sort
+    const sorted = positions.slice().sort(function(a, b) {
+      let av = 0, bv = 0;
+      if (_fidSortCol === 'symbol') { return _fidSortDir * ((a.symbol||'') < (b.symbol||'') ? 1 : -1); }
+      if (_fidSortCol === 'price')  { av = a.last_price||0;         bv = b.last_price||0; }
+      else if (_fidSortCol === 'day')   { av = (a.day_change_abs||0)*(a.total_qty||a.quantity||0); bv = (b.day_change_abs||0)*(b.total_qty||b.quantity||0); }
+      else if (_fidSortCol === 'daypct')   { av = a.day_change_pct||0; bv = b.day_change_pct||0; }
+      else if (_fidSortCol === 'total') { av = a.unrealized_gain||0; bv = b.unrealized_gain||0; }
+      else if (_fidSortCol === 'totalpct') { av = a.unrealized_gain_pct||0; bv = b.unrealized_gain_pct||0; }
+      else if (_fidSortCol === 'value') { av = a.market_value||0;    bv = b.market_value||0; }
+      else if (_fidSortCol === 'pct')   { av = a.market_value||0; bv = b.market_value||0; } // sort by value = sort by % within same account
+      else if (_fidSortCol === 'qty')   { av = a.total_qty||a.quantity||0; bv = b.total_qty||b.quantity||0; }
+      return _fidSortDir * (bv - av);
+    });
+
+    // Compute totals (also used for % of acct denominator)
+    let totVal = 0, totDay = 0, totGain = 0, hasGain = false;
+    positions.forEach(function(p) {
+      totVal  += p.market_value || 0;
+      if (p.day_change_abs != null && p.total_qty != null) totDay += p.day_change_abs * p.total_qty;
+      if (p.unrealized_gain != null) { totGain += p.unrealized_gain; hasGain = true; }
+    });
+    // % of account = position's value ÷ this filtered set's total (not global AUM)
+    const acctTotalForPct = totVal > 0 ? totVal : 1;
+
+    const _clr = function(v) { return v >= 0 ? '#16a34a' : '#dc2626'; };
+    const _s   = function(v, fmt) {
+      if (v == null) return '<span style="color:#94a3b8;">—</span>';
+      const pfx = v >= 0 ? '+' : '';
+      return '<span style="color:' + _clr(v) + ';">' + pfx + fmt(v) + '</span>';
+    };
+
+    let html = '';
+    sorted.forEach(function(p) {
+      const qty    = p.total_qty || p.quantity;
+      const qtyFmt = qty != null ? Number(qty).toLocaleString(undefined, {maximumFractionDigits: 3}) : '—';
+      const px     = p.last_price != null ? '$' + Number(p.last_price).toFixed(2) : '—';
+      const pxSub  = p.day_change_abs != null
+        ? '<div class="fid-tbl-sub ' + (p.day_change_abs>=0?'fid-tbl-up':'fid-tbl-dn') + '">' + (p.day_change_abs>=0?'+':'-') + '$' + Math.abs(p.day_change_abs).toFixed(2) + '/sh</div>' : '';
+      const dayAbs = p.day_change_abs != null && qty != null ? p.day_change_abs * qty : null;
+      const dayPct = p.day_change_pct;
+      const _na = '<span style="color:#94a3b8;">—</span>';
+      const dayAbsCell = dayAbs != null
+        ? '<div class="fid-tbl-main" style="color:' + _clr(dayAbs) + ';">' + (dayAbs>=0?'+':'') + fmtUSDFull(dayAbs) + '</div>' : _na;
+      const dayPctCell = dayPct != null
+        ? '<div class="fid-tbl-main" style="color:' + _clr(dayPct) + ';">' + (dayPct>=0?'+':'') + dayPct.toFixed(2) + '%</div>' : _na;
+      const gainAbsCell = p.unrealized_gain != null
+        ? '<div class="fid-tbl-main" style="color:' + _clr(p.unrealized_gain) + ';">' + (p.unrealized_gain>=0?'+':'') + fmtUSDFull(p.unrealized_gain) + '</div>' : _na;
+      const gainPctCell = p.unrealized_gain_pct != null
+        ? '<div class="fid-tbl-main" style="color:' + _clr(p.unrealized_gain_pct) + ';">' + (p.unrealized_gain_pct>=0?'+':'') + p.unrealized_gain_pct.toFixed(2) + '%</div>' : _na;
+      const cbCell = p.avg_cost
+        ? '<div class="fid-tbl-main">$' + Number(p.avg_cost).toFixed(2) + '/sh</div>'
+          + (p.cost_basis ? '<div class="fid-tbl-sub">' + fmtUSDFull(p.cost_basis) + ' total</div>' : '')
+        : '<span style="color:#94a3b8;">—</span>';
+      const mv = p.market_value;
+      // % of account = this position's value ÷ the filtered account's total (not global AUM)
+      const wt = mv != null && acctTotalForPct > 0 ? (mv / acctTotalForPct * 100) : null;
+
+      html += '<tr data-ticker="' + _esc(p.symbol) + '">'
+        + '<td><div class="fid-tbl-ticker">' + _esc(p.symbol) + '</div><div class="fid-tbl-co">' + _esc(p.name||p.symbol) + '</div></td>'
+        + '<td><div class="fid-tbl-main">' + px + '</div>' + pxSub + '</td>'
+        + '<td>' + dayAbsCell + '</td>'
+        + '<td>' + dayPctCell + '</td>'
+        + '<td>' + gainAbsCell + '</td>'
+        + '<td>' + gainPctCell + '</td>'
+        + '<td><div class="fid-tbl-main">' + (mv!=null ? fmtUSD(mv) : '—') + '</div></td>'
+        + '<td><div class="fid-tbl-main">' + (wt!=null ? wt.toFixed(2)+'%' : '—') + '</div></td>'
+        + '<td><div class="fid-tbl-main">' + qtyFmt + '</div></td>'
+        + '<td>' + cbCell + '</td>'
+        + '</tr>';
+    });
+
+    // Totals footer — aggregate %: gain ÷ (value − gain) = ÷ cost basis
+    const totDayPct  = (totVal - totDay)  > 0 ? totDay  / (totVal - totDay)  * 100 : null;
+    const totGainPct = (totVal - totGain) > 0 ? totGain / (totVal - totGain) * 100 : null;
+    html += '<tr class="fid-tbl-total-row">'
+      + '<td>Account total</td>'
+      + '<td></td>'
+      + '<td><div style="color:' + _clr(totDay) + ';font-weight:700;">' + (totDay>=0?'+':'') + fmtUSDFull(totDay) + '</div></td>'
+      + '<td>' + (totDayPct!=null ? '<div style="color:' + _clr(totDayPct) + ';font-weight:700;">' + (totDayPct>=0?'+':'') + totDayPct.toFixed(2) + '%</div>' : '') + '</td>'
+      + '<td>' + (hasGain ? '<div style="color:' + _clr(totGain) + ';font-weight:700;">' + (totGain>=0?'+':'') + fmtUSDFull(totGain) + '</div>' : '—') + '</td>'
+      + '<td>' + (hasGain && totGainPct!=null ? '<div style="color:' + _clr(totGainPct) + ';font-weight:700;">' + (totGainPct>=0?'+':'') + totGainPct.toFixed(2) + '%</div>' : '') + '</td>'
+      + '<td><strong>' + fmtUSD(totVal) + '</strong></td>'
+      + '<td>100%</td><td></td><td></td></tr>';
+
+    tbody.innerHTML = html;
+
+    // Click row → FREE inline stock-info expander (ui377). This used to jump
+    // to Research and auto-fire the hero AI analyze flow — an accidental
+    // single click cost real tokens. The AI run is now a deliberate
+    // "⚡ Run AI analysis" button INSIDE the expander.
+    tbody.querySelectorAll('tr[data-ticker]').forEach(function(row) {
+      row.classList.add('sie-clickable');
+      row.addEventListener('click', function() {
+        const tk = row.dataset.ticker;
+        if (!tk) return;
+        const p  = sorted.find(function(x) { return x.symbol === tk; }) || {};
+        const mv = p.market_value;
+        _sieToggleRow(row, tk, {
+          qty:    p.total_qty != null ? p.total_qty : p.quantity,
+          value:  mv,
+          weight: (mv != null && acctTotalForPct > 0) ? mv / acctTotalForPct * 100 : null,
+        });
+      });
+    });
+  }
+
+  // ── Column sort wiring (delegated, works after table re-renders) ──────────
+  document.addEventListener('click', function(e) {
+    const th = e.target.closest('#tab-positions .fid-tbl thead th[data-sort]');
+    if (!th) return;
+    const col = th.dataset.sort;
+    if (_fidSortCol === col) { _fidSortDir = -_fidSortDir; }
+    else { _fidSortCol = col; _fidSortDir = -1; }
+    document.querySelectorAll('#tab-positions .fid-tbl thead th').forEach(function(t) {
+      t.classList.remove('fid-sort-asc', 'fid-sort-desc');
+    });
+    th.classList.add(_fidSortDir === -1 ? 'fid-sort-desc' : 'fid-sort-asc');
+    // Re-render with active account filter
+    const activeItem = document.querySelector('#fid-acct-list .fid-acct-item.active');
+    const acct = activeItem ? activeItem.dataset.acct : '__all__';
+    if (acct === '__all__') {
+      _renderFidTable(_fidAllPositions);
+    } else {
+      const grpPositions = _fidAllPositions.filter(function(p) {
+        return (p.account_name || p.fund_name || 'Portfolio') === acct;
+      });
+      _renderFidTable(grpPositions);
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════
+  // FUND TAB
+  // ══════════════════════════════════════════════════════════════
+  async function loadFundTab() { loadFundOverview(); }
+
+  // NAV entry inline form — called after loadFundOverview renders cards
+  function navInputStyle() {
+    return 'width:130px;height:28px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:4px;color:#1e293b;font-size:11px;padding:0 8px;outline:none;';
+  }
+
+  async function submitNav(fundId, inputEl, dateEl, statusEl, btnEl) {
+    const raw = (inputEl.value || '').replace(/[$,\s]/g, '');
+    const nav = parseFloat(raw);
+    if (isNaN(nav) || nav < 0) { statusEl.textContent = 'Enter a valid amount'; statusEl.style.color = 'var(--red)'; return; }
+    const asOf = dateEl.value;
+    if (!asOf) { statusEl.textContent = 'Select a date'; statusEl.style.color = 'var(--red)'; return; }
+    btnEl.disabled = true; btnEl.textContent = '…';
+    statusEl.textContent = '';
+    try {
+      const r = await window.dgaFetch('/api/v2/gp/nav', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fund_id: fundId, net_nav: nav, as_of_date: asOf }),
+      });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || r.status); }
+      statusEl.textContent = '✓ Saved';
+      statusEl.style.color = 'var(--green)';
+      setTimeout(() => loadFundOverview(), 800);
+    } catch (e) {
+      statusEl.textContent = 'Error: ' + e.message;
+      statusEl.style.color = 'var(--red)';
+      btnEl.disabled = false; btnEl.textContent = 'Save';
+    }
+  }
+
+  async function loadFundOverview() {
+    const elFunds = document.getElementById('fund-funds-list');
+    const elAccts = document.getElementById('fund-accts-list');
+    elFunds.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading…</div>';
+    elAccts.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading…</div>';
+    try {
+      const r = await window.dgaFetch('/api/v2/lp/me/overview');
+      if (!r.ok) throw new Error(r.status);
+      const d = await r.json();
+      const funds = d.funds || [];
+      const accts = d.managed_accounts || [];
+      document.getElementById('fund-funds-count').textContent = funds.length;
+      document.getElementById('fund-accts-count').textContent = accts.length;
+      if (!funds.length && !accts.length) {
+        elFunds.innerHTML = '<div class="tab-empty">No LP funds yet.<br><span style="font-size:12px;color:var(--dim);">Create one in Settings → Fund Administration.</span></div>';
+        elAccts.innerHTML = '<div class="tab-empty">No managed accounts yet.<br><span style="font-size:12px;color:var(--dim);">Create one in Settings → Fund Administration.</span></div>';
+        return;
+      }
+
+      const today = new Date().toISOString().slice(0, 10);
+
+      const _safeAttr = (s) => String(s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+      const fundCardHtml = (fid, fname, badge, navVal, navAsOf, lpCount, committed, isAcct, marketNav, ytdPct, isPosBased) => {
+        // Visual shell only — same formatters, fields, and data attrs as before
+        const navStr   = navVal != null ? fmtUSD(navVal) : '—';
+        const navSub   = navAsOf ? 'as of ' + navAsOf : (marketNav > 0 ? 'live market' : 'no snapshot');
+        const ytdColor = ytdPct != null ? (ytdPct >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--mid)';
+        const ytdSub   = isPosBased ? 'YTD · positions' : 'YTD';
+        return `
+        <div class="fund-row" data-fund-id="${fid}" data-fund-name="${fname}">
+          <div class="fund-row-main">
+            <div class="fund-row-identity">
+              <div class="fund-row-name">
+                <span title="${_safeAttr(fname)}">${fname}</span>
+              </div>
+              <span class="fund-row-badge">${badge}</span>
+            </div>
+            <div class="fund-row-metrics">
+              <div class="fund-row-stat">
+                <div class="fund-row-stat-label">NAV</div>
+                <div class="fund-row-stat-val">${navStr}</div>
+                <div class="fund-row-stat-sub">${navSub}</div>
+              </div>
+              ${isAcct && ytdPct != null ? `
+              <div class="fund-row-stat">
+                <div class="fund-row-stat-label">${ytdSub}</div>
+                <div class="fund-row-stat-val" style="color:${ytdColor};">${ytdPct >= 0 ? '+' : ''}${ytdPct.toFixed(2)}%</div>
+                <div class="fund-row-stat-sub">&nbsp;</div>
+              </div>` : ''}
+              ${!isAcct ? `
+              <div class="fund-row-stat">
+                <div class="fund-row-stat-label">LPs</div>
+                <div class="fund-row-stat-val">${lpCount ?? '—'}</div>
+                <div class="fund-row-stat-sub">&nbsp;</div>
+              </div>
+              <div class="fund-row-stat">
+                <div class="fund-row-stat-label">Committed</div>
+                <div class="fund-row-stat-val">${committed != null ? fmtUSD(committed) : '—'}</div>
+                <div class="fund-row-stat-sub">&nbsp;</div>
+              </div>` : ''}
+            </div>
+            <div class="fund-row-actions">
+              <span class="fund-row-view">View →</span>
+              <button class="fund-row-nav-toggle" data-nav-toggle="${fid}" title="Set NAV snapshot" onclick="event.stopPropagation();this.closest('.fund-row').classList.toggle('nav-open');">✎</button>
+              <button class="fund-row-purge" data-purge-fund="${fid}" data-purge-name="${_safeAttr(fname)}" title="Delete ${isAcct ? 'account' : 'fund'}">×</button>
+            </div>
+          </div>
+          <div class="fund-row-nav">
+            <span style="font-size:9px;font-weight:700;color:var(--dim);letter-spacing:0.4px;text-transform:uppercase;flex-shrink:0;">NAV snapshot</span>
+            <input data-nav-input="${fid}" type="text" placeholder="${navVal != null ? fmtUSD(navVal) : '0 = auto'}" style="${navInputStyle()}width:110px;">
+            <input data-nav-date="${fid}" type="date" value="${today}" style="${navInputStyle()}width:130px;">
+            <button data-nav-btn="${fid}" class="tab-btn" style="height:28px;padding:0 12px;font-size:10px;">Save</button>
+            ${marketNav > 0 ? `<button data-nav-mkt="${fid}" data-mkt-val="${marketNav}" class="tab-btn secondary" style="height:28px;padding:0 10px;font-size:10px;" title="Use live market value">↺ ${fmtUSD(marketNav)}</button>` : ''}
+            <span data-nav-status="${fid}" style="font-size:10px;"></span>
+          </div>
+        </div>`; };
+
+      const fundHtml = funds.map(f => fundCardHtml(
+        f.fund_id, f.fund_name, f.short_name,
+        f.effective_nav,
+        (f.fund_nav > 0 ? f.fund_nav_as_of : null),
+        f.lp_count, f.commitment, false, f.market_nav, null
+      )).join('');
+      const acctHtml = accts.map(a => {
+        const usePos = a.ytd_pos_pct != null;
+        return fundCardHtml(
+          a.fund_id, a.account_name, a.short_name, a.nav, a.nav_as_of, null, null, true, a.market_nav,
+          usePos ? a.ytd_pos_pct : null,  // positions-based only — blank beats Mod Dietz
+          usePos
+        );
+      }).join('');
+
+      elFunds.innerHTML = funds.length ? fundHtml :
+        '<div class="tab-empty">No LP funds yet.<br><span style="font-size:12px;color:var(--dim);">Create one in Settings → Fund Administration.</span></div>';
+      elAccts.innerHTML = accts.length ? acctHtml :
+        '<div class="tab-empty">No managed accounts yet.<br><span style="font-size:12px;color:var(--dim);">Create one in Settings → Fund Administration.</span></div>';
+
+      const wireCards = (el) => {
+        el.querySelectorAll('[data-fund-id]').forEach(card => {
+          card.addEventListener('click', (e) => {
+            if (e.target.closest('[data-nav-input],[data-nav-date],[data-nav-btn],[data-purge-fund],[data-nav-toggle],[data-nav-mkt]')) return;
+            if (e.target.closest('.fund-row-nav')) return;
+            openFundDetail(card.dataset.fundId, card.dataset.fundName);
+          });
+        });
+        el.querySelectorAll('[data-purge-fund]').forEach(btn => {
+          btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const fid  = btn.dataset.purgeFund;
+            const name = btn.dataset.purgeName;
+            if (!(await dgaConfirm({ title: 'Delete fund', message: `Permanently delete "${name}" and ALL its data?\n\nThis cannot be undone.`, confirmLabel: 'Delete fund' }))) return;
+            btn.textContent = '…'; btn.disabled = true;
+            try {
+              const r = await window.dgaFetch(`/api/v2/gp/fund/${encodeURIComponent(fid)}/purge`, { method: 'DELETE' });
+              const d = await r.json();
+              if (!r.ok) throw new Error(d.detail || 'Delete failed');
+              btn.closest('.fund-row').remove();
+              loadFundOverview();
+            } catch (err) {
+              alert('Delete failed: ' + err.message);
+              btn.textContent = '×'; btn.disabled = false;
+            }
+          });
+        });
+        el.querySelectorAll('[data-nav-btn]').forEach(btn => {
+          const fid = btn.dataset.navBtn;
+          btn.addEventListener('click', () => {
+            submitNav(
+              fid,
+              el.querySelector(`[data-nav-input="${fid}"]`),
+              el.querySelector(`[data-nav-date="${fid}"]`),
+              el.querySelector(`[data-nav-status="${fid}"]`),
+              btn
+            );
+          });
+        });
+        // ↺ fills input with actual market value and auto-saves
+        el.querySelectorAll('[data-nav-mkt]').forEach(btn => {
+          const fid    = btn.dataset.navMkt;
+          const mktVal = parseFloat(btn.dataset.mktVal || '0');
+          btn.addEventListener('click', e => {
+            e.stopPropagation();
+            const inp  = el.querySelector(`[data-nav-input="${fid}"]`);
+            const sbtn = el.querySelector(`[data-nav-btn="${fid}"]`);
+            const dat  = el.querySelector(`[data-nav-date="${fid}"]`);
+            const sta  = el.querySelector(`[data-nav-status="${fid}"]`);
+            if (inp) inp.value = mktVal > 0 ? mktVal.toFixed(2) : '0';
+            if (sbtn && inp && dat && sta) submitNav(fid, inp, dat, sta, sbtn);
+          });
+        });
+      };
+      wireCards(elFunds);
+      wireCards(elAccts);
+
+    } catch (e) {
+      elFunds.innerHTML = '<div class="tab-error">Could not load fund data: ' + e.message + '</div>';
+      elAccts.innerHTML = '';
+    }
+  }
+
+  // Sub-tab toggle (LP Funds | Managed Accounts)
+  document.querySelectorAll('.fund-subtab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const which = btn.dataset.subtab;
+      document.querySelectorAll('.fund-subtab').forEach(b => {
+        const on = b === btn;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      document.getElementById('fund-funds-list').style.display = which === 'funds' ? '' : 'none';
+      document.getElementById('fund-accts-list').style.display = which === 'accts' ? '' : 'none';
+    });
+  });
+
+  // ── Fund / Account Detail routing ─────────────────────────────
+  // Routes to either #tab-lp-detail or #tab-acct-detail based on fund_type.
+  // The two pages are genuinely separate: LP funds get waterfall + LP roster;
+  // managed accounts get monthly balance chart, SPY overlay, attribution, YTD calc.
+  let CURRENT_FUND_ID   = null;
+  let CURRENT_FUND_TYPE = null;   // 'lp_fund' | 'managed_account'
+
+  async function openFundDetail(fundId, fundName) {
+    CURRENT_FUND_ID = fundId;
+    // First peek to decide which page to open. /api/v2/gp/fund/{id}/detail returns fund_type.
+    try {
+      const r = await window.dgaFetch('/api/v2/gp/fund/' + encodeURIComponent(fundId) + '/detail');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      CURRENT_FUND_TYPE = d.fund_type === 'managed_account' ? 'managed_account' : 'lp_fund';
+      const isAcct = CURRENT_FUND_TYPE === 'managed_account';
+      const panelId = isAcct ? 'tab-acct-detail' : 'tab-lp-detail';
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      document.getElementById(panelId).classList.add('active');
+      document.querySelectorAll('.topbar-link[data-tab]').forEach(l => l.classList.remove('active'));
+      document.querySelector('.topbar-link[data-tab="fund"]')?.classList.add('active');
+      window.scrollTo(0, 0);
+      if (isAcct) {
+        _acctPositionsMV = null; // reset stale MV from previous account
+        document.getElementById('acd-title').textContent = (fundName || d.fund_name) + ' (' + d.short_name + ')';
+        renderAcctMeta(d);
+        loadAcctPositions(fundId);
+        loadAcctYtdSections(fundId);
+        loadAllTimePerf(fundId);
+        loadAcctSnapStrip(fundId);
+      } else {
+        document.getElementById('lpd-title').textContent = (fundName || d.fund_name) + ' (' + d.short_name + ')';
+        renderLpMeta(d);
+        renderLpRoster(d);
+        loadLpPositions(fundId);
+        loadLpWaterfall(fundId);
+      }
+    } catch (e) {
+      alert('Could not load detail: ' + e.message);
+    }
+  }
+
+  // Stub kept for legacy click handlers; not used.
+  async function loadFundDetailContent(fundId) { return openFundDetail(fundId); }
+  async function _unused_loadFundDetailContent(fundId) {
+    const meta = document.getElementById('fd-meta');
+    const lps  = document.getElementById('fd-lps');
+    const pos  = document.getElementById('fd-positions');
+    const wfl  = document.getElementById('fd-waterfall');
+    const hst  = document.getElementById('fd-history');
+    const bal  = document.getElementById('fd-balance');
+    if (!meta) return;
+    meta.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading fund detail…</div>';
+    lps.innerHTML = ''; pos.innerHTML = '';
+    if (wfl) wfl.innerHTML = '';
+    if (hst) hst.innerHTML = '';
+    if (bal) bal.innerHTML = '';
+    try {
+      const r = await window.dgaFetch('/api/v2/gp/fund/' + encodeURIComponent(fundId) + '/detail');
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.detail || 'HTTP ' + r.status);
+      }
+      const d = await r.json();
+      document.getElementById('fd-title').textContent = d.fund_name + ' (' + d.short_name + ')';
+
+      const fmtPct = v => v != null ? (v * 100).toFixed(2) + '%' : '—';
+      const tile = (label, value, sub) => `
+        <div class="fd-tile">
+          <div class="fd-tile-label">${label}</div>
+          <div class="fd-tile-val">${value}</div>
+          ${sub ? `<div class="fd-tile-sub">${sub}</div>` : ''}
+        </div>`;
+      meta.innerHTML = `
+        <div class="fd-tile-grid">
+          ${tile('TYPE',       d.fund_type === 'managed_account' ? 'Managed Account' : 'LP Fund', d.short_name)}
+          ${tile('STATUS',     (d.status || 'open').toUpperCase(), 'Inception ' + (d.inception_date || '—'))}
+          ${tile('NAV',        d.nav != null ? fmtUSD(d.nav) : '—', d.nav_as_of ? 'as of ' + d.nav_as_of : (d.market_nav > 0 ? 'Live from positions' : 'No snapshot'))}
+          ${tile('LP COUNT',   d.lp_count, fmtUSD(d.total_committed) + ' committed')}
+          ${tile('MGMT FEE',   fmtPct(d.mgmt_fee_pct), '')}
+          ${tile('CARRY',      fmtPct(d.carry_pct), 'Hurdle ' + fmtPct(d.hurdle_pct))}
+        </div>`;
+
+      lps.innerHTML = d.lps && d.lps.length ? `
+        <section class="panel">
+          <header class="panel-head">
+            <span class="panel-title">LP Roster</span>
+            <span class="panel-badge">${d.lp_count} partners · ${fmtUSD(d.total_committed)}</span>
+          </header>
+          <table class="data-table" style="width:100%;">
+            <thead><tr><th>Name</th><th>Email</th><th style="text-align:right;">Commitment</th></tr></thead>
+            <tbody>
+              ${d.lps.map(lp => `
+                <tr>
+                  <td style="font-weight:700;color:var(--text-primary);">${lp.legal_name || '—'}</td>
+                  <td style="color:var(--mid);font-size:11px;">${lp.primary_email || '—'}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${fmtUSD(lp.commitment_amount)}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </section>` : `
+        <section class="panel">
+          <header class="panel-head"><span class="panel-title">LP Roster</span></header>
+          <div class="tab-empty">No LPs on record. Use the "Import Cap Table" upload below to add LPs from a CSV.</div>
+        </section>`;
+
+      // Load positions for this fund
+      loadFundPositions(fundId);
+
+      // Conditional sections by fund type
+      const isAcct = d.fund_type === 'managed_account';
+      if (isAcct) {
+        loadAccountHistory(fundId);
+        loadAccountBalanceChart(fundId);
+      } else {
+        loadFundWaterfall(fundId);
+      }
+    } catch (e) {
+      meta.innerHTML = `<div class="tab-error">Could not load fund detail: ${e.message}</div>`;
+    }
+  }
+
+  // ── Waterfall (LP funds) ─────────────────────────────────────
+  async function loadFundWaterfall(fundId) {
+    const el = document.getElementById('fd-waterfall');
+    if (!el) return;
+    el.innerHTML = '<section class="panel"><header class="panel-head"><span class="panel-title">GP Waterfall &amp; Carry</span></header><div class="tab-loading"><span class="spin">↻</span> Loading waterfall…</div></section>';
+    try {
+      const r = await window.dgaFetch('/api/fund/waterfall?fund_id=' + encodeURIComponent(fundId));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const wf = await r.json();
+      const rows = wf.rows || wf.snapshots || (Array.isArray(wf) ? wf : []);
+      if (!rows.length) {
+        el.innerHTML = `
+          <section class="panel">
+            <header class="panel-head"><span class="panel-title">GP Waterfall &amp; Carry</span></header>
+            <div class="tab-empty">No annual NAV snapshots yet. Upload the Annual NAV / Waterfall CSV below to populate year-by-year carry, hurdle, and GP equity.</div>
+          </section>`;
+        return;
+      }
+      const fmtPct = v => v == null ? '—' : (v * 100).toFixed(2) + '%';
+      el.innerHTML = `
+        <section class="panel">
+          <header class="panel-head">
+            <span class="panel-title">GP Waterfall &amp; Carry</span>
+            <span class="panel-badge">${rows.length} year${rows.length !== 1 ? 's' : ''}</span>
+          </header>
+          <table class="fd-waterfall-table">
+            <thead><tr>
+              <th>Year</th><th>Jan 1 NAV</th><th>Dec 31 NAV</th><th>Contributions</th>
+              <th>Gross Return</th><th>Hurdle</th><th>Carry</th><th>GP Equity</th><th>Acc. GP %</th>
+            </tr></thead>
+            <tbody>
+              ${rows.map(r => `<tr>
+                <td>${r.year || r.snapshot_year || '—'}</td>
+                <td>${r.jan_nav != null ? fmtUSD(r.jan_nav) : (r.nav_jan_1 != null ? fmtUSD(r.nav_jan_1) : '—')}</td>
+                <td>${r.dec_nav != null ? fmtUSD(r.dec_nav) : (r.nav_dec_31 != null ? fmtUSD(r.nav_dec_31) : '—')}</td>
+                <td>${r.contributions != null ? fmtUSD(r.contributions) : '—'}</td>
+                <td>${r.gross_return_pct != null ? fmtPct(r.gross_return_pct) : (r.gross_ret != null ? fmtPct(r.gross_ret) : '—')}</td>
+                <td>${r.hurdle_pct != null ? fmtPct(r.hurdle_pct) : '—'}</td>
+                <td>${r.carry != null ? fmtUSD(r.carry) : '—'}</td>
+                <td>${r.gp_equity != null ? fmtUSD(r.gp_equity) : '—'}</td>
+                <td>${r.accumulated_gp_pct != null ? fmtPct(r.accumulated_gp_pct) : (r.gp_equity_pct != null ? fmtPct(r.gp_equity_pct) : '—')}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </section>`;
+    } catch (e) {
+      el.innerHTML = `
+        <section class="panel">
+          <header class="panel-head"><span class="panel-title">GP Waterfall &amp; Carry</span></header>
+          <div class="tab-empty">Could not load waterfall (${e.message}). Upload an Annual NAV CSV below to populate.</div>
+        </section>`;
+    }
+  }
+
+  // ── Account history (managed accounts) ───────────────────────
+  async function loadAccountHistory(fundId) {
+    const el = document.getElementById('fd-history');
+    if (!el) return;
+    el.innerHTML = '<section class="panel"><header class="panel-head"><span class="panel-title">Account History (YTD Cash Flows)</span></header><div class="tab-loading"><span class="spin">↻</span> Loading…</div></section>';
+    try {
+      const r = await window.dgaFetch('/api/fund/account/' + encodeURIComponent(fundId) + '/ytd-cache');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const cache = await r.json();
+      const data = cache.result_json ? JSON.parse(cache.result_json) : null;
+      const flows = data?.flows || [];
+      if (!flows.length) {
+        el.innerHTML = `
+          <section class="panel">
+            <header class="panel-head"><span class="panel-title">Account History (YTD Cash Flows)</span></header>
+            <div class="tab-empty">No YTD cash flows recorded yet. Run a YTD calculation from the mobile app or upload an Account History CSV to populate.</div>
+          </section>`;
+        return;
+      }
+      el.innerHTML = `
+        <section class="panel">
+          <header class="panel-head">
+            <span class="panel-title">Account History (YTD Cash Flows)</span>
+            <span class="panel-badge">${flows.length} transactions</span>
+          </header>
+          <table class="data-table" style="width:100%;">
+            <thead><tr><th>Date</th><th>Action</th><th>Symbol</th><th style="text-align:right;">Amount</th></tr></thead>
+            <tbody>
+              ${flows.map(f => `<tr>
+                <td style="color:var(--mid);font-size:11px;">${f.date || '—'}</td>
+                <td>${f.action || f.type || '—'}</td>
+                <td style="color:var(--blue);font-weight:700;">${f.symbol || '—'}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;${(f.amount||0)>=0?'color:var(--green);':'color:var(--red);'}">${f.amount != null ? fmtUSD(f.amount) : '—'}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </section>`;
+    } catch (e) {
+      el.innerHTML = `
+        <section class="panel">
+          <header class="panel-head"><span class="panel-title">Account History (YTD Cash Flows)</span></header>
+          <div class="tab-empty">No YTD calculation has been run yet for this account.</div>
+        </section>`;
+    }
+  }
+
+  // ── Monthly balance chart (managed accounts) ─────────────────
+  async function loadAccountBalanceChart(fundId) {
+    const el = document.getElementById('fd-balance');
+    if (!el) return;
+    el.innerHTML = '<section class="panel"><header class="panel-head"><span class="panel-title">Monthly Investment Balance</span></header><div class="tab-loading"><span class="spin">↻</span> Loading…</div></section>';
+    try {
+      const r = await window.dgaFetch('/api/fund/account/' + encodeURIComponent(fundId) + '/ytd-cache');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const cache = await r.json();
+      const data = cache.result_json ? JSON.parse(cache.result_json) : null;
+      const mc = data?.monthly_chart;
+      if (!mc || !mc.points || !mc.points.length) {
+        el.innerHTML = `
+          <section class="panel">
+            <header class="panel-head"><span class="panel-title">Monthly Investment Balance</span></header>
+            <div class="tab-empty">No monthly balance data yet. Upload an Investment Balance CSV during YTD calculation to enable the chart.</div>
+          </section>`;
+        return;
+      }
+      el.innerHTML = `
+        <section class="panel">
+          <header class="panel-head">
+            <span class="panel-title">Monthly Investment Balance</span>
+            <span class="panel-badge">${mc.points.length} months</span>
+          </header>
+          <div class="fd-balance-canvas-wrap">
+            <canvas id="fd-balance-canvas"></canvas>
+          </div>
+        </section>`;
+      drawFdBalanceChart(mc);
+    } catch (e) {
+      el.innerHTML = `
+        <section class="panel">
+          <header class="panel-head"><span class="panel-title">Monthly Investment Balance</span></header>
+          <div class="tab-empty">No monthly balance data yet.</div>
+        </section>`;
+    }
+  }
+
+  function drawFdBalanceChart(mc) {
+    const canvas = document.getElementById('fd-balance-canvas');
+    if (!canvas) return;
+    const pts = mc.points || [];
+    if (!pts.length) return;
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width  = rect.width  * dpr;
+    canvas.height = rect.height * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    const W = rect.width, H = rect.height;
+    const padL = 60, padR = 18, padT = 14, padB = 28;
+    const vals = pts.map(p => p.balance ?? p.value ?? 0);
+    const minV = Math.min(...vals) * 0.95, maxV = Math.max(...vals) * 1.05;
+    const xAt = i => padL + (W - padL - padR) * (pts.length === 1 ? 0.5 : i / (pts.length - 1));
+    const yAt = v => padT + (H - padT - padB) * (1 - (v - minV) / Math.max(1, maxV - minV));
+    // grid
+    ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const y = padT + (H - padT - padB) * (i / 4);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+      const v = maxV - (maxV - minV) * (i / 4);
+      ctx.fillStyle = '#64748b';
+      ctx.font = '10px -apple-system,sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText('$' + Math.round(v / 1000) + 'k', padL - 6, y + 3);
+    }
+    // x labels
+    ctx.fillStyle = '#475569';
+    ctx.font = '10px -apple-system,sans-serif';
+    ctx.textAlign = 'center';
+    pts.forEach((p, i) => {
+      if (pts.length > 12 && i % 2) return;
+      ctx.fillText((p.month || p.label || '').slice(0, 7), xAt(i), H - 10);
+    });
+    // line
+    ctx.strokeStyle = '#5BB8D4';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    pts.forEach((p, i) => {
+      const v = p.balance ?? p.value ?? 0;
+      if (i === 0) ctx.moveTo(xAt(i), yAt(v));
+      else ctx.lineTo(xAt(i), yAt(v));
+    });
+    ctx.stroke();
+    // dots
+    ctx.fillStyle = '#5BB8D4';
+    pts.forEach((p, i) => {
+      const v = p.balance ?? p.value ?? 0;
+      ctx.beginPath(); ctx.arc(xAt(i), yAt(v), 3, 0, Math.PI * 2); ctx.fill();
+    });
+  }
+
+  async function loadFundPositions(fundId) {
+    const el = document.getElementById('fd-positions');
+    el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading positions…</div>';
+    try {
+      const r = await window.dgaFetch('/api/fund/positions?fund_id=' + encodeURIComponent(fundId));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const rows = await r.json();   // endpoint returns a bare array
+      const totalMv = rows.reduce((s, p) => s + (p.market_value || 0), 0);
+      const totalCost = rows.reduce((s, p) => s + (p.total_cost || 0), 0);
+      el.innerHTML = `
+        <section class="panel">
+          <header class="panel-head">
+            <span class="panel-title">Open Positions</span>
+            <span class="panel-badge">${rows.length} positions · ${totalMv ? fmtUSD(totalMv) : '—'} MV</span>
+          </header>
+          ${rows.length ? `
+          <table class="data-table" style="width:100%;">
+            <thead><tr><th>Symbol</th><th>Name</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Avg Cost</th><th style="text-align:right;">Cost Basis</th><th style="text-align:right;">Last</th><th style="text-align:right;">Market Value</th><th style="text-align:right;">Unrealized</th></tr></thead>
+            <tbody>
+              ${rows.map(p => {
+                const unr = p.unrealized_gain != null ? p.unrealized_gain : null;
+                const cls = unr == null ? '' : (unr >= 0 ? 'color:var(--green);' : 'color:var(--red);');
+                return `<tr>
+                  <td style="font-weight:800;color:var(--blue);">${p.symbol || '—'}</td>
+                  <td style="color:var(--mid);font-size:11px;">${(p.name || '').slice(0, 30)}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${(p.total_qty || 0).toFixed(2)}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${p.avg_cost != null ? fmtUSD(p.avg_cost) : '—'}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${fmtUSD(p.total_cost || 0)}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${p.last_price != null ? fmtUSD(p.last_price) : '—'}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${p.market_value != null ? fmtUSD(p.market_value) : '—'}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;${cls}">${unr != null ? fmtUSD(unr) : '—'}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>` : `<div class="tab-empty">No positions yet. Upload a Fidelity Account Positions CSV below to populate this fund.</div>`}
+        </section>`;
+    } catch (e) {
+      el.innerHTML = `
+        <section class="panel">
+          <header class="panel-head"><span class="panel-title">Open Positions</span></header>
+          <div class="tab-empty">No position data available (${e.message}). Use the upload widgets below to import positions.</div>
+        </section>`;
+    }
+  }
+
+  // CSV uploaders (shared between LP-fund and managed-account upload widgets)
+  async function uploadFundCsv(endpoint, fileInput, statusEl, btnEl, idleLabel) {
+    if (!CURRENT_FUND_ID) { statusEl.textContent = 'No fund selected'; return; }
+    const file = fileInput.files?.[0];
+    if (!file) { statusEl.textContent = 'Choose a file first'; statusEl.style.color = 'var(--red)'; return; }
+    btnEl.disabled = true; btnEl.textContent = 'Uploading…';
+    statusEl.textContent = '';
+    try {
+      const fd = new FormData();
+      fd.append('fund_id', CURRENT_FUND_ID);
+      fd.append('file', file);
+      const r = await window.dgaFetch(endpoint, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'HTTP ' + r.status);
+      statusEl.style.color = 'var(--green)';
+      statusEl.textContent = '✅ ' + (d.message || 'Uploaded ' + (d.imported || '?') + ' rows');
+      fileInput.value = '';
+      setTimeout(() => loadFundDetailContent(CURRENT_FUND_ID), 800);
+    } catch (e) {
+      statusEl.style.color = 'var(--red)';
+      statusEl.textContent = '❌ ' + e.message;
+    } finally {
+      btnEl.disabled = false; btnEl.textContent = idleLabel;
+    }
+  }
+
+  // Wire upload + back buttons (event delegation)
+  document.addEventListener('click', async (e) => {
+    if (e.target.id === 'lpd-back-btn' || e.target.id === 'acd-back-btn') {
+      showTab('fund');
+      loadFundOverview();
+      return;
+    }
+    // LP-fund uploads
+    if (e.target.id === 'lpd-upload-pos-btn') {
+      uploadFundCsv('/api/fund/import-positions',
+        document.getElementById('lpd-pos-file'),
+        document.getElementById('lpd-pos-status'),
+        e.target, 'Upload Positions');
+    }
+    if (e.target.id === 'lpd-upload-nav-btn') {
+      uploadFundCsv('/api/fund/import-annual-nav',
+        document.getElementById('lpd-nav-file'),
+        document.getElementById('lpd-nav-status'),
+        e.target, 'Upload Annual NAV');
+    }
+    // Managed-account — single Run (Balance Detail + optional Positions/Activity)
+    if (e.target.id === 'acd-run-btn') {
+      runAccountAnalysis(e.target);
+    }
+    // Managed-account — on-demand SnapTrade sync (automatic-import strip)
+    if (e.target.id === 'acd-snap-sync-btn') {
+      acdSnapSyncNow(e.target);
+    }
+    // Merge CSVs & download
+    if (e.target.id === 'acd-merge-btn') {
+      const f1   = document.getElementById('acd-merge-f1').files[0];
+      const f2   = document.getElementById('acd-merge-f2').files[0];
+      const stat = document.getElementById('acd-merge-status');
+      if (!f1 || !f2) { stat.textContent = '❌ Select both files first'; stat.style.color = 'var(--red)'; return; }
+      stat.textContent = 'Merging…'; stat.style.color = 'var(--blue)';
+      try {
+        const fd = new FormData();
+        fd.append('file1', f1);
+        fd.append('file2', f2);
+        const r = await window.dgaFetch('/api/fund/merge-balance-history', { method: 'POST', body: fd });
+        if (!r.ok) throw new Error(await r.text());
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'merged_balance_history.csv';
+        document.body.appendChild(a); a.click();
+        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+        stat.textContent = '✓ Downloaded'; stat.style.color = 'var(--green)';
+      } catch (err) {
+        stat.textContent = '❌ ' + err.message; stat.style.color = 'var(--red)';
+      }
+    }
+    // Save YTD Baseline
+    if (e.target.id === 'acd-baseline-btn') {
+      const stat = document.getElementById('acd-baseline-status');
+      const btn  = e.target;
+      const year = parseInt(document.getElementById('acd-bl-year')?.value || '0', 10);
+      const jan1 = parseFloat(document.getElementById('acd-bl-jan1-input')?.value || btn.dataset.jan1 || '0');
+      if (!CURRENT_FUND_ID) { stat.textContent = '❌ No account selected'; stat.style.color = 'var(--red)'; return; }
+      if (!year || !jan1)   { stat.textContent = '❌ Enter year and Jan 1 balance'; stat.style.color = 'var(--red)'; return; }
+      const flows     = JSON.parse(btn.dataset.flows     || '[]');
+      const notes     = document.getElementById('acd-bl-notes')?.value || '';
+      btn.disabled = true; btn.textContent = 'Saving…';
+      stat.textContent = ''; stat.style.color = '';
+      try {
+        const fd = new FormData();
+        fd.append('year',        year);
+        fd.append('jan1_balance', jan1);
+        fd.append('flows_json',  JSON.stringify(flows));
+        fd.append('notes',       notes);
+        const r = await window.dgaFetch(
+          '/api/fund/account/' + encodeURIComponent(CURRENT_FUND_ID) + '/set-ytd-baseline',
+          { method: 'POST', body: fd }
+        );
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'HTTP ' + r.status);
+        stat.textContent = '✅ Baseline saved — future YTD runs will auto-fill Jan 1 balance';
+        stat.style.color = 'var(--green)';
+        btn.textContent  = '💾 Save as YTD Baseline';
+        btn.disabled     = false;
+        // Update the "existing baseline" row
+        const ebl  = document.getElementById('acd-existing-baseline');
+        const eblV = document.getElementById('acd-existing-bl-val');
+        const eblD = document.getElementById('acd-existing-bl-date');
+        if (ebl)  ebl.style.display  = 'block';
+        if (eblV) eblV.textContent   = '$' + jan1.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+        if (eblD) eblD.textContent   = 'saved just now';
+      } catch (err) {
+        stat.textContent = '❌ ' + err.message; stat.style.color = 'var(--red)';
+        btn.textContent  = '💾 Save as YTD Baseline';
+        btn.disabled     = false;
+      }
+    }
+    // Exports — LP fund
+    if (e.target.id === 'lpd-export-excel-btn') triggerExport('excel', e.target);
+    if (e.target.id === 'lpd-export-pdf-btn')   triggerExport('pdf',   e.target);
+    // Exports — managed account
+    if (e.target.id === 'acd-export-excel-btn') triggerExport('excel', e.target);
+    if (e.target.id === 'acd-export-pdf-btn')   triggerExport('pdf',   e.target);
+  });
+
+  // ── File-picker filename feedback ────────────────────────────────────────
+  // Map: input-id → { nameEl-id, cardEl-id }
+  const _acdFileMap = {
+    'acd-ytd-pos':    { name: 'acd-fc-pos-name',    card: 'acd-fc-pos' },
+    'acd-ytd-act':    { name: 'acd-fc-act-name',    card: 'acd-fc-act' },
+    'acd-alltime-file': { name: 'acd-fc-alltime-name', card: 'acd-fc-alltime' },
+    'acd-merge-f1':   { name: 'acd-fc-m1-name',     card: 'acd-fc-m1' },
+    'acd-merge-f2':   { name: 'acd-fc-m2-name',     card: 'acd-fc-m2' },
+  };
+  document.addEventListener('change', function (e) {
+    const map = _acdFileMap[e.target.id];
+    if (!map) return;
+    const file    = e.target.files[0];
+    const nameEl  = document.getElementById(map.name);
+    const cardEl  = document.getElementById(map.card);
+    if (nameEl) nameEl.textContent = file ? '✓ ' + file.name : 'No file chosen';
+    if (cardEl) cardEl.classList.toggle('has-file', !!file);
+  });
+
+  // ── Managed-Account — single "Run" ────────────────────────────────────────
+  // One button, up to three files. The Balance & Income Detail CSV is the single
+  // source of truth for YTD returns / NAV / monthly chart AND the all-time chart
+  // (server writes the complete reconciled overview). Positions + Activity are
+  // optional and only add holdings analysis + per-stock cash-flow attribution —
+  // the server merges that run on top WITHOUT overwriting the balance-derived
+  // numbers. The balance CSV is also passed to the attribution run so it can
+  // read Jan-1 begin value (no "Jan 1 portfolio value" prompt).
+  async function runAccountAnalysis(btn) {
+    if (!CURRENT_FUND_ID) { alert('No account selected'); return; }
+    const bal  = document.getElementById('acd-alltime-file')?.files[0];
+    const pos  = document.getElementById('acd-ytd-pos')?.files[0];
+    const act  = document.getElementById('acd-ytd-act')?.files[0];
+    const stat = document.getElementById('acd-run-status');
+    if (!bal && !(pos && act)) {
+      stat.textContent = '❌ Choose the Balance & Income Detail CSV (Positions + Activity optional).';
+      stat.style.color = 'var(--red)'; return;
+    }
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Running…';
+    stat.textContent = ''; stat.style.color = 'var(--blue)';
+    const notes = [];
+    try {
+      // 1) Balance & Income Detail → authoritative YTD overview + all-time chart.
+      if (bal) {
+        const fd = new FormData();
+        fd.append('file', bal);
+        const r = await window.dgaFetch(
+          '/api/fund/' + encodeURIComponent(CURRENT_FUND_ID) + '/import-balance-history',
+          { method: 'POST', body: fd });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Balance import failed (HTTP ' + r.status + ')');
+        notes.push((d.months || '?') + ' mo · YTD ' + (d.ytd_label || ''));
+      }
+      // 2) Positions + Activity → holdings + attribution (merged, never clobbers
+      //    the balance-derived returns). Pass the balance CSV so the attribution
+      //    run has the Jan-1 value and never prompts for it.
+      if (pos && act) {
+        const fd = new FormData();
+        fd.append('positions_file', pos);
+        fd.append('activity_file',  act);
+        if (bal) fd.append('monthly_perf_file', bal);
+        const r = await window.dgaFetch(
+          '/api/fund/account/' + encodeURIComponent(CURRENT_FUND_ID) + '/ytd-run',
+          { method: 'POST', body: fd });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Attribution run failed (HTTP ' + r.status + ')');
+        notes.push(d.positions_sync_ok ? 'holdings + attribution' : (d.positions_sync_msg || 'attribution'));
+        try { _populateBaselineSection(d); } catch (_) {}
+      }
+      stat.style.color = 'var(--green)';
+      stat.textContent = '✅ ' + notes.join(' · ') + ' · Reloading…';
+      setTimeout(() => {
+        loadAllTimePerf(CURRENT_FUND_ID);
+        if (typeof loadAcctYtdSections === 'function') loadAcctYtdSections(CURRENT_FUND_ID);
+        if (typeof loadAcctPositions === 'function') loadAcctPositions(CURRENT_FUND_ID);
+      }, 500);
+    } catch (err) {
+      stat.style.color = 'var(--red)';
+      stat.textContent = '❌ ' + err.message;
+    } finally {
+      btn.disabled = false; btn.textContent = orig;
+    }
+  }
+
+  // ── SnapTrade auto-import strip (managed-account detail) ──────────────
+  // Shows which Fidelity account feeds this managed account automatically and
+  // offers an on-demand sync. Data still flows through the same stores the
+  // manual CSVs fill, so everything below (positions, YTD, charts) just reloads.
+  async function loadAcctSnapStrip(fundId) {
+    const strip = document.getElementById('acd-snap-strip');
+    if (!strip) return;
+    const badge = document.getElementById('acd-snap-badge');
+    const status = document.getElementById('acd-snap-status');
+    const note = document.getElementById('acd-snap-note');
+    const btn = document.getElementById('acd-snap-sync-btn');
+    strip.style.display = 'none';
+    try {
+      const r = await window.dgaFetch('/api/snaptrade/accounts');
+      if (!r.ok) return;   // non-GP or SnapTrade not configured — keep hidden
+      const d = await r.json();
+      const linked = (d.accounts || []).filter(a => a.fund_id === fundId && !a.hidden);
+      strip.style.display = '';
+      if (!linked.length) {
+        badge.textContent = 'NOT LINKED';
+        status.textContent = 'No Fidelity account is linked to this managed account yet.';
+        btn.style.display = 'none';
+        note.style.display = '';
+        // Inline assign: offer any unassigned (visible) SnapTrade accounts right
+        // here instead of sending the user to Settings.
+        const unassigned = (d.accounts || []).filter(a => !a.hidden && !a.fund_id);
+        if (unassigned.length) {
+          note.innerHTML = 'Assign a linked Fidelity account to this managed account: '
+            + '<select id="acd-snap-assign-sel" style="font-size:11px;padding:3px 6px;border:1px solid var(--panel-edge,#e2e8f0);border-radius:6px;background:var(--surface,#fff);color:var(--text-primary);margin:0 6px;">'
+            + unassigned.map(a => '<option value="' + _gfEsc(a.account_id) + '">'
+                + _gfEsc((a.account_name || a.brokerage || 'Account') + ' ••' + (a.account_mask || ''))
+                + (a.total_value != null ? ' · ' + _gfEsc(fmtUSDFull(a.total_value, 0)) : '') + '</option>').join('')
+            + '</select>'
+            + '<button id="acd-snap-assign-btn" class="tab-btn sm" style="font-size:10px;">Assign</button>'
+            + '<span id="acd-snap-assign-msg" style="margin-left:6px;font-size:10.5px;"></span>';
+          const aBtn = document.getElementById('acd-snap-assign-btn');
+          aBtn?.addEventListener('click', async () => {
+            const sel = document.getElementById('acd-snap-assign-sel');
+            const msg = document.getElementById('acd-snap-assign-msg');
+            if (!sel || !sel.value) return;
+            aBtn.disabled = true; aBtn.textContent = 'Assigning…';
+            try {
+              const rr = await window.dgaFetch('/api/snaptrade/assign', { method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ account_id: sel.value, fund_id: fundId }) });
+              const dd = await rr.json().catch(() => ({}));
+              if (!rr.ok || !dd.ok) throw new Error(dd.detail || rr.status);
+              loadAcctSnapStrip(fundId);
+              loadAcctPositions(fundId);
+            } catch (e) {
+              if (msg) { msg.style.color = 'var(--red,#dc2626)'; msg.textContent = 'Assign failed: ' + (e.message || e); }
+              aBtn.disabled = false; aBtn.textContent = 'Assign';
+            }
+          });
+        } else {
+          note.textContent = 'Link it in Settings → SnapTrade (assign the Fidelity account to this account). ' +
+                             'Positions, activity and balances then import automatically — the CSVs below stay as a manual backup.';
+        }
+        return;
+      }
+      btn.style.display = '';
+      let maxSync = null;
+      linked.forEach(a => { if (a.last_synced_at) { const t = Date.parse(a.last_synced_at); if (!isNaN(t) && (maxSync === null || t > maxSync)) maxSync = t; } });
+      let ago = '—', fresh = false;
+      if (maxSync !== null) {
+        const mins = Math.max(0, Math.round((Date.now() - maxSync) / 60000));
+        ago = mins < 60 ? (mins + 'm ago') : (mins < 1440 ? (Math.floor(mins/60) + 'h ago') : (Math.floor(mins/1440) + 'd ago'));
+        fresh = mins < 1440;
+      }
+      badge.textContent = fresh ? 'AUTO' : 'STALE';
+      const names = linked.map(a => (a.account_name || a.brokerage || 'Account') + ' ••' + (a.account_mask || '')).join(' + ');
+      // Slim one-line status: everything essential inline; the note element is
+      // reserved for sync results (acdSnapSyncNow writes it AFTER this reload
+      // so the message isn't clobbered) and assignment UI.
+      status.innerHTML = 'Fidelity <strong>' + _gfEsc(names) + '</strong>'
+        + ' · positions, activity &amp; balances auto-import daily'
+        + ' · synced <strong>' + _gfEsc(ago) + '</strong>'
+        + '<span style="color:var(--dim);"> · manual CSVs below remain the backup</span>';
+      note.style.display = 'none';
+      note.textContent = '';
+    } catch (e) { /* keep hidden */ }
+  }
+
+  async function acdSnapSyncNow(btn) {
+    if (!CURRENT_FUND_ID) return;
+    const note = document.getElementById('acd-snap-note');
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = '↻ Syncing…';
+    try {
+      const r = await dgaSnapRunSync(st => {
+        btn.textContent = _snapTickLabel(st);
+      });
+      if (!r.ok) throw new Error(r.detail || 'Sync failed');
+      const bh = (r.balance_history || []).find(h => h.fund_id === CURRENT_FUND_ID);
+      const acts = (r.activities || []).reduce((s, a) => s + (a.activities || 0), 0);
+      let msg = '✅ Synced.';
+      if (bh) {
+        msg += ' Balance history: ' + (bh.months_added || 0) + ' live month(s)';
+        if (bh.ytd_pct != null) msg += ' · YTD ' + (bh.ytd_pct >= 0 ? '+' : '') + Number(bh.ytd_pct).toFixed(2) + '%';
+        msg += bh.flows_estimated ? ' (flows estimated — no activity data yet).' : '.';
+      }
+      if (acts) msg += ' ' + acts + ' activities imported.';
+      if (bh) {
+        msg += bh.attribution_rows
+          ? ' Attribution: ' + bh.attribution_rows + ' names' +
+            (bh.activities_available === false ? ' (price-based estimate — trades pending).' : '.')
+          : ' ⚠ Attribution came back empty — use the Diagnose button in the attribution panel.';
+      }
+      const gated = (r.errors || []).find(e => /production key|gated/i.test(e.error || ''));
+      if (gated) msg += ' ⚠ Automatic activity import needs the SnapTrade pay-as-you-go production key.';
+      const otherErrs = (r.errors || []).filter(e => !/production key|gated/i.test(e.error || ''));
+      if (otherErrs.length) msg += ' ⚠ ' + otherErrs.length + ' issue(s) — see Settings → SnapTrade.';
+      loadAcctPositions(CURRENT_FUND_ID);
+      if (typeof loadAcctYtdSections === 'function') loadAcctYtdSections(CURRENT_FUND_ID);
+      loadAllTimePerf(CURRENT_FUND_ID);
+      // Await the strip reload FIRST — it rewrites/hides the note, which used
+      // to clobber this result message the moment it appeared.
+      await loadAcctSnapStrip(CURRENT_FUND_ID);
+      if (note) { note.style.display = ''; note.textContent = msg; }
+    } catch (e) {
+      if (note) { note.style.display = ''; note.textContent = '❌ ' + (e.message || e); }
+    } finally {
+      btn.disabled = false; btn.textContent = orig;
+    }
+  }
+
+  /** Enable/disable the Save baseline button based on whether year + jan1 are filled. */
+  function _blCheckEnable() {
+    const yr   = parseInt(document.getElementById('acd-bl-year')?.value || '0', 10);
+    const jan1 = parseFloat(document.getElementById('acd-bl-jan1-input')?.value || '0');
+    const btn  = document.getElementById('acd-baseline-btn');
+    if (!btn) return;
+    const ready = yr >= 2020 && jan1 > 0;
+    btn.disabled      = !ready;
+    btn.style.opacity = ready ? '1' : '.45';
+    btn.style.cursor  = ready ? 'pointer' : 'not-allowed';
+  }
+  // Expose to global scope so inline oninput attributes can reach it from inside the IIFE
+  window._blCheckEnable = _blCheckEnable;
+
+  /** Populate the "Set as YTD Baseline" panel from a completed YTD run result. */
+  function _populateBaselineSection(d) {
+    const jan1    = d.begin_value;
+    const flows   = d.flows       || [];
+    const xfers   = d.internal_transfers || [];
+    const curYear = new Date().getFullYear();
+
+    // Show summary block
+    const summaryEl = document.getElementById('acd-baseline-summary');
+    if (summaryEl) summaryEl.style.display = 'block';
+
+    const jan1El = document.getElementById('acd-bl-jan1');
+    if (jan1El && jan1 != null) {
+      jan1El.textContent = '$' + jan1.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+    }
+    const xferEl = document.getElementById('acd-bl-transfers');
+    if (xferEl) xferEl.textContent = xfers.length > 0 ? xfers.length + ' excluded' : 'None';
+
+    const flowsEl = document.getElementById('acd-bl-flows');
+    if (flowsEl) flowsEl.textContent = flows.length + ' deposits/withdrawals';
+
+    // Transfer-in notice
+    const noticeEl = document.getElementById('acd-bl-transfer-notice');
+    const listEl   = document.getElementById('acd-bl-transfer-list');
+    if (noticeEl) noticeEl.style.display = xfers.length > 0 ? 'block' : 'none';
+    if (listEl && xfers.length > 0) {
+      listEl.innerHTML = xfers.map(t =>
+        `<div>${t.date} · ${t.action} · $${Math.abs(t.amount).toLocaleString(undefined, {minimumFractionDigits:2})}</div>`
+      ).join('');
+    }
+
+    // Pre-fill year and jan1 inputs from the run result
+    const yearEl = document.getElementById('acd-bl-year');
+    if (yearEl && !yearEl.value) yearEl.value = curYear;
+
+    const jan1Input = document.getElementById('acd-bl-jan1-input');
+    if (jan1Input && jan1 != null) jan1Input.value = jan1.toFixed(2);
+
+    // Store flows payload on button for submission; then let _blCheckEnable decide state
+    const blBtn = document.getElementById('acd-baseline-btn');
+    if (blBtn) {
+      blBtn.dataset.jan1  = jan1 || '';
+      blBtn.dataset.flows = JSON.stringify(flows);
+    }
+    _blCheckEnable();
+
+    // Load existing baseline from server (non-blocking)
+    if (CURRENT_FUND_ID) {
+      window.dgaFetch('/api/fund/account/' + encodeURIComponent(CURRENT_FUND_ID) + '/ytd-baseline')
+        .then(r => r.ok ? r.json() : null)
+        .then(bdata => {
+          if (!bdata) return;
+          const ebl  = document.getElementById('acd-existing-baseline');
+          const eblV = document.getElementById('acd-existing-bl-val');
+          const eblD = document.getElementById('acd-existing-bl-date');
+          if (ebl)  ebl.style.display  = 'block';
+          if (eblV) eblV.textContent   = '$' + parseFloat(bdata.jan1_balance).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})
+            + ' (' + bdata.year + (bdata.notes ? ' · ' + bdata.notes : '') + ')';
+          if (eblD && bdata.updated_at) {
+            const dt = new Date(bdata.updated_at);
+            eblD.textContent = 'saved ' + dt.toLocaleDateString('en-US', _PT);
+          }
+        })
+        .catch(() => {});
+    }
+  }
+
+  // ── All-Time Performance state (per fund load) ─────────────────────────────
+  let _atpData             = null;   // full server response
+  let _atpFundId           = null;
+  let _atpBenchmark        = 'sp500';
+  let _atpPeriod           = 'all';  // 'all' | '5yr' | '3yr'
+  let _atpReturnMode       = 'annual'; // 'annual' | 'cumulative' | 'cagr'
+  let _atpSaving           = false;
+  let _atpBenchmarkFetching = false;
+  // year (number) → return_pct for the currently-selected benchmark
+  let _atpBenchmarkReturns = {};
+
+  const _BENCHMARK_OPTIONS = [
+    { key: 'sp500',      label: 'S&P 500' },
+    { key: 'dow30',      label: 'Dow 30' },
+    { key: 'nasdaq',     label: 'Nasdaq' },
+    { key: 'msci_world', label: 'MSCI World' },
+    { key: 'bonds',      label: 'Bond Index' },
+    { key: '60_40',      label: '60/40 Blend' },
+    { key: '85_15',      label: '85/15 Blend' },
+  ];
+
+  function _atpFilteredAnnual() {
+    const ann = (_atpData?.annual || []);
+    if (_atpPeriod === '3yr') return ann.slice(-3);
+    if (_atpPeriod === '5yr') return ann.slice(-5);
+    return ann;
+  }
+
+  function _atpRenderTable() {
+    const el  = document.getElementById('acd-annual-table-wrap');
+    if (!el || !_atpData) return;
+    const ann = _atpFilteredAnnual();
+    const bLabel = _BENCHMARK_OPTIONS.find(o => o.key === _atpBenchmark)?.label || 'Benchmark';
+    const fU = v => '$' + Math.abs(v).toLocaleString('en-US', {maximumFractionDigits: 0});
+    const fP = (v, plus=true) => v == null ? '—' : (plus && v>=0?'+':'')+v.toFixed(2)+'%';
+
+    // Compute cumulative / CAGR from the filtered start
+    let cumPort = 1.0, cumBmark = 1.0;
+    const rows = ann.map((a, idx) => {
+      // Use live-fetched benchmark returns if available, fall back to server value
+      const bRet = (_atpBenchmarkReturns[a.year] !== undefined)
+        ? _atpBenchmarkReturns[a.year]
+        : a.benchmark_return_pct;
+      cumPort  *= (1 + (a.return_pct || 0) / 100);
+      cumBmark *= (1 + (bRet || 0) / 100);
+      const yrs = idx + 1;
+      const cumPortPct  = (cumPort  - 1) * 100;
+      const cumBmarkPct = (cumBmark - 1) * 100;
+      const cagrPortPct  = (Math.pow(cumPort,  1/yrs) - 1) * 100;
+      const cagrBmarkPct = (Math.pow(cumBmark, 1/yrs) - 1) * 100;
+
+      let retVal, bmarkVal, alphaVal;
+      if (_atpReturnMode === 'cumulative') {
+        retVal   = cumPortPct;
+        bmarkVal = bRet != null ? cumBmarkPct : null;
+        alphaVal = bRet != null ? cumPortPct - cumBmarkPct : null;
+      } else if (_atpReturnMode === 'cagr') {
+        retVal   = cagrPortPct;
+        bmarkVal = bRet != null ? cagrBmarkPct : null;
+        alphaVal = bRet != null ? cagrPortPct - cagrBmarkPct : null;
+      } else {
+        retVal   = a.return_pct;
+        bmarkVal = bRet;
+        alphaVal = bRet != null ? Math.round((a.return_pct - bRet) * 100) / 100 : null;
+      }
+      const rc = retVal >= 0 ? 'var(--green)' : 'var(--red)';
+      const ac = alphaVal == null ? 'var(--mid)' : alphaVal >= 0 ? 'var(--green)' : 'var(--red)';
+      const net = (a.deposits || 0) - (a.withdrawals || 0);
+      const netStr = net === 0 ? '—' : (net>0?'+':'')+fU(Math.abs(net))+(net<0?' out':'');
+      const isManual = a.return_source === 'manual';
+      // Annual return cell: click-to-edit (only in annual mode — cumulative/CAGR are derived)
+      const retCell = _atpReturnMode === 'annual'
+        ? `<span data-edit-ret="${a.year}" title="${isManual ? 'Manual override — click to edit' : 'Click to override'}"
+             style="cursor:pointer;border-bottom:1px dashed ${isManual ? 'var(--blue)' : 'rgba(0,0,0,0.15)'};padding-bottom:1px;">
+             ${fP(retVal)}${isManual ? ' ✎' : ''}</span>`
+        : fP(retVal);
+      const begTip = a.inception_month
+        ? ` title="Inception deposit — account opened ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][a.inception_month-1]} ${a.year}"`
+        : '';
+      return `<tr style="border-top:1px solid var(--panel-edge);" data-year="${a.year}">
+        <td style="padding:5px 10px;font-weight:700;color:var(--text-primary);">${a.label || a.year}</td>
+        <td style="padding:5px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;"${begTip}>${a.beg_balance ? fU(a.beg_balance) : '—'}</td>
+        <td style="padding:5px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.end_balance ? fU(a.end_balance) : '—'}</td>
+        <td style="padding:5px 10px;text-align:right;font-weight:700;color:${rc};font-variant-numeric:tabular-nums;">${retCell}</td>
+        <td style="padding:5px 10px;text-align:right;color:#f59e0b;font-variant-numeric:tabular-nums;">${fP(bmarkVal)}</td>
+        <td style="padding:5px 10px;text-align:right;font-weight:700;color:${ac};font-variant-numeric:tabular-nums;">${fP(alphaVal)}</td>
+        <td style="padding:5px 10px;text-align:right;color:var(--mid);font-size:10px;font-variant-numeric:tabular-nums;">${netStr}</td>
+      </tr>`;
+    });
+
+    // Summary row
+    const n = ann.length;
+    if (n > 0) {
+      const totalCumPort  = (cumPort  - 1) * 100;
+      const totalCumBmark = (cumBmark - 1) * 100;
+      // Use actual elapsed months for CAGR so partial inception years don't
+      // distort the annualisation (e.g. 3 months ≠ 1 full year).
+      const totalMonths   = ann.reduce((s, a) => s + (a.data_months || 12), 0);
+      const totalYears    = Math.max(totalMonths / 12, 1/12);
+      const totalCagrPort  = (Math.pow(cumPort,  1/totalYears) - 1) * 100;
+      const totalCagrBmark = (Math.pow(cumBmark, 1/totalYears) - 1) * 100;
+      const hasBmark = ann.some(a => {
+        const bRet = (_atpBenchmarkReturns[a.year] !== undefined) ? _atpBenchmarkReturns[a.year] : a.benchmark_return_pct;
+        return bRet != null;
+      });
+      const totalAlpha = hasBmark ? totalCumPort - totalCumBmark : null;
+      const cagrAlpha  = hasBmark ? totalCagrPort - totalCagrBmark : null;
+      const summaryRc = totalCumPort >= 0 ? 'var(--green)' : 'var(--red)';
+      const summaryAc = totalAlpha == null ? 'var(--mid)' : totalAlpha >= 0 ? 'var(--green)' : 'var(--red)';
+      const totalNet  = ann.reduce((s, a) => s + ((a.deposits || 0) - (a.withdrawals || 0)), 0);
+      const totalNetStr = totalNet === 0 ? '—'
+        : (totalNet > 0 ? '+' : '') + fU(Math.abs(totalNet)) + (totalNet < 0 ? ' out' : '');
+      // Label: "2YR TOTAL" when exact, "20MO TOTAL" when months don't round to a whole year
+      const periodLabel = totalMonths % 12 === 0
+        ? `${Math.round(totalMonths/12)}YR`
+        : `${totalMonths}MO`;
+      rows.push(`<tr style="border-top:2px solid var(--panel-edge);background:rgba(91,184,212,0.04);">
+        <td style="padding:6px 10px;font-weight:800;color:var(--text-primary);font-size:10px;letter-spacing:0.5px;">${periodLabel} TOTAL</td>
+        <td style="padding:6px 10px;text-align:right;color:var(--mid);">—</td>
+        <td style="padding:6px 10px;text-align:right;color:var(--mid);">—</td>
+        <td style="padding:6px 10px;text-align:right;font-weight:800;color:${summaryRc};font-variant-numeric:tabular-nums;">${fP(totalCumPort)} cumul. / ${fP(totalCagrPort)} CAGR</td>
+        <td style="padding:6px 10px;text-align:right;color:#f59e0b;font-variant-numeric:tabular-nums;">${hasBmark ? fP(totalCumBmark)+' / '+fP(totalCagrBmark) : '—'}</td>
+        <td style="padding:6px 10px;text-align:right;font-weight:800;color:${summaryAc};font-variant-numeric:tabular-nums;">${hasBmark ? fP(totalAlpha)+' / '+fP(cagrAlpha) : '—'}</td>
+        <td style="padding:6px 10px;text-align:right;font-weight:700;color:var(--mid);font-size:10px;font-variant-numeric:tabular-nums;">${totalNetStr}</td>
+      </tr>`);
+    }
+
+    const retModeLabel = { annual: 'Annual Return', cumulative: 'Cumul. Return', cagr: 'CAGR' }[_atpReturnMode] || 'Return';
+    el.innerHTML = `
+      <div style="padding:10px 14px;border-bottom:1px solid var(--panel-edge);display:flex;flex-wrap:wrap;align-items:center;gap:8px;">
+        <!-- Period -->
+        <div style="display:flex;gap:2px;align-items:center;">
+          <span style="font-size:9px;color:var(--mid);margin-right:4px;font-weight:700;">PERIOD:</span>
+          ${['all','5yr','3yr'].map(p => `<button data-atp-period="${p}" class="tab-btn sm${_atpPeriod===p?'':' secondary'}" style="font-size:9px;padding:0 7px;">${p==='all'?'All-Time':p==='5yr'?'5-Year':'3-Year'}</button>`).join('')}
+        </div>
+        <!-- Return mode -->
+        <div style="display:flex;gap:2px;align-items:center;">
+          <span style="font-size:9px;color:var(--mid);margin-right:4px;font-weight:700;">RETURN:</span>
+          ${['annual','cumulative','cagr'].map(m => `<button data-atp-mode="${m}" class="tab-btn sm${_atpReturnMode===m?'':' secondary'}" style="font-size:9px;padding:0 7px;">${m==='annual'?'Annual':m==='cumulative'?'Cumulative':'CAGR'}</button>`).join('')}
+        </div>
+        <!-- Benchmark selector -->
+        <div style="display:flex;gap:4px;align-items:center;margin-left:auto;">
+          <span style="font-size:9px;color:var(--mid);font-weight:700;">BENCHMARK:</span>
+          <select id="atp-bmark-sel" style="background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:4px;color:#1e293b;font-size:10px;padding:2px 6px;height:24px;cursor:pointer;">
+            ${_BENCHMARK_OPTIONS.map(o => `<option value="${o.key}"${o.key===_atpBenchmark?' selected':''}>${o.label}</option>`).join('')}
+          </select>
+          <button id="atp-save-btn" class="tab-btn sm" style="font-size:9px;padding:0 10px;height:24px;" title="Save settings — LP will see this benchmark and period">Save to LP →</button>
+          <span id="atp-save-msg" style="font-size:10px;"></span>
+        </div>
+      </div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;">
+          <thead><tr style="background:rgba(0,0,0,0.03);">
+            <th style="padding:6px 10px;text-align:left;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">YEAR</th>
+            <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">BEG. VALUE</th>
+            <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">END VALUE</th>
+            <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--green);letter-spacing:0.8px;">${retModeLabel.toUpperCase()}</th>
+            <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:#f59e0b;letter-spacing:0.8px;">${bLabel.toUpperCase()}</th>
+            <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--blue);letter-spacing:0.8px;">ALPHA</th>
+            <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">NET FLOWS</th>
+          </tr></thead>
+          <tbody>${rows.join('')}</tbody>
+        </table>
+      </div>`;
+
+    // Wire period buttons
+    el.querySelectorAll('[data-atp-period]').forEach(b => {
+      b.addEventListener('click', () => {
+        _atpPeriod = b.dataset.atpPeriod;
+        _atpRenderTable();
+      });
+    });
+    // Wire return mode buttons
+    el.querySelectorAll('[data-atp-mode]').forEach(b => {
+      b.addEventListener('click', () => {
+        _atpReturnMode = b.dataset.atpMode;
+        _atpRenderTable();
+      });
+    });
+    // Wire benchmark selector — fetch live data for the new benchmark then re-render
+    const bSel = el.querySelector('#atp-bmark-sel');
+    if (bSel) bSel.addEventListener('change', async () => {
+      _atpBenchmark = bSel.value;
+      const msgEl = el.querySelector('#atp-save-msg');
+      if (_atpBenchmarkFetching) return;
+      _atpBenchmarkFetching = true;
+      if (msgEl) { msgEl.style.color = 'var(--mid)'; msgEl.textContent = 'Loading…'; }
+      try {
+        const years = (_atpData?.annual || []).map(a => a.year);
+        if (years.length) {
+          const r = await window.dgaFetch(
+            `/api/benchmark-annual?key=${encodeURIComponent(_atpBenchmark)}&years=${years.join(',')}`
+          );
+          const d = await r.json();
+          if (d.ok && d.returns) {
+            // Convert string keys from JSON back to numbers
+            _atpBenchmarkReturns = {};
+            for (const [k, v] of Object.entries(d.returns)) {
+              _atpBenchmarkReturns[parseInt(k, 10)] = v;
+            }
+          }
+        }
+      } catch(e) {
+        console.warn('[atp] benchmark fetch error:', e);
+      } finally {
+        _atpBenchmarkFetching = false;
+        if (msgEl) msgEl.textContent = '';
+      }
+      _atpRenderTable();
+    });
+    // Wire click-to-edit annual return overrides
+    el.querySelectorAll('[data-edit-ret]').forEach(span => {
+      span.addEventListener('click', () => {
+        const yr = parseInt(span.dataset.editRet, 10);
+        const annRow = (_atpData?.annual || []).find(a => a.year === yr);
+        const current = annRow?.return_pct ?? '';
+        const td = span.closest('td');
+        td.innerHTML = `
+          <div style="display:flex;align-items:center;gap:4px;">
+            <input id="ret-inp-${yr}" type="number" step="0.01" value="${current}"
+              style="width:70px;background:var(--navy-mid);border:1px solid var(--blue);border-radius:4px;
+                     color:var(--text-primary);font-size:11px;padding:2px 5px;text-align:right;"
+              placeholder="${current}">
+            <button id="ret-save-${yr}" style="font-size:9px;padding:2px 6px;background:var(--blue);
+              border:none;border-radius:3px;color:var(--text-primary);cursor:pointer;font-weight:700;">✓</button>
+            <button id="ret-del-${yr}" style="font-size:9px;padding:2px 6px;background:rgba(204,51,51,0.2);
+              border:1px solid rgba(204,51,51,0.4);border-radius:3px;color:#cc3333;cursor:pointer;"
+              title="Remove override">✕</button>
+          </div>`;
+        const inp  = td.querySelector(`#ret-inp-${yr}`);
+        const save = td.querySelector(`#ret-save-${yr}`);
+        const del  = td.querySelector(`#ret-del-${yr}`);
+        inp.focus(); inp.select();
+        const doSave = async (returnPct) => {
+          save.disabled = del.disabled = true;
+          try {
+            const r = await window.dgaFetch(`/api/v2/gp/fund/${encodeURIComponent(_atpFundId)}/manual-return`, {
+              method: 'POST', headers: {'Content-Type':'application/json'},
+              body: JSON.stringify({ year: yr, return_pct: returnPct }),
+            });
+            if (!r.ok) throw new Error((await r.json()).detail || r.status);
+            await loadAllTimePerf(_atpFundId);
+          } catch(e) {
+            alert('Save failed: ' + e.message);
+            save.disabled = del.disabled = false;
+          }
+        };
+        inp.addEventListener('keydown', e => { if (e.key === 'Enter') doSave(parseFloat(inp.value)); });
+        save.addEventListener('click', () => doSave(parseFloat(inp.value)));
+        del.addEventListener('click',  () => doSave(null));
+      });
+    });
+    // Wire Save button
+    const saveBtn = el.querySelector('#atp-save-btn');
+    const saveMsg = el.querySelector('#atp-save-msg');
+    if (saveBtn && _atpFundId) {
+      saveBtn.addEventListener('click', async () => {
+        if (_atpSaving) return;
+        _atpSaving = true;
+        saveBtn.disabled = true; saveBtn.textContent = '…'; if (saveMsg) saveMsg.textContent = '';
+        try {
+          const sr = await window.dgaFetch(`/api/v2/gp/fund/${encodeURIComponent(_atpFundId)}/settings`, {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ benchmark: _atpBenchmark, period: _atpPeriod }),
+          });
+          if (!sr.ok) throw new Error((await sr.json()).detail || sr.status);
+          if (saveMsg) { saveMsg.style.color='var(--green)'; saveMsg.textContent='✅ Saved — LP will see this'; }
+          // Re-fetch data with new benchmark
+          await loadAllTimePerf(_atpFundId);
+        } catch(e) {
+          if (saveMsg) { saveMsg.style.color='var(--red)'; saveMsg.textContent='❌ '+e.message; }
+        } finally { _atpSaving = false; saveBtn.disabled = false; saveBtn.textContent = 'Save to LP →'; }
+      });
+    }
+  }
+
+  async function loadAllTimePerf(fid) {
+    const el = document.getElementById('acd-alltime');
+    if (!el) return;
+    _atpFundId = fid;
+    try {
+      const r = await window.dgaFetch('/api/fund/' + encodeURIComponent(fid) + '/balance-history');
+      const data = await r.json();
+      if (!data.ok || !data.monthly.length) {
+        el.innerHTML = `<section class="panel"><div style="padding:14px;font-size:12px;color:var(--mid);">Upload Balance History CSV to see all-time performance.</div></section>`;
+        return;
+      }
+      _atpData      = data;
+      _atpBenchmark = data.benchmark_key  || 'sp500';
+      _atpPeriod    = data.period         || 'all';
+      // Seed benchmark returns from server response so table renders correctly on first load
+      _atpBenchmarkReturns = {};
+      for (const a of (data.annual || [])) {
+        if (a.benchmark_return_pct != null) _atpBenchmarkReturns[a.year] = a.benchmark_return_pct;
+      }
+
+      const monthly = data.monthly;
+      const annual  = data.annual;
+      const annRets = annual.map(a => 1 + a.return_pct / 100);
+      // Use actual data_months (not calendar-year count) so partial years
+      // (e.g. a 5-month current year or a mid-year inception) don't distort CAGR.
+      // This keeps the chart header in sync with the Annual Performance table.
+      const totalDataMonths = annual.reduce((s, a) => s + (a.data_months || 12), 0);
+      const totalDataYears  = Math.max(totalDataMonths / 12, 1/12);
+      const cagr = annRets.length ? (Math.pow(annRets.reduce((a,b)=>a*b,1), 1/totalDataYears)-1)*100 : null;
+      // Count only months with actual activity for the badge label
+      const activeMonths = monthly.filter(m => (m.end_balance || 0) > 0 || (m.deposits || 0) > 0).length;
+      const annualRet = cagr != null ? (cagr>=0?'+':'')+cagr.toFixed(1)+'% CAGR' : annual.length + ' yrs';
+
+      el.innerHTML = `
+        <section class="panel">
+          <details open>
+            <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
+              <span class="panel-title">All-Time Performance</span>
+              <span class="panel-badge">${activeMonths} months · ${annualRet}</span>
+              <div style="margin-left:auto;display:flex;gap:4px;">
+                <button class="tab-btn sm" data-atp-view="monthly" style="font-size:9px;padding:0 8px;">Monthly</button>
+                <button class="tab-btn sm secondary" data-atp-view="quarterly" style="font-size:9px;padding:0 8px;">Quarterly</button>
+                <button class="tab-btn sm secondary" data-atp-view="annual" style="font-size:9px;padding:0 8px;">Annual</button>
+              </div>
+            </summary>
+            <div style="padding:14px;position:relative;">
+              <canvas id="acd-alltime-canvas" style="width:100%;height:260px;display:block;"></canvas>
+              <div id="acd-alltime-tooltip" style="display:none;position:fixed;background:#fff;border:1px solid rgba(91,184,212,0.25);border-radius:8px;padding:10px 14px;font-size:11px;color:#1e293b;pointer-events:none;max-width:260px;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,0.18);"></div>
+            </div>
+          </details>
+        </section>
+        <section class="panel">
+          <details>
+            <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
+              <span class="panel-title">Annual Performance</span>
+              <span class="panel-badge">${annual.length} year${annual.length!==1?'s':''} · ${data.benchmark_label||'S&P 500'}</span>
+              <span class="ac-chevron">▸</span>
+            </summary>
+            <div id="acd-annual-table-wrap"></div>
+          </details>
+        </section>`;
+
+      requestAnimationFrame(() => drawAllTimeChart(data.monthly, 'monthly'));
+      _atpRenderTable();
+
+      el.querySelectorAll('[data-atp-view]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          el.querySelectorAll('[data-atp-view]').forEach(b => b.classList.toggle('secondary', b !== btn));
+          const view = btn.dataset.atpView;
+          const pts = view === 'quarterly' ? data.quarterly : view === 'annual' ? data.annual : data.monthly;
+          drawAllTimeChart(pts, view);
+        });
+      });
+    } catch(e) {
+      el.innerHTML = '';
+    }
+  }
+
+  function drawAllTimeChart(pts, view) {
+    const canvas  = document.getElementById('acd-alltime-canvas');
+    const tooltip = document.getElementById('acd-alltime-tooltip');
+    if (!canvas || !pts || !pts.length) return;
+
+    const dpr  = window.devicePixelRatio || 1;
+    const cssW = canvas.offsetWidth || canvas.parentElement.offsetWidth || 700;
+    const cssH = 260;
+    canvas.style.height = cssH + 'px';
+    canvas.width  = cssW * dpr;
+    canvas.height = cssH * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    const W = cssW, H = cssH;
+    // padR extended to fit right-axis dollar labels
+    const padL = 56, padR = 68, padT = 20, padB = 40;
+    const chartW = W - padL - padR;
+    const chartH = H - padT - padB;
+
+    const nonSkip = pts.filter(p => !p.skip);
+    const returns = nonSkip.map(p => p.return_pct || 0);
+    const maxAbs  = Math.max(Math.abs(Math.min(...returns.length ? returns : [0])), Math.abs(Math.max(...returns.length ? returns : [0])), 0.5);
+    const yRange  = maxAbs * 1.25;
+    const yAt = v => padT + chartH * (1 - (v + yRange) / (2 * yRange));
+    const y0  = yAt(0);
+
+    // Right Y-axis scale: dollar balances
+    const balances = pts.map(p => p.end_balance).filter(v => v != null && v > 0);
+    const cashOnlys = pts.map(p => p.cash_only_balance).filter(v => v != null && v > 0);
+    const allDollar = [...balances, ...cashOnlys];
+    const maxDollar = allDollar.length ? Math.max(...allDollar) * 1.12 : 1;
+    const minDollar = allDollar.length ? Math.min(...allDollar) * 0.88 : 0;
+    const yAtUSD = v => padT + chartH * (1 - (v - minDollar) / Math.max(maxDollar - minDollar, 1));
+
+    // Grid lines (left axis %)
+    ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+    ctx.lineWidth = 1;
+    [-yRange * 0.5, 0, yRange * 0.5, yRange].forEach(v => {
+      const y = yAt(v);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+      ctx.fillStyle = '#64748b';
+      ctx.font = '9.5px -apple-system,sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText((v >= 0 ? '+' : '') + v.toFixed(1) + '%', padL - 5, y + 3.5);
+    });
+
+    // Right-axis dollar labels
+    const dollarTicks = 4;
+    ctx.fillStyle = '#64748b';
+    ctx.font = '9px -apple-system,sans-serif';
+    ctx.textAlign = 'left';
+    for (let i = 0; i <= dollarTicks; i++) {
+      const v = minDollar + (maxDollar - minDollar) * (i / dollarTicks);
+      const y = yAtUSD(v);
+      const label = v >= 1e6 ? '$' + (v/1e6).toFixed(1) + 'M' : v >= 1e3 ? '$' + (v/1e3).toFixed(0) + 'K' : '$' + v.toFixed(0);
+      ctx.fillText(label, W - padR + 4, y + 3.5);
+    }
+
+    ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(padL, y0); ctx.lineTo(W - padR, y0); ctx.stroke();
+
+    const n = pts.length;
+    const totalSlot = chartW / n;
+    const barW = Math.max(6, Math.min(totalSlot * 0.6, 52));
+
+    const barMeta = pts.map((p, i) => {
+      const x    = padL + totalSlot * i + totalSlot / 2 - barW / 2;
+      const ret  = p.return_pct || 0;
+      const barH = Math.abs(yAt(ret) - y0);
+      const barY = ret >= 0 ? yAt(ret) : y0;
+      return { x, barW, barY, barH, ret, i, skip: !!p.skip };
+    });
+
+    barMeta.forEach(({ x, barW, barY, barH, ret, skip }) => {
+      if (skip) {
+        ctx.save();
+        ctx.globalAlpha = 0.25;
+        ctx.fillStyle = '#888';
+        ctx.fillRect(x + barW * 0.3, y0 - 3, barW * 0.4, 6);
+        ctx.globalAlpha = 1;
+        ctx.restore();
+        return;
+      }
+      ctx.fillStyle = ret >= 0 ? '#1a7f40' : '#cc3333';
+      ctx.beginPath();
+      const r = 3;
+      if (ret >= 0) {
+        ctx.moveTo(x + r, barY);
+        ctx.lineTo(x + barW - r, barY);
+        ctx.quadraticCurveTo(x + barW, barY, x + barW, barY + r);
+        ctx.lineTo(x + barW, barY + barH);
+        ctx.lineTo(x, barY + barH);
+        ctx.lineTo(x, barY + r);
+        ctx.quadraticCurveTo(x, barY, x + r, barY);
+      } else {
+        ctx.moveTo(x, barY);
+        ctx.lineTo(x + barW, barY);
+        ctx.lineTo(x + barW, barY + barH - r);
+        ctx.quadraticCurveTo(x + barW, barY + barH, x + barW - r, barY + barH);
+        ctx.lineTo(x + r, barY + barH);
+        ctx.quadraticCurveTo(x, barY + barH, x, barY + barH - r);
+        ctx.lineTo(x, barY);
+      }
+      ctx.closePath();
+      ctx.fill();
+    });
+
+    // Solid balance line (right axis)
+    const balPts = pts.map((p, i) => ({
+      x: padL + totalSlot * i + totalSlot / 2,
+      y: p.end_balance != null ? yAtUSD(p.end_balance) : null,
+    }));
+    ctx.save();
+    ctx.strokeStyle = '#5BB8D4';
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    let started = false;
+    balPts.forEach(pt => {
+      if (pt.y == null) return;
+      if (!started) { ctx.moveTo(pt.x, pt.y); started = true; }
+      else ctx.lineTo(pt.x, pt.y);
+    });
+    if (started) ctx.stroke();
+    // Dots
+    ctx.fillStyle = '#5BB8D4';
+    balPts.forEach(pt => {
+      if (pt.y == null) return;
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, 2.5, 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.restore();
+
+    // Dashed cash-only line
+    const cashPts = pts.map((p, i) => ({
+      x: padL + totalSlot * i + totalSlot / 2,
+      y: p.cash_only_balance != null ? yAtUSD(p.cash_only_balance) : null,
+    }));
+    ctx.save();
+    ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    let cStarted = false;
+    cashPts.forEach(pt => {
+      if (pt.y == null) return;
+      if (!cStarted) { ctx.moveTo(pt.x, pt.y); cStarted = true; }
+      else ctx.lineTo(pt.x, pt.y);
+    });
+    if (cStarted) ctx.stroke();
+    ctx.restore();
+
+    // Legend
+    ctx.save();
+    ctx.font = '9px -apple-system,sans-serif';
+    const lx = padL + 6, ly = padT + 10;
+    ctx.fillStyle = '#5BB8D4'; ctx.fillRect(lx, ly - 5, 16, 2);
+    ctx.fillStyle = '#1e293b'; ctx.textAlign = 'left';
+    ctx.fillText('Portfolio Balance', lx + 20, ly);
+    ctx.save(); ctx.strokeStyle = 'rgba(0,0,0,0.18)'; ctx.lineWidth = 1.5;
+    ctx.setLineDash([4,3]);
+    ctx.beginPath(); ctx.moveTo(lx + 80, ly - 4); ctx.lineTo(lx + 96, ly - 4); ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = '#64748b';
+    ctx.fillText('If Not Invested', lx + 100, ly);
+    ctx.restore();
+
+    // X-axis labels — diagonal to prevent overlap
+    ctx.save();
+    ctx.fillStyle = '#475569';
+    ctx.font = '9.5px -apple-system,sans-serif';
+    const skipEvery = (view === 'monthly' && n > 24) ? 3 : (view === 'monthly' && n > 12) ? 2 : 1;
+    pts.forEach((p, i) => {
+      if (i % skipEvery !== 0) return;
+      const cx = padL + totalSlot * i + totalSlot / 2;
+      ctx.save();
+      ctx.translate(cx, H - padB + 8);
+      ctx.rotate(-Math.PI / 4);
+      ctx.textAlign = 'right';
+      ctx.fillText(p.label || '', 0, 0);
+      ctx.restore();
+    });
+    ctx.restore();
+
+    const fmtM = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+
+    canvas.onmousemove = (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      let hit = -1;
+      barMeta.forEach(({ x, barW, i }) => { if (mx >= x - 6 && mx <= x + barW + 6) hit = i; });
+      if (hit < 0) { tooltip.style.display = 'none'; return; }
+      const p = pts[hit];
+      let html = `<div style="font-weight:800;font-size:12px;color:var(--blue);margin-bottom:6px;">${p.label}</div>`;
+      if (p.skip) {
+        html += `<div style="color:#f59e0b;font-size:11px;">N/A — Custodial Transfer</div>`;
+        html += `<div style="color:var(--mid);font-size:10px;margin-top:4px;">Assets moved between custodians this month; excluded from performance calculations.</div>`;
+      } else {
+        const retColor = p.return_pct >= 0 ? '#4ade80' : '#f87171';
+        html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Return</span><span style="font-weight:700;color:${retColor};">${fmtM(p.return_pct || 0)}</span></div>`;
+        if (p.end_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Ending Balance</span><span>${fmtUSDFull(p.end_balance, 0)}</span></div>`;
+        if (p.cash_only_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span style="color:var(--mid);">If Not Invested</span><span style="color:var(--mid);">${fmtUSDFull(p.cash_only_balance, 0)}</span></div>`;
+        const netDep = (p.deposits || 0) - (p.withdrawals || 0);
+        if (netDep !== 0) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Net Deposits</span><span style="color:${netDep>=0?'#4ade80':'#f87171'};">${netDep>=0?'+':'-'}${fmtUSDFull(Math.abs(netDep), 0)}</span></div>`;
+        if (p.dividends) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Dividends</span><span style="color:#c9a84c;">${fmtUSDFull(p.dividends, 0)}</span></div>`;
+      }
+      tooltip.innerHTML = html;
+      tooltip.style.display = 'block';
+      // Viewport-relative positioning (tooltip is position:fixed)
+      const ttW = tooltip.offsetWidth  || 240;
+      const ttH = tooltip.offsetHeight || 160;
+      const vW  = window.innerWidth;
+      const vH  = window.innerHeight;
+      let tx = e.clientX + 14;
+      let ty = e.clientY - 20;
+      if (tx + ttW > vW - 8)  tx = e.clientX - ttW - 10;
+      if (ty + ttH > vH - 8)  ty = e.clientY - ttH - 4;
+      tx = Math.max(8, tx);
+      ty = Math.max(8, ty);
+      tooltip.style.left = tx + 'px';
+      tooltip.style.top  = ty + 'px';
+    };
+    canvas.onmouseleave = () => { tooltip.style.display = 'none'; };
+  }
+
+  async function triggerExport(type, btn) {
+    if (!CURRENT_FUND_ID) { alert('No fund selected.'); return; }
+    const url  = `/api/fund/export-${type}?fund_id=${encodeURIComponent(CURRENT_FUND_ID)}`;
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳…';
+    try {
+      // Use window.dgaFetch so the v2 JWT is sent automatically (x-auth-v2-token)
+      const r = await window.dgaFetch(url);
+      if (!r.ok) {
+        const t = await r.text().catch(() => 'HTTP ' + r.status);
+        throw new Error(t);
+      }
+      const blob = await r.blob();
+      const disp = r.headers.get('content-disposition') || '';
+      const m    = disp.match(/filename="([^"]+)"/);
+      const name = m ? m[1] : (type === 'excel' ? 'report.xlsx' : 'report.pdf');
+      const a    = document.createElement('a');
+      a.href     = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(a.href);
+    } catch (err) {
+      alert('Export failed: ' + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  }
+
+  // ── LP Fund renderers ────────────────────────────────────────
+  function renderLpMeta(d) {
+    const fmtPct = v => v != null ? (v * 100).toFixed(2) + '%' : '—';
+    const lpFeeStr = d.mgmt_fee_pct != null ? fmtPct(d.mgmt_fee_pct) + ' fee' : '';
+    const navStr = d.nav != null ? fmtUSD(d.nav) : '—';
+    const navSub = d.nav_as_of ? 'as of ' + d.nav_as_of : (d.market_nav > 0 ? 'Live from positions' : 'No snapshot');
+    const lc  = 'style="color:var(--dim);font-size:9px;font-weight:800;letter-spacing:0.7px;padding:5px 8px 5px 14px;white-space:nowrap;vertical-align:middle;"';
+    const lci = 'style="color:var(--dim);font-size:9px;font-weight:800;letter-spacing:0.7px;padding:5px 8px;white-space:nowrap;vertical-align:middle;"';
+    const vc  = 'style="font-weight:700;color:var(--text-primary);padding:5px 16px 5px 0;vertical-align:middle;"';
+    document.getElementById('lpd-meta').innerHTML = `
+      <details open id="lpd-stats-details" style="background:var(--panel-bg);border:1px solid var(--panel-edge);border-radius:8px;margin-bottom:4px;">
+        <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;padding:7px 14px;font-size:9px;font-weight:800;letter-spacing:1px;color:var(--mid);user-select:none;">
+          <span>FUND OVERVIEW</span><span class="ac-chevron">▸</span>
+        </summary>
+        <table style="width:100%;border-collapse:collapse;font-size:11px;border-top:1px solid var(--panel-edge);">
+          <tbody>
+            <tr style="border-bottom:1px solid var(--panel-edge);">
+              <td ${lc}>TYPE</td>
+              <td ${vc}>LP Fund<div style="font-size:9px;color:var(--dim);font-weight:400;">${d.short_name || ''}</div></td>
+              <td ${lci}>STATUS</td>
+              <td ${vc}>${(d.status||'open').toUpperCase()}<div style="font-size:9px;color:var(--dim);font-weight:400;">Inception ${d.inception_date||'—'}${lpFeeStr ? ' · ' + lpFeeStr : ''}</div></td>
+              <td ${lci}>NAV</td>
+              <td ${vc}>${navStr}<div style="font-size:9px;color:var(--dim);font-weight:400;">${navSub}</div></td>
+              <td ${lci}>CARRY</td>
+              <td style="font-weight:600;color:var(--mid);padding:5px 14px 5px 0;vertical-align:middle;font-size:10px;">${fmtPct(d.carry_pct)}<div style="font-size:9px;color:var(--dim);">Hurdle ${fmtPct(d.hurdle_pct)}</div></td>
+            </tr>
+            <tr>
+              <td ${lc}>LP COUNT</td>
+              <td ${vc}>${d.lp_count||'—'}<div style="font-size:9px;color:var(--dim);font-weight:400;">${fmtUSD(d.total_committed||0)} committed</div></td>
+              <td ${lci}>HIGH WATERMARK</td>
+              <td style="font-weight:700;color:var(--text-primary);padding:5px 16px 5px 0;vertical-align:middle;" id="lpd-st-hwm">—</td>
+              <td ${lci}>GP ACCRUED CARRY</td>
+              <td style="font-weight:700;color:var(--text-primary);padding:5px 16px 5px 0;vertical-align:middle;" id="lpd-st-gp-carry">—</td>
+              <td ${lci}>LP NAV (NET OF CARRY)</td>
+              <td style="font-weight:700;color:var(--text-primary);padding:5px 14px 5px 0;vertical-align:middle;" id="lpd-st-lp-nav-net">—</td>
+            </tr>
+          </tbody>
+        </table>
+      </details>`;
+  }
+
+  function renderLpRoster(d) {
+    const el = document.getElementById('lpd-lps');
+    el.innerHTML = d.lps && d.lps.length ? `
+      <section class="panel">
+        <details>
+          <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
+            <span class="panel-title">LP Roster</span>
+            <span class="panel-badge">${d.lp_count} partners · ${fmtUSD(d.total_committed)}</span>
+            <span class="ac-chevron">▸</span>
+          </summary>
+          <table class="data-table" style="width:100%;">
+            <thead><tr><th>Name</th><th>Email</th><th style="text-align:right;">Commitment</th><th style="text-align:right;">Share</th></tr></thead>
+            <tbody>
+              ${d.lps.map(lp => {
+                const share = d.total_committed ? (lp.commitment_amount / d.total_committed * 100) : 0;
+                return `<tr>
+                  <td style="font-weight:700;color:var(--text-primary);">${lp.legal_name || '—'}</td>
+                  <td style="color:var(--mid);font-size:11px;">${lp.primary_email || '—'}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${fmtUSD(lp.commitment_amount)}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--blue);">${share.toFixed(2)}%</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </details>
+      </section>` : `
+      <section class="panel">
+        <header class="panel-head"><span class="panel-title">LP Roster</span></header>
+        <div class="tab-empty">No LPs yet. Upload the Annual NAV / Waterfall Excel below — it imports the LP roster, initial contributions, economics, inception year, <em>and</em> year-by-year NAV in one shot.</div>
+      </section>`;
+  }
+
+  async function loadLpPositions(fundId) {
+    const el = document.getElementById('lpd-positions');
+    el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading positions…</div>';
+    try {
+      const r = await window.dgaFetch('/api/fund/positions?fund_id=' + encodeURIComponent(fundId));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const rows = await r.json();
+      el.innerHTML = renderPositionsPanel(rows);
+    } catch (e) {
+      el.innerHTML = `<section class="panel"><header class="panel-head"><span class="panel-title">Open Positions</span></header><div class="tab-empty">No positions yet. Upload the Fidelity Account Positions CSV below.</div></section>`;
+    }
+  }
+
+  // ── Shared table sort utility ────────────────────────────────────────────────
+  // Sorts <tr> elements inside a <tbody> by a numeric data attribute on a given
+  // column index. Pinned rows (data-pin="bottom") are always kept at the end.
+  // Returns the new sort direction ('asc'|'desc').
+  function _sortTableByCol(tbody, colIndex, dir) {
+    // Close any open stock-info expander rows first — they're synthetic rows
+    // that must not participate in the sort.
+    tbody.querySelectorAll('tr.sie-row').forEach(function(r) {
+      const p = r.previousElementSibling;
+      if (p) p.classList.remove('sie-open');
+      r.remove();
+    });
+    const rows = Array.from(tbody.querySelectorAll('tr:not([data-pin])'));
+    const pinned = Array.from(tbody.querySelectorAll('tr[data-pin="bottom"]'));
+    rows.sort(function(a, b) {
+      const av = parseFloat(a.children[colIndex]?.dataset?.sortVal ?? 'NaN');
+      const bv = parseFloat(b.children[colIndex]?.dataset?.sortVal ?? 'NaN');
+      const an = isNaN(av), bn = isNaN(bv);
+      if (an && bn) return 0;
+      if (an) return 1;   // NaN always sinks to bottom
+      if (bn) return -1;
+      return dir === 'asc' ? av - bv : bv - av;
+    });
+    rows.forEach(r => tbody.appendChild(r));
+    pinned.forEach(r => tbody.appendChild(r));
+    return dir;
+  }
+
+  // Wire a <th> element to sort its table column on click.
+  // colIndex: 0-based column to sort. initialDir: 'desc'|'asc'.
+  // Returns a cleanup function (call to detach listener).
+  function _wireColumnSort(th, tbody, colIndex, initialDir) {
+    let dir = initialDir || 'desc';
+    const arrows = document.createElement('span');
+    arrows.style.cssText = 'margin-left:4px;font-size:9px;opacity:0.55;user-select:none;';
+    arrows.textContent = dir === 'desc' ? '▼' : '▲';
+    th.style.cursor = 'pointer';
+    th.appendChild(arrows);
+
+    function onClick() {
+      dir = dir === 'desc' ? 'asc' : 'desc';
+      arrows.textContent = dir === 'desc' ? '▼' : '▲';
+      arrows.style.opacity = '1';
+      _sortTableByCol(tbody, colIndex, dir);
+    }
+    th.addEventListener('click', onClick);
+    // Apply initial sort immediately
+    _sortTableByCol(tbody, colIndex, dir);
+    return function() { th.removeEventListener('click', onClick); };
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // FREE stock-info inline expander (ui377)
+  // Clicking a positions row NO LONGER funnels into the hero AI analyze flow
+  // (which spends tokens). It toggles an inline accordion under the row that
+  // renders GET /api/stock-info/{ticker} — zero-LLM, pure local market-data
+  // store, ~instant. The AI run stays available as a deliberate
+  // "⚡ Run AI analysis" text button INSIDE the expander.
+  // ══════════════════════════════════════════════════════════════
+  const _sieCache = {};   // ticker → {ts, data}; server caches 120s too
+
+  function _sieEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g,
+      c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+  }
+  function _sieFmtCompact(v) {
+    if (v == null || isNaN(v)) return null;
+    const a = Math.abs(v), sign = v < 0 ? '−' : '';
+    if (a >= 1e12) return sign + '$' + (a / 1e12).toFixed(2) + 'T';
+    if (a >= 1e9)  return sign + '$' + (a / 1e9).toFixed(2) + 'B';
+    if (a >= 1e6)  return sign + '$' + (a / 1e6).toFixed(1) + 'M';
+    if (a >= 1e3)  return sign + '$' + (a / 1e3).toFixed(1) + 'K';
+    return sign + '$' + a.toFixed(2);
+  }
+  function _sieSignedPct(v) {
+    if (v == null || isNaN(v)) return null;
+    return '<span class="' + cssClass(v) + '">' + (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%</span>';
+  }
+  function _sieStat(label, val) {
+    if (val == null || val === '') return '';
+    return '<div><div class="sie-stat">' + label + '</div><div class="sie-val">' + val + '</div></div>';
+  }
+  // Simple inline-SVG polyline from ~52 weekly closes [{d, c}] — no library.
+  function _sieSparkline(points) {
+    if (!points || points.length < 2) return '';
+    const closes = points.map(p => p.c).filter(c => c != null);
+    if (closes.length < 2) return '';
+    const min = Math.min(...closes), max = Math.max(...closes);
+    const range = (max - min) || 1;
+    const W = 140, H = 34, PAD = 2;
+    const pts = closes.map((c, i) => {
+      const x = PAD + i * (W - PAD * 2) / (closes.length - 1);
+      const y = PAD + (H - PAD * 2) * (1 - (c - min) / range);
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+    const color = closes[closes.length - 1] >= closes[0] ? 'var(--green, #16a34a)' : 'var(--red, #dc2626)';
+    return '<svg width="140" height="34" viewBox="0 0 140 34" style="flex:none;" aria-label="52-week sparkline">'
+      + '<polyline points="' + pts + '" fill="none" stroke="' + color
+      + '" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>';
+  }
+
+  // Build the expander body from the /api/stock-info payload.
+  // ctx (optional, from the clicked row): {qty, value, weight}
+  function _sieHTML(tk, d, ctx) {
+    const q = d.quote || {}, m = d.meta || {}, w = d.range52w || {};
+    const fin = d.financials || {}, dv = d.derived || {};
+    const name = m.name || fin.entity_name || tk;
+    const chips = [m.sector, m.industry].filter(Boolean);
+    const chipHtml = chips.length
+      ? '<span class="sie-chip">' + chips.map(_sieEsc).join(' · ') + '</span>' : '';
+    const pxHtml = q.price != null
+      ? '<span class="sie-px">$' + fmtPx(q.price)
+        + (q.pct_change != null
+            ? ' <span class="' + cssClass(q.pct_change) + '">' + fmtPct(q.pct_change) + '</span>' : '')
+        + '</span>'
+      : '';
+
+    let stats = '';
+    stats += _sieStat('52w High', w.high != null ? '$' + fmtPx(w.high) : null);
+    stats += _sieStat('52w Low',  w.low  != null ? '$' + fmtPx(w.low)  : null);
+    stats += _sieStat('Off High', _sieSignedPct(w.off_high_pct));
+    stats += _sieStat('YTD',      _sieSignedPct(w.ytd_pct));
+    stats += _sieStat('1Y',       _sieSignedPct(w.one_year_pct));
+    stats += _sieStat('Realized Vol', q.realized_vol != null ? Number(q.realized_vol).toFixed(1) + '%' : null);
+    stats += _sieStat('Mkt Cap',  _sieFmtCompact(dv.market_cap));
+    stats += _sieStat('P/E',      dv.pe != null ? Number(dv.pe).toFixed(1) : null);
+    stats += _sieStat('FCF Yield', dv.fcf_yield_pct != null ? Number(dv.fcf_yield_pct).toFixed(2) + '%' : null);
+    stats += _sieStat('Net Cash', _sieFmtCompact(dv.net_cash));
+    stats += _sieStat('Debt/Equity', dv.debt_to_equity != null ? Number(dv.debt_to_equity).toFixed(2) : null);
+    const fy = fin.fy ? ' FY' + String(fin.fy).slice(-2) : '';
+    stats += _sieStat('Revenue' + fy,    _sieFmtCompact(fin.revenue));
+    stats += _sieStat('Net Income' + fy, _sieFmtCompact(fin.net_income));
+    stats += _sieStat('EBITDA' + fy,     _sieFmtCompact(fin.ebitda));
+    // Margins stored as fractions (0–1) in company_financials — same convention
+    // as the Financials tab's _finPct.
+    stats += _sieStat('Gross Margin', fin.gross_margin     != null ? (fin.gross_margin     * 100).toFixed(1) + '%' : null);
+    stats += _sieStat('Op Margin',    fin.operating_margin != null ? (fin.operating_margin * 100).toFixed(1) + '%' : null);
+    stats += _sieStat('Net Margin',   fin.net_margin       != null ? (fin.net_margin       * 100).toFixed(1) + '%' : null);
+    stats += _sieStat('Diluted EPS',  fin.diluted_eps != null ? '$' + Number(fin.diluted_eps).toFixed(2) : null);
+    stats += _sieStat('FCF' + fy,     _sieFmtCompact(fin.free_cash_flow));
+    if (ctx) {
+      stats += _sieStat('Position Qty', ctx.qty != null
+        ? Number(ctx.qty).toLocaleString(undefined, { maximumFractionDigits: 2 }) : null);
+      stats += _sieStat('Position Value', _sieFmtCompact(ctx.value));
+      stats += _sieStat('Weight', ctx.weight != null ? Number(ctx.weight).toFixed(2) + '%' : null);
+    }
+
+    // Saved-report chip ONLY when a report actually exists — no chip otherwise.
+    const sr = d.saved_report || {};
+    const repChip = sr.exists
+      ? '<button type="button" class="sie-report-chip" data-sie-report title="Open the saved research report'
+        + (sr.generated_at ? ' (generated ' + _sieEsc(fmtDate(sr.generated_at)) + ')' : '') + '">📄 Saved report'
+        + (sr.rating ? ' · ' + _sieEsc(sr.rating) : '')
+        + (sr.price_target != null ? ' · PT $' + fmtPx(sr.price_target) : '')
+        + '</button>'
+      : '';
+
+    return (
+      '<div class="sie-head">'
+        + '<span class="sie-name">' + _sieEsc(name) + '</span>'
+        + chipHtml + pxHtml + _sieSparkline(d.sparkline)
+      + '</div>'
+      + (stats
+          ? '<div class="sie-grid">' + stats + '</div>'
+          : '<div style="font-size:11px;color:var(--dim);font-style:italic;padding:2px 0;">No stored data for '
+            + _sieEsc(tk) + ' yet — the market-data store syncs on demand.</div>')
+      + '<div class="sie-actions">'
+        + repChip
+        + '<button type="button" class="sie-run-ai" data-sie-run '
+        +   'title="Runs the full AI research pipeline (~$0.30–0.60) — deliberate click, never automatic">⚡ Run AI analysis</button>'
+      + '</div>'
+    );
+  }
+
+  // Toggle the expander row under `tr`. Accordion: only one open per tbody.
+  async function _sieToggleRow(tr, tk, ctx) {
+    if (!tr || !tk) return;
+    const next = tr.nextElementSibling;
+    if (next && next.classList.contains('sie-row')) {
+      next.remove();
+      tr.classList.remove('sie-open');
+      return;
+    }
+    const tbody = tr.parentElement;
+    if (tbody) tbody.querySelectorAll('tr.sie-row').forEach(function(x) {
+      const p = x.previousElementSibling;
+      if (p) p.classList.remove('sie-open');
+      x.remove();
+    });
+    const colspan = tr.children.length || 1;
+    const exp = document.createElement('tr');
+    exp.className = 'sie-row';
+    exp.innerHTML = '<td class="sie-cell" colspan="' + colspan + '"><div class="sie-wrap">'
+      + '<div style="font-size:11px;color:var(--dim);padding:4px 0;"><span class="spin">↻</span> Loading '
+      + _sieEsc(tk) + ' snapshot…</div></div></td>';
+    tr.insertAdjacentElement('afterend', exp);
+    tr.classList.add('sie-open');
+    const wrap = exp.querySelector('.sie-wrap');
+    try {
+      let data;
+      const hit = _sieCache[tk];
+      if (hit && Date.now() - hit.ts < 120000) {
+        data = hit.data;
+      } else {
+        const r = await window.dgaFetch('/api/stock-info/' + encodeURIComponent(tk));
+        if (!r.ok) throw new Error('stock-info ' + r.status);
+        data = await r.json();
+        _sieCache[tk] = { ts: Date.now(), data: data };
+      }
+      if (!exp.isConnected) return;   // row was closed / table re-rendered
+      wrap.innerHTML = _sieHTML(tk, data, ctx);
+      const rep = wrap.querySelector('[data-sie-report]');
+      if (rep) rep.addEventListener('click', function(e) { e.stopPropagation(); openReport(tk); });
+      const run = wrap.querySelector('[data-sie-run]');
+      if (run) run.addEventListener('click', function(e) {
+        e.stopPropagation();
+        // Deliberate AI run — uses the existing hero analyze flow.
+        showTab('research');
+        const input = document.getElementById('hero-ticker');
+        const btn   = document.getElementById('hero-run-btn');
+        if (input) input.value = tk;
+        if (btn) setTimeout(function() { btn.click(); }, 150);
+        if (input && input.scrollIntoView) input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    } catch (e) {
+      if (wrap) wrap.innerHTML = '<div style="font-size:11px;color:var(--red);padding:4px 0;">Could not load info: '
+        + _sieEsc(e.message || e) + '</div>';
+    }
+  }
+
+  function renderPositionsPanel(rows) {
+    const totalMv   = rows.reduce((s, p) => s + (p.market_value || 0), 0);
+    const totalCost = rows.reduce((s, p) => s + (p.total_cost || 0), 0);
+    if (!rows.length) {
+      return `<section class="panel"><header class="panel-head"><span class="panel-title">Open Positions</span></header><div class="tab-empty">No positions yet.</div></section>`;
+    }
+    // Compact 7-column layout (ui356): name → tooltip on the symbol; the two
+    // rebalance columns (Suggested % / New QTY) live in the side-by-side
+    // Rebalance panel now; Cost Basis dropped (avg cost × qty).
+    const html = `
+      <section class="panel">
+        <details open>
+          <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
+            <span class="panel-title">Open Positions</span>
+            <span class="panel-badge">${rows.length} · ${fmtUSD(totalMv)}</span>
+            <span class="ac-chevron">▸</span>
+          </summary>
+          <div style="max-height:520px;overflow-y:auto;">
+          <table class="acd-compact-table" id="pos-table">
+            <thead><tr>
+              <th>Symbol</th>
+              <th class="num">Qty</th>
+              <th class="num">Avg Cost</th>
+              <th class="num">Last</th>
+              <th class="num">Mkt Value</th>
+              <th class="num">Unreal.</th>
+              <th class="num" id="pos-th-curpct">Weight</th>
+            </tr></thead>
+            <tbody id="pos-tbody">
+              ${rows.map(p => {
+                const unr = p.unrealized_gain;
+                const cls = unr == null ? '' : (unr >= 0 ? 'color:var(--green);' : 'color:var(--red);');
+                const curPct = p.market_weight_pct != null
+                  ? p.market_weight_pct
+                  : (p.market_value && totalMv > 0 ? (p.market_value / totalMv * 100) : (p.weight_pct || null));
+                // Row click → FREE stock-info expander (ui377). Position ctx
+                // travels via data-attrs so the delegated handler can pass it.
+                return '<tr class="sie-clickable" data-ticker="' + _gfEsc(p.symbol || '') + '"' +
+                  ' data-qty="' + (p.total_qty != null ? p.total_qty : '') + '"' +
+                  ' data-mv="' + (p.market_value != null ? p.market_value : '') + '"' +
+                  ' data-wt="' + (curPct != null ? curPct.toFixed(4) : '') + '">' +
+                  '<td style="font-weight:800;color:var(--blue);" title="' + _gfEsc(p.name || '') + '">' + (p.symbol || '—') + '</td>' +
+                  '<td class="num">' + (p.total_qty || 0).toFixed(2) + '</td>' +
+                  '<td class="num">' + (p.avg_cost != null ? fmtUSD(p.avg_cost) : '—') + '</td>' +
+                  '<td class="num">' + (p.last_price != null ? fmtUSD(p.last_price) : '—') + '</td>' +
+                  '<td class="num" style="font-weight:700;">' + (p.market_value != null ? fmtUSD(p.market_value) : '—') + '</td>' +
+                  '<td class="num" style="' + cls + '">' + (unr != null ? fmtUSD(unr) : '—') + '</td>' +
+                  '<td class="num" style="color:var(--mid);" data-sort-val="' + (curPct != null ? curPct.toFixed(4) : '') + '">' + (curPct != null ? curPct.toFixed(1) + '%' : '—') + '</td>' +
+                  '</tr>';
+              }).join('')}
+            </tbody>
+          </table>
+          </div>
+        </details>
+      </section>`;
+
+    // Wire sort after DOM settles (requestAnimationFrame)
+    requestAnimationFrame(function() {
+      const th    = document.getElementById('pos-th-curpct');
+      const tbody = document.getElementById('pos-tbody');
+      if (th && tbody) _wireColumnSort(th, tbody, 6, 'desc');
+      // Row click → FREE inline info expander (no AI spend, ui377).
+      // Delegated so it survives sorts; re-render creates a fresh tbody.
+      if (tbody && !tbody._sieWired) {
+        tbody._sieWired = true;
+        tbody.addEventListener('click', function(e) {
+          const row = e.target.closest('tr[data-ticker]');
+          if (!row || !tbody.contains(row)) return;
+          const num = function(v) { const n = parseFloat(v); return isNaN(n) ? null : n; };
+          _sieToggleRow(row, row.dataset.ticker, {
+            qty:    num(row.dataset.qty),
+            value:  num(row.dataset.mv),
+            weight: num(row.dataset.wt),
+          });
+        });
+      }
+    });
+
+    return html;
+  }
+
+  // ── LP NAV bar chart (native canvas, no Chart.js) ──────────────
+  function _drawLpNavChart(canvasId, rows) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || !rows.length) return;
+    const dpr  = window.devicePixelRatio || 1;
+    const cssW = canvas.offsetWidth || 480;
+    const cssH = 150;
+    canvas.style.height = cssH + 'px';
+    canvas.width  = cssW * dpr;
+    canvas.height = cssH * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    const padL = 64, padR = 16, padT = 14, padB = 34;
+    const W = cssW - padL - padR;
+    const H = cssH - padT - padB;
+
+    const maxNav = Math.max(...rows.map(r => r.end_nav || 0)) * 1.12;
+    const minNav = 0;
+    const range  = maxNav - minNav || 1;
+    const barW   = Math.max(4, W / rows.length * 0.55);
+    const gap    = W / rows.length;
+
+    // Grid lines
+    ctx.strokeStyle = 'rgba(0,0,0,0.07)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const y = padT + H - (i / 4) * H;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + W, y); ctx.stroke();
+      const val = minNav + (i / 4) * range;
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '9px system-ui,sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(val >= 1e6 ? '$' + (val / 1e6).toFixed(1) + 'M' : val >= 1e3 ? '$' + (val / 1e3).toFixed(0) + 'K' : '$' + val.toFixed(0), padL - 4, y + 3);
+    }
+
+    // Bars
+    rows.forEach(function(r, i) {
+      const x = padL + i * gap + gap / 2 - barW / 2;
+      const navH = ((r.end_nav || 0) - minNav) / range * H;
+      const y = padT + H - navH;
+      const grad = ctx.createLinearGradient(0, y, 0, padT + H);
+      grad.addColorStop(0, 'rgba(91,184,212,0.90)');
+      grad.addColorStop(1, 'rgba(91,184,212,0.20)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(x, y, barW, navH, [3, 3, 0, 0]) : ctx.rect(x, y, barW, navH);
+      ctx.fill();
+      // Year label
+      ctx.fillStyle = '#64748b';
+      ctx.font = '9px system-ui,sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(String(r.year), x + barW / 2, padT + H + 14);
+      // Value label on top of bar
+      if (navH > 18) {
+        ctx.fillStyle = '#334155';
+        ctx.font = '8px system-ui,sans-serif';
+        const lbl = (r.end_nav || 0) >= 1e6 ? '$' + ((r.end_nav) / 1e6).toFixed(1) + 'M'
+                  : (r.end_nav || 0) >= 1e3  ? '$' + ((r.end_nav) / 1e3).toFixed(0) + 'K'
+                  : '$' + (r.end_nav || 0).toFixed(0);
+        ctx.fillText(lbl, x + barW / 2, y - 4);
+      }
+    });
+
+    // Axis
+    ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, padT + H); ctx.lineTo(padL + W, padT + H); ctx.stroke();
+  }
+
+  // ── LP Waterfall (CORRECT FIELD NAMES from /api/fund/waterfall) ─
+  async function loadLpWaterfall(fundId) {
+    const elW = document.getElementById('lpd-waterfall');
+    const elL = document.getElementById('lpd-lp-allocation');
+    elW.innerHTML = '<section class="panel"><header class="panel-head"><span class="panel-title">GP Waterfall &amp; Carry</span></header><div class="tab-loading"><span class="spin">↻</span> Loading…</div></section>';
+    try {
+      const r = await window.dgaFetch('/api/fund/waterfall?fund_id=' + encodeURIComponent(fundId));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const wf = await r.json();
+      const rows = wf.annual_snapshots || [];
+      const fmtPct = v => v == null ? '—' : v.toFixed(2) + '%';
+
+      // Fill placeholder cells in the compact Fund Overview table (renderLpMeta)
+      const hwmEl = document.getElementById('lpd-st-hwm');
+      if (hwmEl) {
+        hwmEl.textContent = wf.high_watermark != null ? fmtUSD(wf.high_watermark) : '—';
+        if (wf.hurdle_cleared != null) {
+          const sub = document.createElement('div');
+          sub.style.cssText = 'font-size:9px;color:var(--dim);font-weight:400;';
+          sub.textContent = 'Hurdle ' + (wf.hurdle_cleared ? '✓ cleared' : 'not cleared');
+          hwmEl.appendChild(sub);
+        }
+      }
+      const gpCarryEl = document.getElementById('lpd-st-gp-carry');
+      if (gpCarryEl) {
+        gpCarryEl.textContent = wf.gp_accrued_carry != null ? fmtUSD(wf.gp_accrued_carry) : '—';
+        if (wf.gp_equity_pct != null) {
+          const sub = document.createElement('div');
+          sub.style.cssText = 'font-size:9px;color:var(--dim);font-weight:400;';
+          sub.textContent = wf.gp_equity_pct.toFixed(2) + '% of NAV';
+          gpCarryEl.appendChild(sub);
+        }
+      }
+      const lpNavNetEl = document.getElementById('lpd-st-lp-nav-net');
+      if (lpNavNetEl) {
+        lpNavNetEl.textContent = wf.lp_nav_after_carry != null ? fmtUSD(wf.lp_nav_after_carry) : '—';
+        const sub = document.createElement('div');
+        sub.style.cssText = 'font-size:9px;color:var(--dim);font-weight:400;';
+        sub.textContent = 'after fractional carry';
+        lpNavNetEl.appendChild(sub);
+      }
+
+      if (!rows.length) {
+        elW.innerHTML = `
+          <section class="panel">
+            <header class="panel-head"><span class="panel-title">GP Waterfall &amp; Carry</span></header>
+            <div class="tab-empty">${wf.data_source_warning || 'No annual snapshots yet — upload the Annual NAV / Waterfall Excel.'}</div>
+          </section>`;
+        elL.innerHTML = '';
+        return;
+      }
+
+      // NAV chart canvas id
+      const navChartId = 'lpd-nav-chart-canvas';
+
+      elW.innerHTML = `
+        <section class="panel">
+          <header class="panel-head">
+            <span class="panel-title">GP Waterfall &amp; Carry</span>
+            <span class="panel-badge">${rows.length} year${rows.length !== 1 ? 's' : ''}</span>
+          </header>
+          <table class="fd-waterfall-table">
+            <thead><tr>
+              <th>Year</th><th>Jan 1 NAV</th><th>Dec 31 NAV</th>
+              <th>Gross Profit</th><th>HWM Threshold</th><th>Hurdle</th>
+              <th>Carry Earned</th><th>GP Equity</th><th>Accum GP %</th>
+            </tr></thead>
+            <tbody>
+              ${rows.map(r => `<tr>
+                <td>${r.year}</td>
+                <td>${fmtUSD(r.start_nav)}</td>
+                <td>${fmtUSD(r.end_nav)}</td>
+                <td style="${r.gross_profit >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtUSD(r.gross_profit)}</td>
+                <td>${fmtUSD(r.hwm_threshold)}</td>
+                <td>${fmtUSD(r.hurdle_amount)}</td>
+                <td>${r.carry_earned > 0 ? '<span style="color:var(--blue);font-weight:700;">' + fmtUSD(r.carry_earned) + '</span>' : '—'}</td>
+                <td>${fmtUSD(r.gp_equity_end)}</td>
+                <td>${fmtPct(r.accum_gp_pct)}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+          <div style="padding:14px 14px 6px;">
+            <div style="font-size:9px;color:var(--dim);font-weight:800;letter-spacing:0.8px;margin-bottom:8px;">NAV BY YEAR</div>
+            <canvas id="${navChartId}" style="width:100%;display:block;"></canvas>
+          </div>
+        </section>`;
+
+      // Draw NAV bar chart after DOM settles
+      requestAnimationFrame(function() { _drawLpNavChart(navChartId, rows); });
+
+      // Per-LP allocation table
+      if (wf.per_lp && wf.per_lp.length) {
+        elL.innerHTML = `
+          <section class="panel">
+            <header class="panel-head">
+              <span class="panel-title">Per-LP Allocation (After Carry)</span>
+              <span class="panel-badge">${wf.per_lp.length} LP${wf.per_lp.length !== 1 ? 's' : ''}</span>
+            </header>
+            <table class="data-table" style="width:100%;">
+              <thead><tr>
+                <th>LP</th><th style="text-align:right;">Commitment</th><th style="text-align:right;">Share</th>
+                <th style="text-align:right;">Carry Charge</th><th style="text-align:right;">NAV After Carry</th>
+              </tr></thead>
+              <tbody>
+                ${wf.per_lp.map(lp => `<tr>
+                  <td style="font-weight:700;color:var(--text-primary);">${lp.legal_name}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${fmtUSD(lp.commitment)}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--blue);">${lp.share_pct.toFixed(2)}%</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--red);">${fmtUSD(lp.carry_charge || 0)}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:700;">${fmtUSD(lp.nav_after_carry || 0)}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </section>`;
+      } else {
+        elL.innerHTML = '';
+      }
+    } catch (e) {
+      elW.innerHTML = `<section class="panel"><header class="panel-head"><span class="panel-title">GP Waterfall &amp; Carry</span></header><div class="tab-empty">Could not load: ${e.message}</div></section>`;
+      elL.innerHTML = '';
+    }
+  }
+
+  // ── Managed Account renderers ────────────────────────────────
+  // benchmark choices for the chart overlay
+  const BENCH_OPTIONS = [
+    { key: 'SPY',  label: 'SPY — S&P 500' },
+    { key: 'QQQ',  label: 'QQQ — Nasdaq 100' },
+    { key: 'DIA',  label: 'DIA — Dow Jones' },
+    { key: 'URTH', label: 'URTH — MSCI World' },
+    { key: 'EFA',  label: 'EFA — MSCI EAFE' },
+    { key: 'AGG',  label: 'AGG — US Bonds' },
+  ];
+  let _acctBenchKey    = 'SPY';
+  let _acctChartData   = null; // cached {mc, spy, mdPct, begBalance, totalDeps, totalWdrs, benchYtd}
+  let _acctPositionsMV = null; // live sum(market_value) from positions, set after positions load
+
+  function renderAcctMeta(d) {
+    // Hero stat tiles (ui340) — the old version buried NAV/YTD/alpha in a
+    // dense 11px two-row table. Every element ID is unchanged (the chart/
+    // positions loaders write textContent + cssText into them), and sizing
+    // lives on the .acd-tile-value PARENT because those writers REPLACE
+    // cssText on the value elements.
+    const fmtPct = v => v != null ? (v * 100).toFixed(2) + '%' : '—';
+    const feeStr = d.mgmt_fee_pct != null ? fmtPct(d.mgmt_fee_pct) + ' fee' : '';
+    const navStr = d.nav != null ? fmtUSD(d.nav) : '—';
+    const navSub = d.nav_as_of ? 'as of ' + d.nav_as_of : 'Live from positions';
+    const selOpts = BENCH_OPTIONS.map(o =>
+      `<option value="${o.key}"${o.key === _acctBenchKey ? ' selected' : ''}>${o.label}</option>`
+    ).join('');
+    document.getElementById('acd-meta').innerHTML = `
+      <div id="acd-stats-details">
+        <div class="acd-tiles">
+          <div class="acd-tile">
+            <div class="acd-tile-label">Account Value</div>
+            <div class="acd-tile-value"><span id="acd-nav-tile-val">${navStr}</span></div>
+            <div class="acd-tile-sub" id="acd-nav-tile-sub">${navSub}</div>
+          </div>
+          <div class="acd-tile">
+            <div class="acd-tile-label">YTD Return</div>
+            <div class="acd-tile-value"><span id="acd-pos-ret-val">—</span></div>
+            <div class="acd-tile-sub">Time-weighted (TWR)
+              <span style="display:none;"><span id="acd-md-val">—</span></span>
+            </div>
+          </div>
+          <div class="acd-tile">
+            <div class="acd-tile-label" id="acd-bench-label">${_acctBenchKey} YTD</div>
+            <div class="acd-tile-value"><span id="acd-bench-val">—</span></div>
+            <div class="acd-tile-sub">
+              <select id="acd-bench-select" style="background:var(--surface,#f8fafc);border:1px solid var(--panel-edge);color:var(--text-primary,#1e293b);border-radius:4px;padding:1px 4px;font-size:9.5px;cursor:pointer;max-width:100%;">
+                ${selOpts}
+              </select>
+            </div>
+          </div>
+          <div class="acd-tile">
+            <div class="acd-tile-label">Alpha</div>
+            <div class="acd-tile-value"><span id="acd-alpha-val">—</span></div>
+            <div class="acd-tile-sub" id="acd-alpha-sub">vs ${_acctBenchKey}</div>
+          </div>
+          <div class="acd-tile">
+            <div class="acd-tile-label">Your Personal Return</div>
+            <div class="acd-tile-value"><span id="acd-xirr-val">—</span></div>
+            <div class="acd-tile-sub" id="acd-xirr-label">Money-weighted · reflects your deposit timing</div>
+          </div>
+        </div>
+        <div class="acd-meta-line">
+          <span>Managed Account${d.short_name ? ' · <strong>' + d.short_name + '</strong>' : ''}</span>
+          <span>Status <strong>${(d.status||'open').toUpperCase()}</strong></span>
+          <span>Inception <strong>${d.inception_date||'—'}</strong></span>
+          ${feeStr ? '<span><strong>' + feeStr + '</strong></span>' : ''}
+        </div>
+      </div>`;
+  }
+
+  async function loadAcctPositions(fundId) {
+    const el = document.getElementById('acd-positions');
+    el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading positions…</div>';
+    try {
+      const r = await window.dgaFetch('/api/fund/positions?fund_id=' + encodeURIComponent(fundId));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const rows = await r.json();
+      el.innerHTML = renderPositionsPanel(rows);
+      // Sum market values from positions; update NAV tile and investment-return tile
+      let totalMV = 0;
+      (rows || []).forEach(p => {
+        totalMV += parseFloat(p.market_value || 0);
+      });
+      if (totalMV > 0) {
+        const navEl = document.getElementById('acd-nav-tile-val');
+        if (navEl) navEl.textContent = fmtUSD(totalMV);
+        const navSub = document.getElementById('acd-nav-tile-sub');
+        if (navSub) navSub.textContent = 'Live from positions';
+        _acctPositionsMV = totalMV;
+        _updatePositionsReturnTile();
+      }
+
+      // Rebalance panel placeholder (Run button lives in ITS header so it
+      // lines up with the positions table); replaced by the saved result.
+      renderRebalancePlaceholder(fundId);
+      loadSavedRebalance(fundId);
+
+    } catch (e) {
+      el.innerHTML = '<section class="panel"><header class="panel-head"><span class="panel-title">Open Positions</span></header><div class="tab-empty">No positions yet.</div></section>';
+    }
+  }
+
+  async function loadAcctYtdSections(fundId) {
+    const elP = document.getElementById('acd-perf-tiles');
+    const elB = document.getElementById('acd-balance');
+    const elA = document.getElementById('acd-attribution');
+    const elH = document.getElementById('acd-history');
+    elB.innerHTML = '<section class="panel"><header class="panel-head"><span class="panel-title">Monthly Investment Balance vs Benchmark</span></header><div class="tab-loading"><span class="spin">↻</span> Loading…</div></section>';
+    elA.innerHTML = ''; elH.innerHTML = ''; if (elP) elP.innerHTML = '';
+    try {
+      const r = await window.dgaFetch('/api/fund/account/' + encodeURIComponent(fundId) + '/ytd-cache');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const cache = await r.json();
+      const data = cache.result_json
+        ? (typeof cache.result_json === 'string' ? JSON.parse(cache.result_json) : cache.result_json)
+        : null;
+      if (!data) throw new Error('no data');
+      renderAcctPerfTiles(data, cache.ytd_pct);
+      renderAcctBalance(data, cache.ytd_pct);
+      renderAcctAttribution(data);
+      renderAcctHistory(data);
+    } catch (e) {
+      if (elP) elP.innerHTML = '';
+      elB.innerHTML = `<section class="panel"><header class="panel-head"><span class="panel-title">Monthly Performance YTD</span></header><div class="tab-empty">No data yet. Upload the Fidelity "Investment Income &amp; Balance Detail" CSV below.</div></section>`;
+    }
+  }
+
+  // ── Rebalance helpers ──────────────────────────────────────────────────────
+
+  function renderRebalancePlaceholder(fundId) {
+    const elResult = document.getElementById('acd-rebalance-result');
+    if (!elResult) return;
+    elResult.innerHTML =
+      '<section class="panel">' +
+        '<div class="panel-head" style="display:flex;align-items:center;gap:8px;">' +
+          '<span class="panel-title">Rebalance Suggestions</span>' +
+          '<span id="acd-rebalance-status" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;"></span>' +
+          '<button id="acd-rebalance-btn" class="tab-btn sm" style="font-size:10px;">📊 Run</button>' +
+        '</div>' +
+        '<div style="padding:10px 12px;font-size:11px;color:var(--text-secondary,#58616f);">Run to compute suggested weights from research ratings &amp; upside — results appear here beside the positions.</div>' +
+      '</section>';
+    document.getElementById('acd-rebalance-btn')
+      ?.addEventListener('click', () => runAcctRebalance(fundId));
+  }
+
+  async function runAcctRebalance(fundId) {
+    const btn = document.getElementById('acd-rebalance-btn');
+    const status = document.getElementById('acd-rebalance-status');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Running…'; }
+    if (status) status.textContent = '';
+    try {
+      const r = await window.dgaFetch('/api/v2/gp/fund/' + encodeURIComponent(fundId) + '/rebalance', {method:'POST'});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      if (!data.ok) throw new Error(data.detail || 'Rebalance failed');
+      renderRebalanceResult(data, fundId);
+      // Re-query: renderRebalanceResult replaced the panel (and the status el).
+      const st2 = document.getElementById('acd-rebalance-status');
+      if (st2) { st2.style.color='var(--green)'; st2.textContent='✓ ' + new Date(data.run_at).toLocaleString('en-US', _PT); }
+    } catch(e) {
+      if (status) { status.style.color='var(--red)'; status.textContent='❌ ' + e.message; }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '📊 Run'; }
+    }
+  }
+
+  async function loadSavedRebalance(fundId) {
+    try {
+      const r = await window.dgaFetch('/api/v2/gp/fund/' + encodeURIComponent(fundId) + '/rebalance');
+      if (!r.ok) return;
+      const data = await r.json();
+      if (data.ok && data.rows) renderRebalanceResult(data, fundId);
+    } catch(_) {}
+  }
+
+  function renderRebalanceResult(data, fundId) {
+    if (!data || !data.rows) return;
+    // (ui356) The positions table no longer carries Suggested %/New QTY cells —
+    // this panel, side by side with it, is the single home for rebalance data.
+    const elResult = document.getElementById('acd-rebalance-result');
+    if (!elResult) return;
+
+    const runDate = data.run_at ? new Date(data.run_at).toLocaleString('en-US', _PT) : '—';
+    const evImprove = (data.suggested_ev || 0) - (data.current_ev || 0);
+
+    const rowsHtml = (data.rows || []).slice().sort(function(a,b){ return (b.suggested_pct||0)-(a.suggested_pct||0); }).map(function(row) {
+      const diff = (row.suggested_pct||0) - (row.current_pct||0);
+      const diffCol = diff > 0.5 ? 'var(--green)' : diff < -0.5 ? 'var(--red)' : 'var(--mid)';
+      const ratingColors = {'Buy':'var(--green)','Strong Buy':'var(--green)','Hold':'var(--mid)','Sell':'var(--red)','Strong Sell':'var(--red)'};
+      const ratingCol = ratingColors[row.rating] || 'var(--mid)';
+      const upside = row.upside_pct;
+      const sd = row.shares_delta;
+      let sharesStr = '—', sharesCol = 'var(--dim)';
+      if (sd != null && Math.abs(sd) >= 0.01) {
+        sharesStr = (sd > 0 ? '+' : '') + sd.toFixed(2);
+        sharesCol = sd > 0 ? 'var(--green)' : 'var(--red)';
+      }
+      return '<tr>' +
+        '<td style="font-weight:800;color:var(--blue);" title="Score ' + (row.score||0).toFixed(2) + '">' + row.ticker + '</td>' +
+        '<td style="color:' + ratingCol + ';">' + (row.rating||'—') + '</td>' +
+        '<td class="num" style="color:' + ((upside||0)>=0?'var(--green)':'var(--red)') + ';">' + (upside!=null?(upside>=0?'+':'')+upside.toFixed(1)+'%':'—') + '</td>' +
+        '<td class="num" style="color:var(--mid);">' + (row.current_pct||0).toFixed(1) + '% <span style="color:var(--blue);opacity:.55;">→</span> <span style="color:' + diffCol + ';font-weight:700;">' + (row.suggested_pct||0).toFixed(1) + '%</span></td>' +
+        '<td class="num" style="font-weight:700;color:' + sharesCol + ';" title="Δ shares to trade">' + sharesStr + '</td>' +
+        '</tr>';
+    }).join('');
+
+    const emailBtnId = 'reb-email-btn-' + fundId;
+    const emailMsgId = 'reb-email-msg-' + fundId;
+    elResult.innerHTML =
+      '<section class="panel" data-ac="1">' +
+        '<details open>' +
+          '<summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;justify-content:space-between;">' +
+            '<span style="display:flex;align-items:center;gap:8px;">' +
+              '<span class="panel-title">Rebalance Suggestions</span>' +
+              '<span class="panel-badge">' + (data.equity_count || data.rows.length) + ' equities</span>' +
+              '<span style="font-size:10px;color:var(--mid);">Run: ' + runDate + '</span>' +
+            '</span>' +
+            '<span style="display:flex;align-items:center;gap:6px;flex-shrink:0;" onclick="event.stopPropagation()">' +
+              '<span id="acd-rebalance-status" style="font-size:10px;min-width:0;overflow:hidden;text-overflow:ellipsis;"></span>' +
+              '<button id="acd-rebalance-btn" class="tab-btn sm" style="font-size:9px;padding:0 10px;white-space:nowrap;">📊 Run</button>' +
+              '<span id="' + emailMsgId + '" style="font-size:10px;min-width:0;"></span>' +
+              '<button id="' + emailBtnId + '" class="tab-btn sm" style="font-size:9px;padding:0 10px;white-space:nowrap;">📨 Email</button>' +
+            '</span>' +
+          '</summary>' +
+          '<div style="padding:8px 12px 6px;">' +
+          '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;font-size:11px;color:var(--mid);">' +
+            '<span style="font-size:8.5px;font-weight:800;letter-spacing:.7px;color:var(--dim);">EXPECTED VALUE</span>' +
+            '<span style="font-variant-numeric:tabular-nums;font-weight:700;">' + (data.current_ev||0).toFixed(1) + '%</span>' +
+            '<span style="color:var(--blue);opacity:.6;">→</span>' +
+            '<span style="font-variant-numeric:tabular-nums;font-weight:800;' + (evImprove>=0?'color:var(--green)':'color:var(--red)') + ';">' + (data.suggested_ev||0).toFixed(1) + '%</span>' +
+            '<span style="background:rgba(34,197,94,0.12);color:' + (evImprove>=0?'var(--green)':'var(--red)') + ';padding:1px 8px;border-radius:5px;font-size:10px;font-weight:700;">' + (evImprove>=0?'+':'') + evImprove.toFixed(1) + '%</span>' +
+            '<span style="font-size:9px;color:var(--dim);">wtd avg upside</span>' +
+          '</div>' +
+          '<div style="max-height:460px;overflow-y:auto;">' +
+          '<table class="acd-compact-table">' +
+            '<thead><tr>' +
+              '<th>Ticker</th>' +
+              '<th>Rating</th>' +
+              '<th class="num">Upside</th>' +
+              '<th class="num">Cur → Sug</th>' +
+              '<th class="num">Δ Sh</th>' +
+            '</tr></thead>' +
+            '<tbody>' + rowsHtml + '</tbody>' +
+          '</table>' +
+          '</div>' +
+        '</div>' +
+        '</details>' +
+      '</section>';
+
+    // Wire the Run + email buttons (both live in the panel header now)
+    document.getElementById('acd-rebalance-btn')
+      ?.addEventListener('click', () => runAcctRebalance(fundId));
+    const emailBtn = document.getElementById(emailBtnId);
+    const emailMsg = document.getElementById(emailMsgId);
+    if (emailBtn) {
+      emailBtn.addEventListener('click', async () => {
+        // Prompt for recipient — default to GP's own email
+        const defaultTo = (window.DGA_USER && window.DGA_USER.email) || '';
+        const to = prompt('Send rebalance report to:', defaultTo);
+        if (!to || !to.includes('@')) return;
+        emailBtn.disabled = true;
+        emailBtn.textContent = '⏳ Sending…';
+        if (emailMsg) emailMsg.textContent = '';
+        try {
+          const r = await window.dgaFetch(
+            '/api/v2/gp/fund/' + encodeURIComponent(fundId) + '/rebalance/email',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ to }),
+            }
+          );
+          const d = await r.json();
+          if (d.ok) {
+            if (emailMsg) { emailMsg.style.color='var(--green)'; emailMsg.textContent = '✓ Sent to ' + to; }
+          } else {
+            if (emailMsg) { emailMsg.style.color='var(--red)'; emailMsg.textContent = '✗ ' + (d.error || r.status); }
+          }
+        } catch (e) {
+          if (emailMsg) { emailMsg.style.color='var(--red)'; emailMsg.textContent = '✗ ' + e.message; }
+        } finally {
+          emailBtn.disabled = false;
+          emailBtn.textContent = '📨 Email Report';
+        }
+      });
+    }
+
+  }
+
+  // Compute and display the positions-based (investment) return + alpha.
+  // Called after positions load (to get current MV) or after bench changes.
+  function _updatePositionsReturnTile() {
+    const el = document.getElementById('acd-pos-ret-val');
+    if (!el || !_acctChartData) return;
+    // Headline YTD RETURN = the benchmark-comparable TIME-WEIGHTED return (the
+    // same figure shown as "Portfolio Return"). The old positions-based formula
+    // (MV − deposits + withdrawals − begin) / begin divided by the Jan-1 balance
+    // ALONE, which blows up for an account funded mid-year (small begin → values
+    // like −200%) and isn't comparable to a benchmark. TWRR is the correct
+    // headline and the only sound basis for alpha vs the index. (mdPct already
+    // resolves to TWRR when available, falling back to Modified Dietz.)
+    const ret = _acctChartData.mdPct;
+    const benchYtd = _acctChartData.benchYtd;
+    if (ret == null) { el.textContent = '—'; el.style.color = 'var(--mid)'; return; }
+    el.textContent = (ret >= 0 ? '+' : '') + ret.toFixed(2) + '%';
+    el.style.color = ret >= 0 ? 'var(--green)' : 'var(--red)';
+    const av = document.getElementById('acd-alpha-val');
+    if (av) {
+      if (benchYtd != null) {
+        const alpha = ret - benchYtd;
+        av.textContent = (alpha >= 0 ? '+' : '') + alpha.toFixed(2) + '%';
+        av.style.color = alpha >= 0 ? 'var(--green)' : 'var(--red)';
+      } else {
+        av.textContent = '—'; av.style.color = 'var(--mid)';
+      }
+    }
+  }
+
+  function renderAcctPerfTiles(data, cachedYtdPct) {
+    const elP = document.getElementById('acd-perf-tiles');
+    // Compact stats are now in acd-meta; this div is no longer used for tiles
+    if (elP) elP.innerHTML = '';
+
+    const mc    = data.monthly_chart;
+    const spy   = data.spy_monthly;
+    // Portfolio Return: prefer TWRR (benchmark-comparable), fall back to MD when unavailable
+    const twrrPct = data.twrr_return_pct != null ? data.twrr_return_pct : null;
+    const mdPct   = twrrPct != null ? twrrPct
+                  : (data.md_return_pct != null ? data.md_return_pct
+                  : (cachedYtdPct != null ? cachedYtdPct : null));
+    // Display-time guard (also catches CACHED runs from before the server guard):
+    // a money-weighted return contradicting TWRR by an impossible margin for an
+    // unlevered long account is a Modified-Dietz artifact — blank it.
+    let xirrPct = data.xirr_return_pct != null ? data.xirr_return_pct : null;
+    if (xirrPct != null && twrrPct != null && Math.abs(xirrPct - twrrPct) > 50) {
+      data = Object.assign({}, data, { xirr_note: data.xirr_note ||
+        'Money-weighted return is unreliable for this account — funded mid-year from a small base, so cash-flow timing dominates. Use the time-weighted Portfolio Return.' });
+      xirrPct = null;
+    }
+    const spyPts = spy && spy.points ? spy.points : [];
+    const spyPct = spyPts.length ? spyPts[spyPts.length - 1].ytd_pct : null;
+    const fmtP   = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+    const cls    = v => v == null ? 'color:var(--mid);' : (v >= 0 ? 'color:var(--green);' : 'color:var(--red);');
+
+    // Extract beginning-of-year balance and YTD flows from monthly data.
+    // Three-tier fallback for begBalance:
+    //   1. Server-side ytd_beg_balance (present in new cache entries)
+    //   2. months[0].beg_balance       (added to mc_monthly in the same server update)
+    //   3. Modified-Dietz algebra:     BMV = (EMV - CF·(1+0.5·R)) / (1+R)
+    const months   = (mc && mc.monthly) ? mc.monthly : [];
+    const totalDeps = data.ytd_total_deposits
+                   ?? months.reduce((s, m) => s + (m.perf_detail?.deposits    || 0), 0);
+    const totalWdrs = data.ytd_total_withdrawals
+                   ?? months.reduce((s, m) => s + (m.perf_detail?.withdrawals || 0), 0);
+
+    let begBalance = data.ytd_beg_balance ?? data.begin_value ?? 0;
+    if (!begBalance && months.length) begBalance = months[0].beg_balance || 0;
+    if (!begBalance && months.length) {
+      const m0  = months.find(m => !m.skip) || months[0];
+      const R   = (m0.return_pct || 0) / 100;
+      const EMV = m0.end_balance || 0;
+      const CF  = (m0.perf_detail?.deposits    || 0)
+                - (m0.perf_detail?.withdrawals || 0);
+      const denom = 1 + R;
+      if (EMV > 0 && Math.abs(denom) > 0.0001) {
+        begBalance = (EMV - CF * (1 + 0.5 * R)) / denom;
+      }
+      console.group('[DGA] YTD begBalance — Modified Dietz inversion');
+      console.log('  Source month :', m0.label || m0.month);
+      console.log('  R (return)   :', (R * 100).toFixed(4) + '%');
+      console.log('  EMV (end bal):', EMV.toLocaleString());
+      console.log('  CF (net flow):', CF.toLocaleString());
+      console.log('  BMV derived  :', begBalance.toFixed(2));
+      console.groupEnd();
+    } else {
+      console.log('[DGA] YTD begBalance source:', data.ytd_beg_balance != null ? 'server field' : (months[0]?.beg_balance ? 'mc_monthly[0]' : 'n/a'), '→', begBalance);
+    }
+
+    // Cache for re-use when positions load or benchmark changes
+    _acctChartData = { mc, spy, mdPct, begBalance, totalDeps, totalWdrs, benchYtd: spyPct };
+
+    // Populate compact table cells (renderAcctMeta renders the skeleton)
+    const benchVal = document.getElementById('acd-bench-val');
+    if (benchVal) { benchVal.textContent = fmtP(spyPct); benchVal.style.cssText = 'font-weight:700;' + cls(spyPct); }
+    const mdEl = document.getElementById('acd-md-val');
+    if (mdEl) {
+      mdEl.textContent = fmtP(mdPct);
+      mdEl.style.cssText = 'font-weight:700;' + cls(mdPct);
+      // Show a subtle note when we're showing MD fallback instead of true TWRR
+      if (twrrPct == null && mdPct != null) {
+        mdEl.title = 'Modified Dietz (TWRR unavailable — upload monthly performance CSV for exact figure)';
+      }
+    }
+    const xirrEl    = document.getElementById('acd-xirr-val');
+    const xirrLabel = document.getElementById('acd-xirr-label');
+    if (xirrEl) {
+      if (xirrPct != null) {
+        xirrEl.textContent = fmtP(xirrPct);
+        xirrEl.style.cssText = 'font-weight:700;' + cls(xirrPct);
+        // When XIRR == TWRR it means no external cash flows were detected
+        // (account funded via internal transfer/merge).  Show a helpful tooltip.
+        const noFlows = (twrrPct != null && Math.abs(xirrPct - twrrPct) < 0.01);
+        xirrEl.title = noFlows
+          ? 'No external cash flows — Personal Return equals Portfolio Return (period MWRR = TWRR)'
+          : 'Period MWRR — same time window as Portfolio Return; reflects timing of your deposits & withdrawals. Not annualised.';
+        if (xirrLabel) {
+          xirrLabel.textContent = noFlows
+            ? 'No external cash flows this period'
+            : 'Money-weighted · same period as Portfolio Return';
+        }
+      } else {
+        xirrEl.textContent = '—';
+        xirrEl.style.color = 'var(--mid)';
+        // data.xirr_note is set when the money-weighted figure was blanked as
+        // unreliable (mid-year funding from a low base → unstable Modified Dietz).
+        xirrEl.title = data.xirr_note || 'Personal Return requires cash flow history (activity CSV)';
+        if (xirrLabel) {
+          xirrLabel.textContent = data.xirr_note
+            ? 'Unreliable for this account — use Portfolio Return'
+            : 'Money-weighted · same period as Portfolio Return';
+        }
+      }
+    }
+
+    // Wire benchmark selector (embedded in the compact table)
+    const sel = document.getElementById('acd-bench-select');
+    if (sel) {
+      sel.value = _acctBenchKey;
+      sel.addEventListener('change', function(e) {
+        _acctBenchKey = e.target.value;
+        const lbl = document.getElementById('acd-bench-label');
+        if (lbl) lbl.textContent = _acctBenchKey + ' YTD';
+        const sub = document.getElementById('acd-alpha-sub');
+        if (sub) sub.textContent = 'vs ' + _acctBenchKey;
+        if (_acctChartData) fetchBenchAndRedraw(_acctChartData.mc, _acctChartData.spy);
+      });
+    }
+
+    // Populate investment-return tile if positions are already loaded
+    _updatePositionsReturnTile();
+  }
+
+  async function fetchBenchAndRedraw(mc, baseSpy) {
+    // baseSpy is the stored SPY data; if user picks different bench, fetch it
+    let benchData = baseSpy;
+    if (_acctBenchKey !== 'SPY') {
+      try {
+        const r = await window.dgaFetch('/api/market/spy-monthly?ticker=' + encodeURIComponent(_acctBenchKey));
+        if (r.ok) benchData = await r.json();
+      } catch (_) {}
+    }
+    // Update bench tile values
+    const pts = benchData && benchData.points ? benchData.points : [];
+    const benchYtd = pts.length ? pts[pts.length - 1].ytd_pct : null;
+    const benchLabel = BENCH_OPTIONS.find(o => o.key === _acctBenchKey)?.key || _acctBenchKey;
+    const el = document.getElementById('acd-bench-label');
+    if (el) el.textContent = benchLabel + ' YTD';
+    const bv = document.getElementById('acd-bench-val');
+    if (bv) {
+      bv.textContent = benchYtd != null ? (benchYtd >= 0 ? '+' : '') + benchYtd.toFixed(2) + '%' : '—';
+      bv.style.color = benchYtd != null ? (benchYtd >= 0 ? 'var(--green)' : 'var(--red)') : '';
+    }
+    const alSub = document.getElementById('acd-alpha-sub');
+    if (alSub) alSub.textContent = 'vs ' + benchLabel;
+    // Store updated benchYtd and recompute alpha via positions-return
+    if (_acctChartData) _acctChartData.benchYtd = benchYtd;
+    _updatePositionsReturnTile();
+    drawAcctBalanceChart(mc, benchData);
+  }
+
+  function renderAcctBalance(data, cachedYtdPct) {
+    const elB = document.getElementById('acd-balance');
+    const mc   = data.monthly_chart;
+    const pts  = mc && mc.monthly ? mc.monthly : [];
+    const mdPct = data.md_return_pct != null ? data.md_return_pct : (cachedYtdPct || null);
+    // MERGE — do not overwrite. renderAcctPerfTiles has already populated
+    // begBalance / totalDeps / totalWdrs / benchYtd; replacing the object here
+    // wipes those fields and breaks _updatePositionsReturnTile (YTD tile stays blank).
+    _acctChartData = { ...(_acctChartData || {}), mc, spy: data.spy_monthly, mdPct };
+
+    if (!pts.length) {
+      elB.innerHTML = `
+        <section class="panel">
+          <header class="panel-head"><span class="panel-title">Monthly Performance YTD</span></header>
+          <div class="tab-empty">Upload the Fidelity "Investment Income &amp; Balance Detail" CSV below to populate this chart.</div>
+        </section>`;
+      return;
+    }
+    elB.innerHTML = `
+      <section class="panel">
+        <details open id="acd-balance-details">
+          <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
+            <span class="panel-title">Monthly Performance YTD</span>
+            <span class="panel-badge">${pts.length} months</span>
+          </summary>
+          <div style="position:relative;padding:0 12px 8px;">
+            <canvas id="acd-balance-canvas" style="width:100%;height:220px;display:block;"></canvas>
+            <div id="acd-bar-tooltip" style="display:none;position:fixed;background:#fff;border:1px solid rgba(91,184,212,0.25);border-radius:8px;padding:10px 14px;font-size:11px;color:#1e293b;pointer-events:none;max-width:260px;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,0.18);"></div>
+          </div>
+          <div style="display:flex;gap:18px;justify-content:center;padding:4px 0 10px;font-size:11px;">
+            <span style="display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:12px;height:12px;background:#1a7f40;border-radius:2px;"></span> Portfolio gain</span>
+            <span style="display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:12px;height:12px;background:#cc3333;border-radius:2px;"></span> Portfolio loss</span>
+            <span style="display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:24px;height:2px;background:#c9a84c;"></span> SPY monthly</span>
+          </div>
+        </details>
+      </section>`;
+    // Draw after layout settles; also redraw when toggled open (canvas needs visible dimensions)
+    const detailsEl = document.getElementById('acd-balance-details');
+    if (detailsEl) {
+      detailsEl.addEventListener('toggle', () => {
+        if (detailsEl.open) {
+          requestAnimationFrame(() => drawAcctMonthlyBarChart(pts));
+        }
+      });
+    }
+    requestAnimationFrame(() => drawAcctMonthlyBarChart(pts));
+  }
+
+  function drawAcctMonthlyBarChart(pts) {
+    const canvas = document.getElementById('acd-balance-canvas');
+    const tooltip = document.getElementById('acd-bar-tooltip');
+    if (!canvas || !pts.length) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.offsetWidth || canvas.parentElement.offsetWidth || 700;
+    const cssH = 220;
+    canvas.style.height = cssH + 'px';
+    canvas.width  = cssW * dpr;
+    canvas.height = cssH * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    const W = cssW, H = cssH;
+    const padL = 56, padR = 14, padT = 16, padB = 32;
+    const chartW = W - padL - padR;
+    const chartH = H - padT - padB;
+
+    // Compute SPY monthly returns from consecutive spy_ytd_pct
+    const spyMonthly = pts.map((p, i) => {
+      const curr = p.spy_ytd_pct;
+      if (curr == null) return null;
+      if (i === 0) return curr;
+      const prev = pts[i - 1].spy_ytd_pct;
+      return prev != null ? curr - prev : curr;
+    });
+
+    const returns = pts.filter(p => !p.skip).map(p => p.return_pct || 0);
+    const allVals = [...returns, ...spyMonthly.filter((v, i) => v != null && !pts[i]?.skip)];
+    const maxAbs  = Math.max(Math.abs(Math.min(...allVals.length ? allVals : [0])), Math.abs(Math.max(...allVals.length ? allVals : [0])), 0.5);
+    const yRange  = maxAbs * 1.25;
+
+    const yAt = v => padT + chartH * (1 - (v + yRange) / (2 * yRange));
+    const y0  = yAt(0);
+
+    // Grid lines
+    ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+    ctx.lineWidth = 1;
+    [-yRange * 0.5, 0, yRange * 0.5, yRange].forEach(v => {
+      const y = yAt(v);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+      ctx.fillStyle = '#64748b';
+      ctx.font = '9.5px -apple-system,sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText((v >= 0 ? '+' : '') + v.toFixed(1) + '%', padL - 5, y + 3.5);
+    });
+
+    // Zero line
+    ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(padL, y0); ctx.lineTo(W - padR, y0); ctx.stroke();
+
+    const n = pts.length;
+    const totalSlot = chartW / n;
+    const barW = Math.max(8, Math.min(totalSlot * 0.55, 52));
+
+    // Bars
+    const barMeta = pts.map((p, i) => {
+      const x = padL + totalSlot * i + totalSlot / 2 - barW / 2;
+      const ret = p.return_pct || 0;
+      const barH = Math.abs(yAt(ret) - y0);
+      const barY = ret >= 0 ? yAt(ret) : y0;
+      return { x, barW, barY, barH, ret, i, skip: !!p.skip };
+    });
+
+    barMeta.forEach(({ x, barW, barY, barH, ret, skip }) => {
+      if (skip) {
+        ctx.save();
+        ctx.globalAlpha = 0.25;
+        ctx.fillStyle = '#888';
+        ctx.fillRect(x + barW * 0.3, y0 - 3, barW * 0.4, 6);
+        ctx.globalAlpha = 1;
+        ctx.restore();
+        return;
+      }
+      ctx.fillStyle = ret >= 0 ? '#1a7f40' : '#cc3333';
+      ctx.beginPath();
+      const r = 3;
+      if (ret >= 0) {
+        ctx.moveTo(x + r, barY);
+        ctx.lineTo(x + barW - r, barY);
+        ctx.quadraticCurveTo(x + barW, barY, x + barW, barY + r);
+        ctx.lineTo(x + barW, barY + barH);
+        ctx.lineTo(x, barY + barH);
+        ctx.lineTo(x, barY + r);
+        ctx.quadraticCurveTo(x, barY, x + r, barY);
+      } else {
+        ctx.moveTo(x, barY);
+        ctx.lineTo(x + barW, barY);
+        ctx.lineTo(x + barW, barY + barH - r);
+        ctx.quadraticCurveTo(x + barW, barY + barH, x + barW - r, barY + barH);
+        ctx.lineTo(x + r, barY + barH);
+        ctx.quadraticCurveTo(x, barY + barH, x, barY + barH - r);
+        ctx.lineTo(x, barY);
+      }
+      ctx.closePath();
+      ctx.fill();
+    });
+
+    // SPY overlay dots + dashed line
+    ctx.strokeStyle = '#c9a84c';
+    ctx.setLineDash([4, 3]);
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    let started = false;
+    spyMonthly.forEach((v, i) => {
+      if (v == null) return;
+      const cx = padL + totalSlot * i + totalSlot / 2;
+      const cy = yAt(v);
+      if (!started) { ctx.moveTo(cx, cy); started = true; } else ctx.lineTo(cx, cy);
+    });
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#c9a84c';
+    spyMonthly.forEach((v, i) => {
+      if (v == null) return;
+      const cx = padL + totalSlot * i + totalSlot / 2;
+      ctx.beginPath(); ctx.arc(cx, yAt(v), 3.5, 0, Math.PI * 2); ctx.fill();
+    });
+
+    // X labels
+    ctx.fillStyle = '#475569';
+    ctx.font = '10px -apple-system,sans-serif';
+    ctx.textAlign = 'center';
+    pts.forEach((p, i) => {
+      const cx = padL + totalSlot * i + totalSlot / 2;
+      ctx.fillText(p.label || String(p.month || ''), cx, H - 10);
+    });
+
+    // Hover tooltip
+    const fmtM = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+    const fmtC = v => v >= 0 ? '+$' + Math.abs(v).toLocaleString('en-US', {maximumFractionDigits:0}) : '-$' + Math.abs(v).toLocaleString('en-US', {maximumFractionDigits:0});
+
+    canvas.onmousemove = (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      let hit = -1;
+      barMeta.forEach(({ x, barW, i }) => {
+        if (mx >= x - 6 && mx <= x + barW + 6) hit = i;
+      });
+      if (hit < 0) { tooltip.style.display = 'none'; return; }
+      const p = pts[hit];
+      const spyRet = spyMonthly[hit];
+      const movers = (p.movers || []).slice(0, 5);
+      const pd = p.perf_detail;
+      const curYear = new Date().getFullYear();
+      let html = `<div style="font-weight:800;font-size:12px;color:var(--blue);margin-bottom:6px;">${p.label} ${curYear}</div>`;
+      if (p.skip) {
+        html += `<div style="color:#f59e0b;font-size:11px;">N/A — Custodial Transfer</div>`;
+        html += `<div style="color:var(--mid);font-size:10px;margin-top:4px;">Assets moved between custodians this month; excluded from YTD calculation.</div>`;
+      } else {
+        const retColor = p.return_pct >= 0 ? '#4ade80' : '#f87171';
+        html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;">`;
+        html += `<span>Portfolio</span><span style="font-weight:700;color:${retColor};">${fmtM(p.return_pct)}</span></div>`;
+        if (spyRet != null) {
+          html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;">`;
+          html += `<span>SPY</span><span style="color:#c9a84c;">${fmtM(spyRet)}</span></div>`;
+          const alpha = p.return_pct - spyRet;
+          html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:8px;">`;
+          html += `<span>Alpha</span><span style="color:${alpha>=0?'#4ade80':'#f87171'};">${fmtM(alpha)}</span></div>`;
+        }
+        if (movers.length) {
+          html += `<div style="font-size:10px;color:var(--mid);margin-bottom:4px;letter-spacing:0.5px;">TOP CONTRIBUTORS</div>`;
+          movers.forEach(m => {
+            const mc = m.dollar_gain >= 0 ? '#4ade80' : '#f87171';
+            html += `<div style="display:flex;justify-content:space-between;gap:10px;margin-bottom:2px;">`;
+            html += `<span style="color:#5BB8D4;font-weight:700;">${m.ticker}</span><span style="color:${mc};">${fmtC(m.dollar_gain)} (${fmtM(m.contribution_pct)})</span></div>`;
+          });
+        }
+        if (pd) {
+          const deps = pd.deposits, with_ = pd.withdrawals, netFlow = pd.net_flow;
+          if (deps || with_) {
+            html += `<div style="font-size:10px;color:var(--mid);margin:8px 0 4px;letter-spacing:0.5px;">CASH FLOWS</div>`;
+            if (deps) html += `<div style="display:flex;justify-content:space-between;"><span>Deposits</span><span style="color:#4ade80;">${fmtC(deps)}</span></div>`;
+            if (with_) html += `<div style="display:flex;justify-content:space-between;"><span>Withdrawals</span><span style="color:#f87171;">${fmtC(with_)}</span></div>`;
+            if (netFlow != null) html += `<div style="display:flex;justify-content:space-between;"><span>Net Flow</span><span>${fmtC(netFlow)}</span></div>`;
+            if (pd.advisory_fees) html += `<div style="display:flex;justify-content:space-between;"><span>Advisory Fee</span><span style="color:#f87171;">${fmtC(pd.advisory_fees)}</span></div>`;
+          }
+        }
+        if (p.exact) html += `<div style="font-size:9px;color:var(--dim);margin-top:6px;">✓ Exact Fidelity data</div>`;
+      }
+      tooltip.innerHTML = html;
+      tooltip.style.display = 'block';
+      // Use viewport-relative positioning (tooltip is position:fixed) so the
+      // card can never bleed off the bottom or right edge of the screen.
+      const ttW = tooltip.offsetWidth  || 260;
+      const ttH = tooltip.offsetHeight || 200;
+      const vW  = window.innerWidth;
+      const vH  = window.innerHeight;
+      let tx = e.clientX + 14;
+      let ty = e.clientY - 20;
+      if (tx + ttW > vW - 8)  tx = e.clientX - ttW - 10;  // flip left
+      if (ty + ttH > vH - 8)  ty = e.clientY - ttH - 4;   // flip up
+      tx = Math.max(8, tx);
+      ty = Math.max(8, ty);
+      tooltip.style.left = tx + 'px';
+      tooltip.style.top  = ty + 'px';
+    };
+    canvas.onmouseleave = () => { tooltip.style.display = 'none'; };
+  }
+
+  // Legacy stub — keep fetchBenchAndRedraw working (benchmark selector still updates tiles)
+  function drawAcctBalanceChart(mc, spy) {
+    const pts = (mc && mc.monthly) ? mc.monthly : [];
+    drawAcctMonthlyBarChart(pts);
+  }
+
+  // Diagnose wiring shared by BOTH attribution states (the button originally
+  // existed only in the empty state — once rows appeared it vanished).
+  function _acdWireAttrDiag() {
+    const btn = document.getElementById('acd-attr-diag-btn');
+    if (!btn) return;
+    btn.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();   // the button can live inside a <summary> — don't toggle it
+      const out = document.getElementById('acd-attr-diag-out');
+      btn.disabled = true; btn.textContent = 'Checking…';
+      try {
+        const r = await window.dgaFetch('/api/snaptrade/attribution-debug?fund_id=' + encodeURIComponent(CURRENT_FUND_ID));
+        const d = await _snapJson(r);
+        if (!r.ok || d.ok === false) throw new Error(d.detail || 'HTTP ' + r.status);
+        const actLine = (d.activities_by_type || []).map(a => a.type + ' ×' + a.count).join(' · ') || 'none';
+        out.style.display = '';
+        const liveA = (d.live_activities || []).map(x =>
+          x.error ? ('ERROR: ' + x.error) : (x.returned + ' returned')).join(' · ');
+        const probeLine = (d.method_probe || []).filter(m => (m.count || 0) > 0)
+          .map(m => m.method + ' → ' + m.count).join(' · ');
+        out.innerHTML =
+          '<div style="font-weight:700;color:var(--text-primary);margin-bottom:6px;">' + _gfEsc(d.verdict || '') + '</div>'
+          + '<div>Activities stored: <strong>' + (d.activities_total || 0) + '</strong> (' + _gfEsc(actLine) + ')</div>'
+          + '<div>SnapTrade live call: <strong>' + _gfEsc(liveA || '—') + '</strong></div>'
+          + (probeLine ? '<div>SDK methods with data: <strong>' + _gfEsc(probeLine) + '</strong></div>' : '')
+          + '<div>Equity holdings: <strong>' + (d.equity_holdings || 0) + '</strong> · Jan-1 price coverage: <strong>' + _gfEsc(d.jan1_price_coverage || '—') + '</strong></div>'
+          + '<div>Cache: <strong>' + (d.cache_attribution_rows || 0) + '</strong> attribution rows · source ' + _gfEsc(d.cache_source || '—') + ' · updated ' + _gfEsc((d.cache_updated_at || '—').slice(0, 16).replace('T', ' ')) + '</div>'
+          + '<div>Live builder: <strong>' + (d.live_builder_error ? 'ERROR' : (d.live_builder_rows || 0) + ' rows') + '</strong>'
+          + (d.live_builder_error ? '<pre style="white-space:pre-wrap;font-size:10px;margin:6px 0 0;color:var(--red,#dc2626);">' + _gfEsc(d.live_builder_error) + '</pre>' : '')
+          + '</div>'
+          + (d.row_shapes && d.row_shapes.length
+              ? '<div style="margin-top:6px;">Row shapes (type · option · units · price · amount · count):'
+                + '<pre style="white-space:pre-wrap;font-size:9.5px;margin:4px 0 0;color:var(--text-secondary,#58616f);">'
+                + _gfEsc(d.row_shapes.map(s => `${s.type} · opt:${s.option?'Y':'n'} · u:${s.units?'Y':'n'} · p:${s.price?'Y':'n'} · a:${s.amount?'Y':'n'} × ${s.count}`).join('\n'))
+                + '</pre></div>'
+              : '')
+          + (d.unmapped_symbol_samples && Object.keys(d.unmapped_symbol_samples).length
+              ? '<div style="margin-top:6px;">⚠ Symbols with rows that map to NO share math: <strong>' + _gfEsc(Object.keys(d.unmapped_symbol_samples).join(', ')) + '</strong>'
+                + '<pre style="white-space:pre-wrap;font-size:9.5px;margin:4px 0 0;color:var(--text-secondary,#58616f);">' + _gfEsc(JSON.stringify(d.unmapped_symbol_samples, null, 1).slice(0, 1800)) + '</pre></div>'
+              : '')
+          + '<div style="margin-top:8px;display:flex;align-items:center;gap:6px;">'
+          + '<span style="font-size:10px;color:var(--dim);">Trace one ticker:</span>'
+          + '<input id="acd-attr-trace-sym" placeholder="e.g. INTC" style="width:80px;font-size:10.5px;padding:2px 6px;border:1px solid var(--panel-edge);border-radius:5px;background:var(--surface,#fff);color:var(--text-primary);text-transform:uppercase;">'
+          + '<button id="acd-attr-trace-btn" class="tab-btn sm" style="font-size:9.5px;">Trace</button>'
+          + '</div><div id="acd-attr-trace-out" style="margin-top:6px;"></div>';
+        document.getElementById('acd-attr-trace-btn')?.addEventListener('click', async () => {
+          const sym = (document.getElementById('acd-attr-trace-sym')?.value || '').trim().toUpperCase();
+          const tout = document.getElementById('acd-attr-trace-out');
+          if (!sym || !tout) return;
+          tout.textContent = 'Tracing ' + sym + '…';
+          try {
+            const tr = await _snapJson(await window.dgaFetch('/api/snaptrade/attribution-debug?fund_id=' + encodeURIComponent(CURRENT_FUND_ID) + '&symbol=' + encodeURIComponent(sym)));
+            const t = tr.symbol_trace;
+            if (!t) throw new Error('no trace returned');
+            tout.innerHTML =
+              '<div style="font-size:10.5px;"><strong>' + _gfEsc(t.symbol) + '</strong> · holdings now: <strong>' + (t.holdings_qty != null ? t.holdings_qty : '—') + '</strong>'
+              + ' · Jan-1 close: <strong>' + (t.jan1_price != null ? fmtUSD(t.jan1_price) : 'MISSING') + '</strong>'
+              + (t.other_account_legs ? ' · other-acct transfer legs: in ' + t.other_account_legs.in + ' / out ' + t.other_account_legs.out : '')
+              + ' · fund agg (pre-match): ' + _gfEsc(JSON.stringify(t.aggregate)) + '</div>'
+              + '<pre style="white-space:pre-wrap;font-size:9.5px;margin:4px 0 0;color:var(--text-secondary,#58616f);max-height:220px;overflow-y:auto;">'
+              + _gfEsc((t.rows || []).map(x => `${x.date} ${x.type}${x.option ? ' [OPT]' : ''} u:${x.units} p:${x.price} a:${x.amount} → ${x.bucket} | ${x.desc}`).join('\n') || 'NO ROWS STORED FOR THIS SYMBOL')
+              + '</pre>';
+          } catch (e) {
+            tout.textContent = '❌ ' + (e.message || e);
+          }
+        });
+      } catch (e) {
+        const out2 = document.getElementById('acd-attr-diag-out');
+        if (out2) { out2.style.display = ''; out2.textContent = '❌ ' + (e.message || e); }
+      } finally {
+        btn.disabled = false; btn.textContent = '🔍 Diagnose';
+      }
+    });
+  }
+
+  function renderAcctAttribution(data) {
+    const el = document.getElementById('acd-attribution');
+    const rows = data.attribution || [];
+    if (!rows.length) {
+      // Show WHY it's empty instead of rendering nothing — attribution builds
+      // from YTD activity, which can lag a freshly re-linked connection.
+      el.innerHTML = `
+        <section class="panel">
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;flex-wrap:wrap;">
+            <span class="panel-title">YTD Attribution</span>
+            <span style="font-size:11px;color:var(--text-secondary,#58616f);flex:1;min-width:220px;">
+              No per-stock attribution yet. It's built automatically from this year's
+              activity — after a fresh Fidelity re-link, SnapTrade can take a while to
+              deliver transaction history. It fills in on the next sync once activity
+              arrives.
+            </span>
+            <button class="tab-btn sm" id="acd-attr-diag-btn" style="font-size:10px;">🔍 Diagnose</button>
+          </div>
+          <div id="acd-attr-diag-out" style="display:none;padding:0 14px 12px;font-size:11px;color:var(--text-secondary,#58616f);"></div>
+        </section>`;
+      _acdWireAttrDiag();
+      return;
+    }
+    const fmtP = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+    const sortedRows = [...rows].sort((a, b) =>
+      (b.contribution_pct || 0) - (a.contribution_pct || 0));
+    // Max absolute contribution for bar scaling
+    const maxContrib = Math.max(...sortedRows.map(r => Math.abs(r.contribution_pct || 0)), 0.01);
+
+    const contribBar = (val) => {
+      if (val == null) return '<span style="color:var(--dim);">—</span>';
+      const pct  = Math.min(Math.abs(val) / maxContrib * 100, 100);
+      const col  = val >= 0 ? '#1a7f40' : '#cc3333';
+      const dir  = val >= 0 ? 'left' : 'right';
+      return `
+        <div style="display:flex;align-items:center;gap:5px;justify-content:flex-end;">
+          <span style="font-variant-numeric:tabular-nums;font-weight:700;color:${col};min-width:46px;text-align:right;">${fmtP(val)}</span>
+          <div style="width:54px;height:8px;background:rgba(0,0,0,0.07);border-radius:3px;overflow:hidden;flex-shrink:0;">
+            <div style="width:${pct.toFixed(1)}%;height:100%;background:${col};border-radius:3px;float:${dir};opacity:0.85;"></div>
+          </div>
+        </div>`;
+    };
+
+    el.innerHTML = `
+      <section class="panel">
+        <details open>
+          <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
+            <span class="panel-title">YTD Attribution (per-stock contribution)</span>
+            <span class="panel-badge">${rows.length} names</span>
+            ${data.attribution_contrib_sum != null ? (() => {
+              const cs = data.attribution_contrib_sum;
+              const ytd = data.twrr_return_pct;
+              const closeEnough = ytd != null && Math.abs(cs - ytd) <= Math.max(1.5, Math.abs(ytd) * 0.2);
+              return '<span style="font-size:10px;font-weight:700;color:' + (closeEnough ? 'var(--green)' : 'var(--mid)') + ';"'
+                + ' title="Sum of the contribution column vs the account\'s YTD return. They should be close — the residual is cash interest, option premium income, fees, and (for consolidated positions) gains earned in the source account before transfer.">'
+                + 'Σ ' + (cs >= 0 ? '+' : '') + cs.toFixed(2) + '%'
+                + (ytd != null ? ' · portfolio YTD ' + (ytd >= 0 ? '+' : '') + Number(ytd).toFixed(2) + '%' : '')
+                + '</span>';
+            })() : ''}
+            ${data.attribution_estimated ? '<span style="font-size:10px;color:#d97706;font-weight:700;" title="Built from holdings + Jan-1 prices only — SnapTrade hasn\'t delivered this year\'s transactions yet. Refines automatically once they arrive.">≈ price-based estimate (trades pending)</span>' : ''}
+            <button class="tab-btn sm" id="acd-attr-diag-btn" style="font-size:10px;margin-left:auto;">🔍 Diagnose</button>
+            <span class="ac-chevron">▸</span>
+          </summary>
+          <div id="acd-attr-diag-out" style="display:none;padding:8px 14px 4px;font-size:11px;color:var(--text-secondary,#58616f);"></div>
+          <div style="max-height:520px;overflow-y:auto;">
+          <table class="acd-compact-table">
+            <thead><tr>
+              <th>Ticker</th><th class="num">Shares</th>
+              <th class="num">Jan 1 → Now</th>
+              <th class="num">Gain</th><th class="num">Return</th>
+              <th class="num">Contribution</th>
+            </tr></thead>
+            <tbody>
+              ${sortedRows.map(r => {
+                const gain    = r.dollar_gain;
+                const retPct  = r.ticker_return_pct;
+                const contrib = r.contribution_pct;
+                const pxSpan = (r.jan1_price != null || r.end_price != null)
+                  ? `${r.jan1_price != null ? fmtUSD(r.jan1_price) : '—'} <span style="color:var(--blue);opacity:.5;">→</span> ${r.end_price != null ? fmtUSD(r.end_price) : '—'}`
+                  : '—';
+                return `<tr>
+                  <td style="font-weight:800;color:var(--blue);">${r.ticker || '—'}${r.closed ? ' <span style="font-size:8px;font-weight:700;color:var(--text-secondary,#58616f);background:rgba(0,0,0,0.06);border-radius:3px;padding:0 4px;vertical-align:middle;">SOLD</span>' : ''}${r.predecessor ? ' <span title="Traded in the predecessor account before it was consolidated into this one" style="font-size:8px;font-weight:700;color:var(--text-secondary,#58616f);background:rgba(0,0,0,0.06);border-radius:3px;padding:0 4px;vertical-align:middle;">PRIOR ACCT</span>' : ''}</td>
+                  <td class="num">${r.end_shares != null && r.end_shares > 0 ? r.end_shares.toFixed(2) : '—'}</td>
+                  <td class="num" title="${r.origin_buy ? (r.closed ? 'Bought this year: avg buy price → avg exit price' : 'Bought this year (no Jan-1 close): avg buy price → last price') : (r.closed ? 'Jan-1 close → avg exit price' : 'Jan-1 close → last price')}">${pxSpan}</td>
+                  <td class="num" style="font-weight:700;${gain == null ? 'color:var(--dim);' : (gain >= 0 ? 'color:var(--green);' : 'color:var(--red);')}">${gain != null ? fmtUSD(gain) : '—'}</td>
+                  <td class="num" style="${(retPct||0) >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtP(retPct)}</td>
+                  <td>${contribBar(contrib)}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+          </div>
+        </details>
+      </section>`;
+    _acdWireAttrDiag();
+  }
+
+  function renderAcctHistory(data) {
+    const el = document.getElementById('acd-history');
+    const flows = data.flows || [];
+    if (!flows.length) { el.innerHTML = ''; return; }
+    el.innerHTML = `
+      <section class="panel">
+        <details open>
+          <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
+            <span class="panel-title">YTD Cash Flows</span>
+            <span class="panel-badge">${flows.length}</span>
+            <span class="ac-chevron">▸</span>
+          </summary>
+          <div style="max-height:520px;overflow-y:auto;">
+          <table class="acd-compact-table">
+            <thead><tr><th>Date</th><th>Action</th><th>Symbol</th><th class="num">Amount</th></tr></thead>
+            <tbody>
+              ${flows.map(f => `<tr>
+                <td style="color:var(--mid);">${f.date || '—'}</td>
+                <td>${f.action || f.type || '—'}</td>
+                <td style="color:var(--blue);font-weight:700;">${f.symbol || f.ticker || '—'}</td>
+                <td class="num" style="font-weight:700;${(f.amount||0)>=0?'color:var(--green);':'color:var(--red);'}">${f.amount != null ? fmtUSD(f.amount) : '—'}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+          </div>
+        </details>
+      </section>`;
+  }
+
+  // Fund overview auto-loads on page open — no manual refresh needed.
+
+  // ══════════════════════════════════════════════════════════════
+  // SETTINGS TAB
+  // ══════════════════════════════════════════════════════════════
+  // One loader for EVERY Settings panel. Re-invoked on each click of the
+  // Settings topbar link, but each panel skips if it loaded <60s ago so
+  // repeated clicks don't refetch everything.
+  const _settingsPanelAt = {};
+  function _settingsPanel(key, fn) {
+    const now = Date.now();
+    if (_settingsPanelAt[key] && (now - _settingsPanelAt[key]) < 60_000) return;
+    _settingsPanelAt[key] = now;
+    try { fn(); } catch (e) { console.warn('[settings:' + key + ']', e); }
+  }
+  async function loadSettingsTab() {
+    _settingsPanel('lp-roster',   loadLPRoster);
+    _settingsPanel('build-info',  loadBuildInfo);
+    _settingsPanel('automation',  loadAutomationSettings);
+    _settingsPanel('email-diag',  _wireEmailDiag);
+    _settingsPanel('rename',      loadRenameDropdown);
+    _settingsPanel('disclaimer',  loadDisclaimerConfig);
+    _settingsPanel('rss',         loadRssFeedPanel);
+    _settingsPanel('system-info', loadSystemInfoPanel);
+    _settingsPanel('archived',    loadArchivedReports);
+    _settingsPanel('railway',     loadRailwayUsage);
+    _settingsPanel('snaptrade',   loadSnapTrade);
+    _settingsPanel('plaid',       loadPlaid);
+    _settingsPanel('mfa',         loadMfa);
+    _settingsPanel('demo',        loadDemoSandbox);
+    _settingsPanel('volume-llm',  loadVolumeLlmSettings);
+  }
+
+  // ── Option 4 · Volume LLM settings (master + per-job toggles) ───────────
+  var _volumeLlmWired = false;
+  async function loadVolumeLlmSettings() {
+    const $st = document.getElementById('volume-llm-status');
+    const $badge = document.getElementById('volume-llm-badge');
+    const $on = document.getElementById('volume-llm-enable');
+    const $off = document.getElementById('volume-llm-rollback');
+    const $ref = document.getElementById('volume-llm-refresh');
+    const $jobs = document.getElementById('volume-llm-jobs');
+    if (!$st) return;
+
+    function renderJobs(d) {
+      if (!$jobs) return;
+      const ids = d.job_ids || Object.keys(d.jobs || {}) || [];
+      const labels = d.job_labels || {};
+      const jobs = d.jobs || {};
+      const routes = d.routes || {};
+      const master = !!d.enabled;
+      const cfg = !!d.configured;
+      if (!ids.length) {
+        $jobs.innerHTML = '<div style="font-size:11px;color:#94a3b8;">No job list from server.</div>';
+        return;
+      }
+      $jobs.innerHTML = ids.map(function (id) {
+        const on = jobs[id] !== false;
+        const route = routes[id] || (master && on ? 'volume' : 'grok');
+        const lab = labels[id] || id;
+        const disabled = !cfg || !master;
+        return '<label style="display:flex;align-items:center;gap:8px;padding:7px 10px;'
+          + 'background:var(--bg-elevated,#fff);border:1px solid var(--border-subtle,#e2e8f0);'
+          + 'border-radius:8px;cursor:' + (disabled ? 'not-allowed' : 'pointer') + ';'
+          + 'opacity:' + (disabled ? '0.55' : '1') + ';">'
+          + '<input type="checkbox" class="vol-job-toggle" data-job="' + id + '" '
+          + (on ? 'checked ' : '') + (disabled ? 'disabled ' : '')
+          + 'style="width:15px;height:15px;accent-color:var(--blue,#0ea5e9);flex-shrink:0;">'
+          + '<span style="flex:1;min-width:0;">'
+          + '<span style="display:block;font-size:11.5px;font-weight:700;color:var(--text-primary,#0f172a);">' + lab + '</span>'
+          + '<span style="font-size:10px;color:#94a3b8;">now → <code>' + route + '</code></span>'
+          + '</span></label>';
+      }).join('');
+      $jobs.querySelectorAll('.vol-job-toggle').forEach(function (cb) {
+        cb.addEventListener('change', function () {
+          const job = cb.getAttribute('data-job');
+          if (!job) return;
+          const body = { jobs: {} };
+          body.jobs[job] = !!cb.checked;
+          setVolumeConfig(body);
+        });
+      });
+    }
+
+    async function refreshCatalog(d) {
+      try {
+        if (window.DGA_LLM && d) {
+          window.DGA_LLM.volume = Object.assign({}, window.DGA_LLM.volume || {}, d.volume || {
+            enabled: d.enabled,
+            model: d.model,
+            configured: d.configured,
+            jobs: d.jobs,
+            routes: d.routes,
+          });
+        }
+        const mr = await window.dgaFetch('/api/config/models');
+        if (mr.ok) {
+          const mj = await mr.json();
+          window.DGA_LLM = Object.assign(window.DGA_LLM || {}, {
+            grok: mj.grok, claude: mj.claude, agentic: mj.agentic,
+            volume: mj.volume || (window.DGA_LLM && window.DGA_LLM.volume),
+            est: mj.est || (window.DGA_LLM && window.DGA_LLM.est),
+          });
+        }
+        if (typeof llmRefreshAllStamps === 'function') llmRefreshAllStamps();
+      } catch (_) {}
+    }
+
+    async function refresh() {
+      try {
+        const r = await window.dgaFetch('/api/config/volume-llm');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        const en = !!d.enabled;
+        const cfg = !!d.configured;
+        const jobs = d.jobs || {};
+        const nOn = Object.keys(jobs).filter(function (k) { return jobs[k] !== false; }).length;
+        const nAll = Object.keys(jobs).length || 4;
+        if ($badge) {
+          if (!cfg) {
+            $badge.textContent = 'NOT CONFIGURED';
+            $badge.style.background = '#fef3c7'; $badge.style.color = '#92400e';
+          } else if (!en) {
+            $badge.textContent = 'ALL → GROK';
+            $badge.style.background = '#fee2e2'; $badge.style.color = '#991b1b';
+          } else {
+            $badge.textContent = 'VOLUME ' + nOn + '/' + nAll;
+            $badge.style.background = '#dcfce7'; $badge.style.color = '#166534';
+          }
+        }
+        $st.innerHTML =
+          '<div><strong>Configured:</strong> ' + (cfg ? 'yes' : 'no (set VOLUME_LLM_API_KEY on Railway)') + '</div>'
+          + '<div><strong>Master:</strong> ' + (en ? 'ON — per-feature toggles apply' : 'OFF — every job uses Grok') + '</div>'
+          + '<div><strong>Model:</strong> ' + (d.model || '—') + ' · <strong>Host:</strong> ' + (d.base_url || '—') + '</div>'
+          + '<div style="margin-top:4px;font-size:10.5px;color:#94a3b8;">Reports + podcasts never use volume (always Grok/Claude).</div>';
+        if ($on) $on.disabled = !cfg || en;
+        if ($off) $off.disabled = !cfg || !en;
+        renderJobs(d);
+      } catch (e) {
+        $st.textContent = 'Could not load volume LLM status: ' + (e.message || e);
+      }
+    }
+
+    async function setVolumeConfig(body) {
+      try {
+        const r = await window.dgaFetch('/api/config/volume-llm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body || {}),
+        });
+        const d = await r.json().catch(function () { return {}; });
+        if (!r.ok) throw new Error(d.detail || d.error || ('HTTP ' + r.status));
+        try {
+          window.toast && window.toast(d.message || 'Volume routing saved', { type: 'success', ttl: 3200 });
+        } catch (_) {}
+        await refresh();
+        await refreshCatalog(d);
+      } catch (e) {
+        alert('Volume LLM save failed: ' + (e.message || e));
+        await refresh();
+      }
+    }
+
+    if (!_volumeLlmWired) {
+      _volumeLlmWired = true;
+      if ($on) $on.addEventListener('click', function () { setVolumeConfig({ enabled: true }); });
+      if ($off) $off.addEventListener('click', function () {
+        if (!confirm('Turn volume master OFF?\n\nAll volume jobs (brief, intel, prioritize, pulse) will use Grok (higher cost).\nFull reports and podcasts are unchanged.\n\nYou can still re-enable and pick features one-by-one.')) return;
+        setVolumeConfig({ enabled: false });
+      });
+      if ($ref) $ref.addEventListener('click', refresh);
+    }
+    await refresh();
+  }
+
+  // ── 🎭 Demo Sandbox: status + seed/reset (real GP only; server enforces) ──
+  var _demoWired = false;
+  async function loadDemoSandbox() {
+    const $st = document.getElementById('demo-sandbox-status');
+    const $btn = document.getElementById('demo-reseed-btn');
+    const $note = document.getElementById('demo-reseed-note');
+    if (!$st || !$btn) return;
+    if (!_demoWired) {
+      _demoWired = true;
+      $btn.addEventListener('click', async () => {
+        const nf = Math.max(1, Math.min(4, parseInt(document.getElementById('demo-n-funds')?.value || '1', 10)));
+        const nm = Math.max(0, Math.min(6, parseInt(document.getElementById('demo-n-managed')?.value || '2', 10)));
+        const wl = Math.max(0, Math.min(25, parseInt(document.getElementById('demo-wl-count')?.value || '10', 10)));
+        if (!confirm('Seed / reset the demo sandbox as ' + nf + ' fund(s) + ' + nm + ' managed account(s)?\n\nThis OVERRIDES any existing demo data (rebuilds funds, accounts, watchlist, sample AI, and the demo logins). No real data is touched.')) return;
+        $btn.disabled = true; $btn.textContent = '⏳ Seeding…';
+        try {
+          const r = await window.dgaFetch('/api/v2/admin/demo/reseed', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ n_funds: nf, n_managed: nm, wl_count: wl }),
+          });
+          const d = await r.json();
+          if (!r.ok) throw new Error(d?.detail || ('HTTP ' + r.status));
+          $note.textContent = '✓ Seeded ' + (d.fund_ids?.length || 0) + ' fund(s), '
+            + (d.managed_ids?.length || 0) + ' account(s), ' + (d.watchlist || 0) + ' watchlist, '
+            + (d.reports || 0) + ' reports'
+            + (d.warnings?.length ? (' · ' + d.warnings.length + ' warnings') : '');
+          loadDemoSandbox();
+        } catch (e) {
+          $note.textContent = '✗ ' + (e.message || e);
+        } finally {
+          $btn.disabled = false; $btn.textContent = '↻ Seed / Reset demo data';
+        }
+      });
+    }
+    try {
+      const r = await window.dgaFetch('/api/v2/admin/demo/status');
+      const d = await r.json();
+      if (d.seeded) {
+        const c = d.credentials || {};
+        $st.innerHTML = '<span style="color:var(--green,#16a34a);font-weight:700;">● Seeded</span>'
+          + (d.registry?.seeded_at ? ' · ' + String(d.registry.seeded_at).slice(0, 16).replace('T', ' ') + ' UTC' : '')
+          + (c.gp ? '<br>GP: <code>' + c.gp.email + '</code> / <code>' + c.gp.password + '</code>'
+                  + '<br>LP: <code>' + c.lp.email + '</code> / <code>' + c.lp.password + '</code>' : '');
+      } else {
+        $st.innerHTML = '<span style="color:var(--text-tertiary);">○ Not seeded yet — click the button below.</span>';
+      }
+    } catch (e) {
+      $st.textContent = 'Status unavailable: ' + (e.message || e);
+    }
+  }
+
+  // ── 🖥 System Info: surfaces app build + backend/DB health ──
+  async function loadSystemInfoPanel() {
+    const setText = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+    setText('sys-build', (typeof DGA_BUILD !== 'undefined' ? DGA_BUILD : '—'));
+    const rss = document.getElementById('sys-rss');
+    if (rss) {
+      const url = window.location.origin + '/api/podcast/rss.xml';
+      rss.href = url; rss.textContent = url;
+    }
+    // /api/build returns the server-side build SHA + key statuses
+    try {
+      const r = await window.dgaFetch('/api/build');
+      if (r.ok) {
+        const j = await r.json();
+        setText('sys-commit', (j.commit_sha || j.build || '—').toString().slice(0, 12));
+        const badge = document.getElementById('sys-info-badge');
+        if (badge) { badge.textContent = 'OK'; badge.style.background = '#dcfce7'; badge.style.color = '#166534'; }
+        setText('sys-backend', '✓ reachable');
+      } else {
+        setText('sys-backend', '⚠ HTTP ' + r.status);
+      }
+    } catch (e) {
+      setText('sys-backend', '❌ unreachable');
+      const badge = document.getElementById('sys-info-badge');
+      if (badge) { badge.textContent = 'DOWN'; badge.style.background = '#fee2e2'; badge.style.color = '#b91c1c'; }
+    }
+    // /api/diagnostics returns DB connection state
+    try {
+      const r = await window.dgaFetch('/api/diagnostics');
+      if (r.ok) {
+        const j = await r.json();
+        setText('sys-db', j.database === 'connected' || j.db_ok ? '✓ connected' : '⚠ ' + (j.database || 'unknown'));
+      }
+    } catch (_) { setText('sys-db', '— (check failed)'); }
+
+    // 🤖 Model check button — verify AGENTIC_MODEL is live
+    const mcBtn = document.getElementById('model-check-btn');
+    const mcOut = document.getElementById('model-check-out');
+    if (mcBtn && !mcBtn.dataset.wired) {
+      mcBtn.dataset.wired = '1';
+      mcBtn.addEventListener('click', async () => {
+        mcBtn.disabled = true; mcBtn.textContent = '⏳ Checking…';
+        if (mcOut) { mcOut.style.display = 'block'; mcOut.textContent = 'Querying Anthropic…'; }
+        try {
+          const r = await window.dgaFetch('/api/models/check');
+          const j = await r.json();
+          const lines = [];
+          lines.push('configured AGENTIC_MODEL: ' + (j.configured_agentic_model || '—'));
+          lines.push('in models.list():        ' +
+            (j.agentic_model_in_list === true ? '✓ YES'
+             : j.agentic_model_in_list === false ? '❌ NO — not a valid API id'
+             : '? (list failed)'));
+          lines.push('ping:                    ' +
+            (j.ping_ok ? `✓ "${j.ping_reply}" (resolved: ${j.ping_resolved_model||'?'})`
+             : '❌ ' + (j.ping_error || 'failed')));
+          if (j.available_models && j.available_models.length) {
+            lines.push('');
+            lines.push('available models:');
+            j.available_models.forEach(m => lines.push('  • ' + m));
+          }
+          if (j.list_error) lines.push('\nlist error: ' + j.list_error);
+          if (mcOut) mcOut.textContent = lines.join('\n');
+        } catch (e) {
+          if (mcOut) mcOut.textContent = 'Check failed: ' + e.message;
+        } finally {
+          mcBtn.disabled = false; mcBtn.textContent = '🤖 Check AI Analyst model';
+        }
+      });
+    }
+  }
+
+  // ── 📡 RSS feed panel: surfaces the public feed URL + copy button ──
+  function loadRssFeedPanel() {
+    const feedUrl = window.location.origin + '/api/podcast/rss.xml';
+    const inp  = document.getElementById('rss-feed-url');
+    const open = document.getElementById('rss-feed-open');
+    const copy = document.getElementById('rss-feed-copy');
+    if (inp)  inp.value = feedUrl;
+    if (open) open.href = feedUrl;
+    if (copy && !copy.dataset.wired) {
+      copy.dataset.wired = '1';
+      copy.addEventListener('click', async function() {
+        try {
+          await navigator.clipboard.writeText(feedUrl);
+          const orig = copy.textContent;
+          copy.textContent = '✓ Copied!';
+          setTimeout(() => { copy.textContent = orig; }, 1500);
+        } catch (e) {
+          if (inp) { inp.select(); document.execCommand('copy'); }
+        }
+      });
+    }
+  }
+
+  // ── ⚖️ Compliance disclaimer panel ─────────────────────────────
+  async function loadDisclaimerConfig() {
+    try {
+      const r = await window.dgaFetch('/api/podcast/disclaimer-config');
+      const c = await r.json();
+      const setVal = (id, v) => { const el=document.getElementById(id); if(el) el.value = v||''; };
+      const setChk = (id, v) => { const el=document.getElementById(id); if(el) el.checked = !!v; };
+      setChk('disc-intro-enabled', c.intro_enabled);
+      setChk('disc-outro-enabled', c.outro_enabled);
+      setVal('disc-intro-text',    c.intro_text);
+      setVal('disc-outro-text',    c.outro_text);
+      setVal('disc-voice',         c.voice);
+      _updateDiscCharCounts();
+      _updateDiscStatusBadge();
+    } catch (e) { console.warn('[disclaimer] load failed', e); }
+    // Wire once
+    if (!window._discWired) {
+      window._discWired = true;
+      ['disc-intro-text','disc-outro-text'].forEach(id =>
+        document.getElementById(id)?.addEventListener('input', _updateDiscCharCounts));
+      ['disc-intro-enabled','disc-outro-enabled'].forEach(id =>
+        document.getElementById(id)?.addEventListener('change', _updateDiscStatusBadge));
+      document.getElementById('disc-save-btn')?.addEventListener('click', async () => {
+        const body = {
+          intro_enabled: document.getElementById('disc-intro-enabled').checked,
+          outro_enabled: document.getElementById('disc-outro-enabled').checked,
+          intro_text:    document.getElementById('disc-intro-text').value,
+          outro_text:    document.getElementById('disc-outro-text').value,
+          voice:         document.getElementById('disc-voice').value,
+        };
+        const msg = document.getElementById('disc-msg');
+        if (msg) msg.textContent = '⏳ Saving…';
+        try {
+          const r = await window.dgaFetch('/api/podcast/disclaimer-config', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify(body),
+          });
+          const j = await r.json();
+          if (!j.ok) throw new Error(j.detail || 'Save failed');
+          if (msg) msg.textContent = '✓ Saved — applies to next audio gen';
+          _updateDiscStatusBadge();
+        } catch (e) {
+          if (msg) msg.textContent = '❌ ' + e.message;
+        }
+      });
+      document.getElementById('disc-reset-btn')?.addEventListener('click', async () => {
+        if (!confirm('Revert disclaimer to engine defaults?')) return;
+        try {
+          await window.dgaFetch('/api/podcast/disclaimer-config/reset', { method:'POST' });
+          loadDisclaimerConfig();
+        } catch (e) { alert('Reset failed: ' + e.message); }
+      });
+    }
+  }
+  function _updateDiscCharCounts() {
+    const i = document.getElementById('disc-intro-text');
+    const o = document.getElementById('disc-outro-text');
+    const il = document.getElementById('disc-intro-len');
+    const ol = document.getElementById('disc-outro-len');
+    if (i && il) il.textContent = (i.value || '').length;
+    if (o && ol) ol.textContent = (o.value || '').length;
+  }
+  function _updateDiscStatusBadge() {
+    const intro = document.getElementById('disc-intro-enabled')?.checked;
+    const outro = document.getElementById('disc-outro-enabled')?.checked;
+    const badge = document.getElementById('disc-status');
+    if (!badge) return;
+    if (intro && outro) {
+      badge.textContent = 'ON · intro + outro';
+      badge.style.background = '#dcfce7'; badge.style.color = '#166534';
+    } else if (intro || outro) {
+      badge.textContent = 'PARTIAL · ' + (intro ? 'intro only' : 'outro only');
+      badge.style.background = '#fef3c7'; badge.style.color = '#92400e';
+    } else {
+      badge.textContent = 'OFF — RISKY';
+      badge.style.background = '#fee2e2'; badge.style.color = '#b91c1c';
+    }
+  }
+
+  // ── Populate the rename fund/account dropdown ──────────────────
+  async function loadRenameDropdown() {
+    const sel = document.getElementById('rn-fund');
+    if (!sel) return;
+    try {
+      const r = await window.dgaFetch('/api/v2/lp/me/overview');
+      if (!r.ok) return;
+      const d = await r.json();
+      const all = [
+        ...(d.funds || []).map(f => ({ id: f.fund_id, name: f.fund_name, short: f.short_name, type: 'LP Fund' })),
+        ...(d.managed_accounts || []).map(a => ({ id: a.fund_id, name: a.account_name, short: a.short_name, type: 'Managed Acct' })),
+      ];
+      sel.innerHTML = '<option value="">— choose fund or account —</option>'
+        + all.map(f => `<option value="${f.id}" data-name="${_esc(f.name)}" data-short="${_esc(f.short)}">[${f.type}] ${_esc(f.name)} (${_esc(f.short)})</option>`).join('');
+    } catch {}
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // REPORTS TAB
+  // ══════════════════════════════════════════════════════════════
+
+  // Generate last 6 quarters (current + 5 back)
+  function _generateQuarters() {
+    const now = new Date();
+    const curQ = Math.floor(now.getMonth() / 3) + 1;
+    const curY = now.getFullYear();
+    const quarters = [];
+    let q = curQ, y = curY;
+    for (let i = 0; i < 6; i++) {
+      quarters.push(`Q${q} ${y}`);
+      q--;
+      if (q < 1) { q = 4; y--; }
+    }
+    return quarters;
+  }
+
+  // State for the reports tab
+  let _rptData = null;     // last loaded report data
+  let _rptLoading = false;
+
+  async function loadReportsTab() {
+    // Populate quarter dropdown
+    const qSel = document.getElementById('rpt-quarter-sel');
+    if (qSel) {
+      const quarters = _generateQuarters();
+      qSel.innerHTML = quarters.map(q => `<option value="${q}">${q}</option>`).join('');
+    }
+
+    // Wire char counter
+    const ta = document.getElementById('rpt-gp-letter');
+    if (ta) {
+      ta.addEventListener('input', () => {
+        const cc = document.getElementById('rpt-char-count');
+        if (cc) cc.textContent = ta.value.length;
+      });
+    }
+
+    // Populate fund dropdown from /api/fund/list (returns BOTH lp_fund AND
+    // managed_account so reports work for either).  Group with an <optgroup>
+    // so GP can clearly see Funds vs Managed Accounts.
+    const fSel = document.getElementById('rpt-fund-sel');
+    if (!fSel) return;
+    try {
+      const r = await window.dgaFetch('/api/fund/list');
+      if (!r.ok) throw new Error('fund/list ' + r.status);
+      const d = await r.json();
+      const all = Array.isArray(d) ? d : (d.funds || []);
+      const lpFunds  = all.filter(f => (f.fund_type || 'lp_fund') === 'lp_fund');
+      const managed  = all.filter(f => f.fund_type === 'managed_account');
+      const mkOpt    = f => `<option value="${f.id}" data-type="${f.fund_type||'lp_fund'}">${_escRpt(f.name || f.short_name || f.id)}</option>`;
+      let html = '<option value="">— select fund or account —</option>';
+      if (lpFunds.length) html += '<optgroup label="LP Funds">' + lpFunds.map(mkOpt).join('') + '</optgroup>';
+      if (managed.length) html += '<optgroup label="Managed Accounts">' + managed.map(mkOpt).join('') + '</optgroup>';
+      fSel.innerHTML = html;
+    } catch (e) {
+      console.warn('[reports] fund list failed', e);
+      fSel.innerHTML = '<option value="">Could not load funds</option>';
+    }
+  }
+
+  // Local escape helper used by the reports tab (a more comprehensive _esc
+  // is defined later in this IIFE; this local copy ensures the reports tab
+  // can use it without a forward-reference issue).
+  function _escRpt(s) {
+    return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function resetReportsForm() {
+    const fSel = document.getElementById('rpt-fund-sel');
+    if (fSel) fSel.value = '';
+    const ta = document.getElementById('rpt-gp-letter');
+    if (ta) { ta.value = ''; }
+    const cc = document.getElementById('rpt-char-count');
+    if (cc) cc.textContent = '0';
+    document.getElementById('rpt-lp-list').innerHTML =
+      '<div style="color:var(--dim);font-size:11px;font-style:italic;">Select a fund or account above to load recipients…</div>';
+    document.getElementById('rpt-lp-count').textContent = '';
+    document.getElementById('rpt-status').textContent = '';
+    document.getElementById('rpt-select-all').checked = false;
+    _rptData = null;
+  }
+
+  async function onRptFundChange() {
+    const fSel    = document.getElementById('rpt-fund-sel');
+    const fundId  = fSel?.value;
+    const quarter = document.getElementById('rpt-quarter-sel')?.value;
+    if (!fundId || !quarter) return;
+
+    // Determine if the selected entity is a managed account (recipients label changes)
+    const selectedOpt = fSel?.options[fSel.selectedIndex];
+    const fundType    = selectedOpt?.dataset.type || 'lp_fund';
+    const isManaged   = fundType === 'managed_account';
+
+    const lpList  = document.getElementById('rpt-lp-list');
+    const lpCount = document.getElementById('rpt-lp-count');
+    const recipLabelEl = document.querySelector('label[for="rpt-recipients"], #rpt-recipients-label');
+    lpList.innerHTML = '<div style="color:var(--dim);font-size:11px;">Loading recipient' + (isManaged ? '' : 's') + '…</div>';
+    lpCount.textContent = '';
+    _rptData = null;
+
+    try {
+      const r = await window.dgaFetch(
+        `/api/v2/gp/fund/${encodeURIComponent(fundId)}/quarterly-report-data?quarter=${encodeURIComponent(quarter)}`
+      );
+      if (!r.ok) throw new Error('report-data ' + r.status);
+      _rptData = await r.json();
+      const lps       = _rptData.lps || [];
+      const positions = _rptData.positions || [];
+      const noun      = isManaged ? 'account holder' : 'LP';
+      const nounPlur  = isManaged ? 'account holder(s)' : 'LPs';
+
+      if (lps.length === 0) {
+        lpList.innerHTML = `<div style="color:var(--dim);font-size:11px;font-style:italic;">No ${nounPlur} linked to this ${isManaged ? 'account' : 'fund'} yet. Add an account holder under Settings → Users to enable sending.</div>`;
+      } else {
+        lpList.innerHTML = lps.map(lp => `
+          <label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--panel-edge);cursor:pointer;">
+            <input type="checkbox" class="rpt-lp-chk" value="${lp.lp_id}" checked>
+            <span style="font-size:12px;font-weight:700;color:var(--text-primary);">${_escRpt(lp.name || lp.lp_id)}</span>
+            <span style="font-size:11px;color:var(--mid);">&lt;${_escRpt(lp.email || '')}&gt;</span>
+          </label>
+        `).join('');
+        document.getElementById('rpt-select-all').checked = true;
+      }
+      lpCount.textContent = `${positions.length} positions · ${lps.length} ${nounPlur} loaded`;
+    } catch (e) {
+      lpList.innerHTML = `<div style="color:var(--red);font-size:11px;">Error: ${_escRpt(e.message)}</div>`;
+    }
+  }
+
+  function toggleAllLPs(checked) {
+    document.querySelectorAll('.rpt-lp-chk').forEach(cb => cb.checked = checked);
+  }
+
+  function _getSelectedLpIds() {
+    return [...document.querySelectorAll('.rpt-lp-chk:checked')].map(cb => cb.value);
+  }
+
+  // Cached logo data URI for the preview (fetched once, reused)
+  let _rptLogoDataUri = '';
+  async function _fetchLogoDataUri() {
+    if (_rptLogoDataUri) return _rptLogoDataUri;
+    try {
+      const r = await fetch('/branding/dga_logo_small.png');
+      if (!r.ok) return '';
+      const blob = await r.blob();
+      return new Promise(resolve => {
+        const reader = new FileReader();
+        reader.onload = () => { _rptLogoDataUri = reader.result; resolve(reader.result); };
+        reader.onerror = () => resolve('');
+        reader.readAsDataURL(blob);
+      });
+    } catch { return ''; }
+  }
+
+  async function previewQuarterlyReport() {
+    const fundId  = document.getElementById('rpt-fund-sel')?.value;
+    const quarter = document.getElementById('rpt-quarter-sel')?.value;
+    const gpLetter = document.getElementById('rpt-gp-letter')?.value || '';
+    const status   = document.getElementById('rpt-status');
+
+    if (!fundId)  { status.style.color='var(--red)'; status.textContent='⚠ Select a fund first.'; return; }
+    if (gpLetter.trim().length < 10) { status.style.color='var(--red)'; status.textContent='⚠ Add a GP letter before previewing.'; return; }
+    status.style.color='var(--mid)'; status.textContent='Fetching data…';
+
+    // Pre-fetch logo as data URI so it embeds correctly in the blob: preview tab
+    const logoDataUri = await _fetchLogoDataUri();
+
+    let data = _rptData;
+    if (!data || data.fund?.id !== fundId) {
+      try {
+        const r = await window.dgaFetch(
+          `/api/v2/gp/fund/${encodeURIComponent(fundId)}/quarterly-report-data?quarter=${encodeURIComponent(quarter)}`
+        );
+        if (!r.ok) throw new Error(await r.text());
+        data = await r.json();
+        _rptData = data;
+      } catch (e) {
+        status.style.color='var(--red)'; status.textContent='Error: ' + e.message; return;
+      }
+    }
+    status.style.color='var(--mid)'; status.textContent='Building preview…';
+
+    const fund  = data.fund  || {};
+    const bench = data.benchmark || {};
+    const positions = (data.positions || []).slice().sort((a,b)=>(b.market_weight_pct||0)-(a.market_weight_pct||0));
+    const lps   = data.lps  || [];
+    const evUpside = data.portfolio_expected_value_upside_pct;
+    const attribution = data.attribution || [];
+
+    // ── Formatters ──────────────────────────────────────────────
+    const _esc = s => String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const _usd = v => { if(v==null)return'—'; const n=Number(v); if(Math.abs(n)>=1e9)return'$'+(n/1e9).toFixed(2)+'B'; if(Math.abs(n)>=1e6)return'$'+(n/1e6).toFixed(2)+'M'; if(Math.abs(n)>=1e3)return'$'+(n/1e3).toFixed(1)+'K'; return'$'+n.toFixed(0); };
+    const _pct = (v,dec=1) => { if(v==null)return'—'; const n=Number(v); return(n>=0?'+':'')+n.toFixed(dec)+'%'; };
+    const _px  = v => v!=null ? '$'+Number(v).toFixed(2) : '—';
+    // Scenario target prices come from markdown as strings like "$157" — strip before parsing
+    const _scPx = v => {
+      if (v == null) return '—';
+      if (typeof v === 'number') return isNaN(v) ? '—' : '$' + v.toFixed(0);
+      const n = parseFloat(String(v).replace(/[$,\s]/g, ''));
+      return isNaN(n) ? (String(v) || '—') : '$' + n.toFixed(0);
+    };
+    const _clr = v => Number(v||0)>=0?'#16a34a':'#dc2626';
+    const _ratingBadge = r => {
+      if(!r) return '';
+      const colors={'BUY':'background:#dcfce7;color:#15803d','HOLD':'background:#fef9c3;color:#854d0e','SELL':'background:#fee2e2;color:#991b1b'};
+      const st = colors[r.toUpperCase()] || 'background:#f1f5f9;color:#64748b';
+      return `<span style="font-size:9px;font-weight:800;padding:2px 8px;border-radius:4px;letter-spacing:0.5px;${st}">${_esc(r.toUpperCase())}</span>`;
+    };
+
+    // ── Cover / Scorecard ────────────────────────────────────────
+    const ytdColor  = _clr(fund.ytd_pct);
+    const evColor   = _clr(evUpside);
+    const benchDiff = (fund.ytd_pct!=null && bench.ytd_pct!=null) ? (fund.ytd_pct - bench.ytd_pct) : null;
+
+    const scorecardHtml = `
+      <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:20px;">
+        <tr>
+          ${[
+            ['Portfolio NAV', _usd(fund.nav), '#fff', '#5BB8D4'],
+            ['YTD Return', _pct(fund.ytd_pct), '#fff', ytdColor],
+            ['vs S&amp;P 500 YTD', benchDiff!=null ? _pct(benchDiff)+' alpha' : (bench.ytd_pct!=null?'S&amp;P '+_pct(bench.ytd_pct):'—'), '#fff', _clr(benchDiff)],
+            ['Portfolio EV Upside', evUpside!=null?_pct(evUpside):'—', '#fff', evColor],
+          ].map(([lbl,val,bg,vc])=>`
+            <td width="25%" style="padding:0 6px 0 0;">
+              <div style="background:rgba(255,255,255,0.09);border:1px solid rgba(255,255,255,0.18);border-radius:10px;padding:14px 16px;">
+                <div style="font-size:9px;font-weight:700;color:rgba(255,255,255,0.55);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">${lbl}</div>
+                <div style="font-size:20px;font-weight:800;color:${vc};font-variant-numeric:tabular-nums;">${val}</div>
+              </div>
+            </td>`).join('')}
+        </tr>
+      </table>`;
+
+    // ── Holdings table ───────────────────────────────────────────
+    const holdingsHtml = positions.map(p => {
+      const r = p.research || {};
+      const wt = p.market_weight_pct!=null ? p.market_weight_pct.toFixed(1)+'%' : '—';
+      const unG = p.unrealized_gain;
+      const unP = p.unrealized_gain_pct;
+      return `
+        <tr style="border-bottom:1px solid #f1f5f9;">
+          <td style="padding:9px 10px;font-weight:800;color:var(--text-primary);font-size:13px;white-space:nowrap;">${_esc(p.symbol)}</td>
+          <td style="padding:9px 10px;font-size:11px;color:#64748b;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_esc(p.name||'')}</td>
+          <td style="padding:9px 10px;text-align:right;font-size:12px;">${_usd(p.market_value)}</td>
+          <td style="padding:9px 10px;text-align:right;font-size:12px;font-weight:600;">${wt}</td>
+          <td style="padding:9px 10px;text-align:right;font-size:12px;">${_px(p.avg_cost)}</td>
+          <td style="padding:9px 10px;text-align:right;font-size:12px;">${_px(p.last_price)}</td>
+          <td style="padding:9px 10px;text-align:right;font-size:11px;font-weight:700;color:${_clr(unG)};white-space:nowrap;">${unG!=null?_usd(unG)+'<br><span style="font-size:10px;font-weight:600;">('+_pct(unP)+')</span>':'—'}</td>
+          <td style="padding:9px 10px;text-align:center;">${_ratingBadge(r.rating)}</td>
+          <td style="padding:9px 10px;text-align:right;font-size:12px;">${r.price_target?_px(r.price_target):'—'}</td>
+          <td style="padding:9px 10px;text-align:right;font-size:12px;font-weight:700;color:${_clr(parseFloat(r.implied_return)||0)};">${r.implied_return||'—'}</td>
+        </tr>`;
+    }).join('');
+
+    // ── Position spotlight cards ─────────────────────────────────
+    const spotlightHtml = positions.filter(p=>p.research?.summary).slice(0,8).map(p => {
+      const r = p.research;
+      const scenarios = [
+        r.bull && {label:'Bull Case',color:'#15803d',bg:'#dcfce7',sc:r.bull},
+        r.base && {label:'Base Case',color:'#0A1628',bg:'#e2e8f0',sc:r.base},
+        r.bear && {label:'Bear Case',color:'#991b1b',bg:'#fee2e2',sc:r.bear},
+      ].filter(Boolean);
+
+      const scenTableHtml = scenarios.length ? `
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:10px;border-collapse:collapse;font-size:11px;">
+          <tr style="background:#f8fafc;">
+            <th style="padding:5px 8px;text-align:left;font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">Scenario</th>
+            <th style="padding:5px 8px;text-align:right;font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">Prob.</th>
+            <th style="padding:5px 8px;text-align:right;font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">Target</th>
+            <th style="padding:5px 8px;text-align:right;font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">Upside</th>
+            <th style="padding:5px 8px;text-align:left;font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">Key Assumption</th>
+          </tr>
+          ${scenarios.map(({label,color,bg,sc})=>`
+          <tr style="border-bottom:1px solid #f1f5f9;">
+            <td style="padding:6px 8px;font-weight:700;color:${color};background:${bg};white-space:nowrap;">${label}</td>
+            <td style="padding:6px 8px;text-align:right;color:#64748b;">${sc.prob||'—'}</td>
+            <td style="padding:6px 8px;text-align:right;font-weight:600;">${_scPx(sc.price)}</td>
+            <td style="padding:6px 8px;text-align:right;font-weight:700;color:${_clr(parseFloat(sc.upside)||0)};">${sc.upside||'—'}</td>
+            <td style="padding:6px 8px;font-size:10px;color:#64748b;">${_esc((sc.assumption||'').slice(0,80))}${(sc.assumption||'').length>80?'…':''}</td>
+          </tr>`).join('')}
+          ${r.expected_value_price ? `
+          <tr style="background:#f0f9ff;">
+            <td style="padding:6px 8px;font-weight:800;color:#0c4a6e;" colspan="2">Expected Value (prob.-weighted)</td>
+            <td style="padding:6px 8px;text-align:right;font-weight:800;color:#0c4a6e;">${_px(r.expected_value_price)}</td>
+            <td style="padding:6px 8px;text-align:right;font-weight:800;color:${_clr((r.expected_value_price-p.last_price)/p.last_price*100)};">${p.last_price?_pct((r.expected_value_price-p.last_price)/p.last_price*100):'—'}</td>
+            <td></td>
+          </tr>` : ''}
+        </table>` : '';
+
+      const riskHtml = r.top_risk ? `<div style="margin-top:10px;padding:8px 12px;background:#fff7ed;border-left:3px solid #f59e0b;font-size:11px;color:#78350f;"><strong>Top Risk:</strong> ${_esc(r.top_risk)}</div>` : '';
+
+      return `
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:18px 20px;margin-bottom:16px;page-break-inside:avoid;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
+          <span style="font-size:17px;font-weight:800;color:var(--text-primary);">${_esc(p.symbol)}</span>
+          <span style="font-size:12px;color:#64748b;flex:1;">${_esc(p.name||'')}</span>
+          ${_ratingBadge(r.rating)}
+          <span style="font-size:12px;font-weight:700;color:#64748b;">${p.market_weight_pct!=null?p.market_weight_pct.toFixed(1)+'% wt':''}</span>
+          <span style="font-size:12px;font-weight:700;color:${_clr(p.unrealized_gain)};">${p.unrealized_gain!=null?(_usd(p.unrealized_gain)+' unrealized'):''}</span>
+        </div>
+        <div style="font-size:12px;color:var(--text-secondary);line-height:1.7;">${_esc(r.summary)}</div>
+        ${scenTableHtml}${riskHtml}
+      </div>`;
+    }).join('');
+
+    // ── EV summary ───────────────────────────────────────────────
+    const coverageCount = positions.filter(p=>p.research?.expected_value_price).length;
+    const evSummaryHtml = evUpside != null ? `
+      <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:16px 20px;display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:180px;">
+          <div style="font-size:10px;font-weight:800;color:#0284c7;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px;">Portfolio Expected Value</div>
+          <div style="font-size:28px;font-weight:800;color:${_clr(evUpside)};font-variant-numeric:tabular-nums;">${_pct(evUpside)}</div>
+          <div style="font-size:11px;color:#0369a1;margin-top:2px;">Probability-weighted upside · ${coverageCount} of ${positions.length} positions with DGA research coverage</div>
+        </div>
+        <div style="font-size:11px;color:#0369a1;line-height:1.6;max-width:320px;">Expected value is computed from Bull/Base/Bear scenarios across all positions with DGA Capital research coverage, weighted by portfolio allocation.</div>
+      </div>` : '';
+
+    // ── Fee summary ──────────────────────────────────────────────
+    const mgmtFeeAnnual = fund.nav && fund.mgmt_fee_pct ? fund.nav * fund.mgmt_fee_pct : null;
+    const hurdle = fund.hurdle_pct ? fund.hurdle_pct * 100 : null;
+    const carryStatus = fund.ytd_pct!=null && hurdle!=null
+      ? (fund.ytd_pct > hurdle
+          ? `✅ Carry accruing at ${(fund.carry_pct*100).toFixed(1)}% above ${hurdle.toFixed(1)}% hurdle`
+          : `⏳ Below ${hurdle.toFixed(1)}% hurdle — no carry accruing (YTD ${_pct(fund.ytd_pct)})`)
+      : '—';
+    const feeSummaryHtml = `
+      <table width="100%" cellpadding="0" cellspacing="0" style="font-size:12px;">
+        <tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:8px 0;color:#64748b;">Management Fee (annualized)</td><td style="padding:8px 0;text-align:right;font-weight:600;">${fund.mgmt_fee_pct?(fund.mgmt_fee_pct*100).toFixed(2)+'% p.a.':''} ${mgmtFeeAnnual?'(≈'+_usd(mgmtFeeAnnual)+' on current NAV)':''}</td></tr>
+        <tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:8px 0;color:#64748b;">Carried Interest Rate</td><td style="padding:8px 0;text-align:right;font-weight:600;">${fund.carry_pct?(fund.carry_pct*100).toFixed(0)+'%':''}</td></tr>
+        <tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:8px 0;color:#64748b;">Hurdle Rate</td><td style="padding:8px 0;text-align:right;font-weight:600;">${hurdle!=null?hurdle.toFixed(1)+'%':'—'}</td></tr>
+        <tr><td style="padding:8px 0;color:#64748b;">Carry Status</td><td style="padding:8px 0;text-align:right;font-weight:600;">${_esc(carryStatus)}</td></tr>
+      </table>`;
+
+    // ── YTD Attribution bar chart ────────────────────────────────
+    const attrHtml = (() => {
+      if (!attribution.length) return '';
+      const maxAbs = Math.max(...attribution.map(a => Math.abs(a.contribution_pct)), 0.001);
+      const totalContrib = attribution.reduce((s,a) => s + a.contribution_pct, 0);
+      const rows = attribution.map(a => {
+        const pct   = a.contribution_pct;
+        const barW  = Math.round(Math.abs(pct) / maxAbs * 100);
+        const green = '#16a34a'; const red = '#dc2626';
+        const color = pct >= 0 ? green : red;
+        const bgBar = pct >= 0 ? 'rgba(22,163,74,0.13)' : 'rgba(220,38,38,0.10)';
+        const sign  = pct >= 0 ? '+' : '';
+        const tkRet = a.ticker_return_pct != null ? `${a.ticker_return_pct >= 0 ? '+' : ''}${a.ticker_return_pct.toFixed(1)}%` : '—';
+        const dg    = a.dollar_gain;
+        const dgStr = (dg >= 0 ? '+$' : '-$') + Math.abs(dg).toLocaleString('en-US',{maximumFractionDigits:0});
+        const soldBadge = a.sold ? `<span style="font-size:8px;font-weight:800;background:#f1f5f9;color:#94a3b8;border:1px solid #e2e8f0;border-radius:3px;padding:1px 5px;margin-left:5px;letter-spacing:0.5px;vertical-align:middle;">SOLD</span>` : '';
+        return `
+        <tr style="border-bottom:1px solid #f8fafc;">
+          <td style="padding:5px 10px 5px 0;white-space:nowrap;font-weight:700;font-size:12px;color:var(--text-primary);width:62px;">${_esc(a.ticker)}${soldBadge}</td>
+          <td style="padding:5px 8px;width:100%;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <div style="flex:1;background:#f1f5f9;border-radius:4px;height:16px;overflow:hidden;position:relative;min-width:80px;">
+                <div style="width:${barW}%;height:100%;background:${bgBar};border-radius:4px;position:relative;">
+                  <div style="width:100%;height:100%;background:${color};opacity:0.7;border-radius:4px;"></div>
+                </div>
+              </div>
+              <span style="font-size:12px;font-weight:800;color:${color};width:52px;text-align:right;flex-shrink:0;">${sign}${pct.toFixed(2)}%</span>
+            </div>
+          </td>
+          <td style="padding:5px 0 5px 8px;text-align:right;font-size:11px;color:#64748b;white-space:nowrap;width:70px;">${tkRet} ret.</td>
+          <td style="padding:5px 0 5px 8px;text-align:right;font-size:11px;font-weight:600;color:${dg>=0?green:red};white-space:nowrap;width:78px;">${dgStr}</td>
+        </tr>`;
+      }).join('');
+      const sign0 = totalContrib >= 0 ? '+' : '';
+      return `
+      <div style="margin-bottom:6px;display:flex;align-items:baseline;gap:12px;">
+        <span style="font-size:12px;color:#64748b;">Total attributed:</span>
+        <span style="font-size:14px;font-weight:800;color:${totalContrib>=0?'#16a34a':'#dc2626'};">${sign0}${totalContrib.toFixed(2)}%</span>
+        <span style="font-size:11px;color:#94a3b8;">(contribution to portfolio return)</span>
+      </div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead><tr>
+          <th style="font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;padding:4px 10px 6px 0;border-bottom:2px solid #e2e8f0;text-align:left;">Ticker</th>
+          <th style="font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;padding:4px 8px 6px;border-bottom:2px solid #e2e8f0;text-align:left;">Contribution to Return</th>
+          <th style="font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;padding:4px 0 6px 8px;border-bottom:2px solid #e2e8f0;text-align:right;">Stock Ret.</th>
+          <th style="font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;padding:4px 0 6px 8px;border-bottom:2px solid #e2e8f0;text-align:right;">Dollar P&amp;L</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    })();
+
+    // ── Assemble full HTML ───────────────────────────────────────
+    const gpLetterHtml = gpLetter.split(/\n\n+/).map(p=>`<p style="margin-bottom:14px;">${_esc(p).replace(/\n/g,'<br>')}</p>`).join('');
+    const dateStr = new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+
+    const previewHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${_esc(quarter)} Investor Report — ${_esc(fund.name||fundId)}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,sans-serif;background:#eef2f7;color:#334155;font-size:13px;line-height:1.5}
+  .page{max-width:860px;margin:36px auto 60px;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 12px 48px rgba(10,22,40,0.18)}
+  .rpt-header{background:linear-gradient(140deg,#0A1628 0%,#132040 60%,#0e2245 100%);padding:40px 44px 36px;color:#fff;position:relative}
+  .rpt-confidential{position:absolute;top:16px;right:20px;font-size:9px;font-weight:800;letter-spacing:1.5px;color:rgba(255,255,255,0.4);text-transform:uppercase;border:1px solid rgba(255,255,255,0.2);padding:3px 9px;border-radius:4px}
+  .rpt-preview-badge{display:inline-block;background:rgba(245,158,11,0.20);border:1px solid rgba(245,158,11,0.5);color:#f59e0b;font-size:10px;font-weight:800;padding:3px 10px;border-radius:6px;letter-spacing:1px;text-transform:uppercase;margin-top:20px}
+  .section{padding:28px 44px;border-bottom:1px solid #e8edf4}
+  .section:last-child{border-bottom:none}
+  .sec-label{font-size:10px;font-weight:800;color:#5BB8D4;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+  .sec-label::after{content:'';flex:1;height:1px;background:linear-gradient(to right,rgba(91,184,212,0.3),transparent)}
+  .gp-letter{font-size:13px;line-height:1.8;color:var(--text-primary)}
+  .gp-letter p:last-child{margin-bottom:0}
+  .gp-sign{margin-top:20px;font-size:13px;font-weight:700;color:var(--text-primary)}
+  table{width:100%;border-collapse:collapse}
+  th{font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;padding:8px 10px;border-bottom:2px solid #e2e8f0;text-align:left;white-space:nowrap}
+  tbody tr:hover td{background:rgba(91,184,212,0.03)}
+  .footer{background:#f8fafc;padding:20px 44px;font-size:10px;color:#94a3b8;line-height:1.75;border-top:1px solid #e2e8f0}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ── HEADER ── -->
+  <div class="rpt-header">
+    <div class="rpt-confidential">Confidential</div>
+    <div style="font-size:11px;font-weight:700;color:#5BB8D4;letter-spacing:2px;text-transform:uppercase;margin-bottom:12px;">${_esc(quarter)} · Quarterly Investor Report</div>
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:6px;">
+      ${logoDataUri ? `<div style="background:#fff;border-radius:8px;padding:6px 12px;display:flex;align-items:center;flex-shrink:0;"><img src="${logoDataUri}" alt="DGA Capital" height="36" style="display:block;"></div>` : ''}
+      <div style="font-size:28px;font-weight:800;letter-spacing:-0.5px;line-height:1.1;">${_esc(fund.name||fundId)}</div>
+    </div>
+    <div style="font-size:12px;color:rgba(255,255,255,0.50);margin-bottom:0;">${_esc((window.DGA_USER&&window.DGA_USER.name)||'DGA Capital Management')} · Prepared ${_esc(dateStr)}</div>
+    ${scorecardHtml}
+    <div class="rpt-preview-badge">⚠ PREVIEW — NOT YET SENT</div>
+  </div>
+
+  <!-- ── GP LETTER ── -->
+  <div class="section">
+    <div class="sec-label">Letter to Partners</div>
+    <div class="gp-letter">${gpLetterHtml}</div>
+    <div class="gp-sign">— ${_esc((window.DGA_USER&&window.DGA_USER.name)||'DGA Capital Management')}</div>
+  </div>
+
+  <!-- ── HOLDINGS TABLE ── -->
+  ${positions.length ? `
+  <div class="section">
+    <div class="sec-label">Portfolio Holdings</div>
+    <div style="overflow-x:auto;">
+    <table>
+      <thead><tr>
+        <th>Ticker</th><th>Company</th>
+        <th style="text-align:right;">Mkt Value</th>
+        <th style="text-align:right;">Wt %</th>
+        <th style="text-align:right;">Avg Cost</th>
+        <th style="text-align:right;">Last Px</th>
+        <th style="text-align:right;">Unrealized</th>
+        <th style="text-align:center;">Rating</th>
+        <th style="text-align:right;">12M Target</th>
+        <th style="text-align:right;">Upside</th>
+      </tr></thead>
+      <tbody>${holdingsHtml}</tbody>
+    </table>
+    </div>
+    <div style="margin-top:10px;font-size:10px;color:#94a3b8;">Prices as of ${_esc(dateStr)}. Ratings and targets from DGA Capital research.</div>
+  </div>` : ''}
+
+  <!-- ── YTD ATTRIBUTION ── -->
+  ${attrHtml ? `
+  <div class="section">
+    <div class="sec-label">YTD Performance Attribution</div>
+    <div style="font-size:11px;color:#94a3b8;margin-bottom:14px;">Contribution of each holding to total portfolio return — includes sold positions. Sorted by impact.</div>
+    ${attrHtml}
+  </div>` : ''}
+
+  <!-- ── EXPECTED VALUE ── -->
+  ${evSummaryHtml ? `
+  <div class="section">
+    <div class="sec-label">Portfolio Expected Value Analysis</div>
+    ${evSummaryHtml}
+  </div>` : ''}
+
+  <!-- ── POSITION SPOTLIGHTS ── -->
+  ${spotlightHtml ? `
+  <div class="section">
+    <div class="sec-label">Position Commentary &amp; Scenario Analysis</div>
+    ${spotlightHtml}
+  </div>` : ''}
+
+  <!-- ── FEE SUMMARY ── -->
+  <div class="section">
+    <div class="sec-label">Fee &amp; Carry Summary</div>
+    ${feeSummaryHtml}
+  </div>
+
+  <!-- ── LP NOTE ── -->
+  ${lps.length ? `
+  <div class="section" style="background:#f8fafc;">
+    <div style="font-size:11px;color:#64748b;line-height:1.6;">
+      <strong style="color:var(--text-primary);">When sent, this report will be personalized for:</strong><br>
+      ${lps.map(l=>_esc(l.name||l.lp_id)+' &lt;'+_esc(l.email||'')+'&gt;').join(' · ')}
+    </div>
+  </div>` : ''}
+
+  <!-- ── FOOTER ── -->
+  <div class="footer">
+    <strong style="color:#64748b;">Important Disclosures:</strong> This quarterly report is prepared by DGA Capital Management and is intended solely for the named limited partner(s). All information is confidential and may not be redistributed or disclosed to any third party without prior written consent of DGA Capital. Past performance is not indicative of future results. Nothing contained herein constitutes investment advice, an offer to sell, or a solicitation to buy any security. All figures are unaudited and subject to adjustment. Scenario analyses and price targets represent DGA Capital's estimates and are inherently subject to uncertainty.
+  </div>
+
+</div>
+</body>
+</html>`;
+
+    const blob = new Blob([previewHtml], { type: 'text/html' });
+    const url  = URL.createObjectURL(blob);
+    const win  = window.open(url, '_blank');
+    if (!win) { status.style.color='var(--red)'; status.textContent='Pop-up blocked — allow pop-ups for this site.'; return; }
+    status.style.color='var(--green)'; status.textContent='✅ Preview opened in new tab.';
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
+  async function sendQuarterlyReport() {
+    const fundId = document.getElementById('rpt-fund-sel')?.value;
+    const quarter = document.getElementById('rpt-quarter-sel')?.value;
+    const gpLetter = document.getElementById('rpt-gp-letter')?.value || '';
+    const lpIds = _getSelectedLpIds();
+    const status = document.getElementById('rpt-status');
+    const btn = document.getElementById('rpt-send-btn');
+
+    status.textContent = '';
+
+    if (!fundId) { status.style.color = 'var(--red)'; status.textContent = '⚠ Select a fund.'; return; }
+    if (!quarter) { status.style.color = 'var(--red)'; status.textContent = '⚠ Select a quarter.'; return; }
+    if (gpLetter.trim().length < 50) {
+      status.style.color = 'var(--red)';
+      status.textContent = `⚠ GP letter too short (${gpLetter.trim().length} chars — min 50).`;
+      return;
+    }
+    if (lpIds.length === 0) { status.style.color = 'var(--red)'; status.textContent = '⚠ Select at least one LP.'; return; }
+
+    const fSel = document.getElementById('rpt-fund-sel');
+    const fundType  = fSel?.options[fSel.selectedIndex]?.dataset.type || 'lp_fund';
+    const isManaged = fundType === 'managed_account';
+    const noun      = isManaged ? 'account holder' : 'LP';
+    const plural    = lpIds.length !== 1 ? 's' : '';
+
+    const confirmed = confirm(
+      `Send ${quarter} report to ${lpIds.length} ${noun}${plural}?\n\nThis will email each ${noun} their personalized report.`
+    );
+    if (!confirmed) return;
+
+    btn.disabled = true;
+    status.style.color = 'var(--mid)'; status.textContent = `Sending to ${lpIds.length} ${noun}${plural}…`;
+
+    try {
+      const r = await window.dgaFetch('/api/v2/gp/quarterly-report/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fund_id: fundId, quarter, gp_letter: gpLetter, lp_ids: lpIds }),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({ detail: r.statusText }));
+        throw new Error(err.detail || r.status);
+      }
+      const d = await r.json().catch(() => ({}));
+      status.style.color = 'var(--green)';
+      status.textContent = `✅ Report sent to ${lpIds.length} ${noun}${plural}${d.message ? ' — ' + d.message : ''}.`;
+      document.getElementById('rpt-badge').textContent = 'Sent';
+    } catch (e) {
+      status.style.color = 'var(--red)'; status.textContent = 'Error: ' + e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // ── Expose report functions on window so inline onclick="…" handlers work.
+  // (Without this, every Reports-tab button is a no-op because inline onclick
+  // can only see globals, and this entire script is wrapped in an IIFE.)
+  window.resetReportsForm      = resetReportsForm;
+  window.onRptFundChange       = onRptFundChange;
+  window.toggleAllLPs          = toggleAllLPs;
+  window.previewQuarterlyReport = previewQuarterlyReport;
+  window.sendQuarterlyReport   = sendQuarterlyReport;
+
+  // ── Email Diagnostics ────────────────────────────────────────────────────
+  let _emailDiagWired = false;
+  function _wireEmailDiag() {
+    if (_emailDiagWired) return;
+    _emailDiagWired = true;
+
+    const $result  = document.getElementById('email-diag-result');
+    const $testBtn = document.getElementById('email-test-btn');
+    const $diagBtn = document.getElementById('email-diag-btn');
+    const $addr    = document.getElementById('email-test-addr');
+
+    function _showResult(data, isOk) {
+      $result.style.display = 'block';
+      const bg    = isOk ? 'rgba(22,163,74,0.06)' : 'rgba(220,38,38,0.06)';
+      const color = isOk ? '#16a34a' : '#dc2626';
+      const icon  = isOk ? '✅' : '❌';
+      $result.innerHTML = `
+        <div style="padding:10px 14px;background:${bg};border-bottom:1px solid var(--panel-edge);">
+          <span style="font-weight:800;color:${color};font-size:12px;">${icon} ${isOk ? 'Success' : 'Failed'}</span>
+        </div>
+        <pre style="margin:0;padding:12px 14px;font-size:10.5px;font-family:'SF Mono',Menlo,monospace;
+                    color:var(--text-primary);line-height:1.55;overflow-x:auto;white-space:pre-wrap;
+                    background:#fafbfc;max-height:340px;overflow-y:auto;">${JSON.stringify(data, null, 2)}</pre>`;
+    }
+
+    $testBtn?.addEventListener('click', async () => {
+      const to = ($addr?.value || '').trim();
+      if (!to || !to.includes('@')) {
+        $addr?.focus();
+        $result.style.display = 'block';
+        $result.innerHTML = '<div style="padding:10px 14px;color:#dc2626;font-size:12px;">⚠ Enter a valid email address first.</div>';
+        return;
+      }
+      $testBtn.disabled = true; $testBtn.textContent = '⏳ Sending…';
+      try {
+        const r = await window.dgaFetch('/api/v2/gp/email-test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to }),
+        });
+        const d = await r.json();
+        _showResult(d, d.ok === true);
+      } catch(e) {
+        _showResult({ error: e.message }, false);
+      } finally {
+        $testBtn.disabled = false; $testBtn.textContent = '📨 Send Test Email';
+      }
+    });
+
+    $diagBtn?.addEventListener('click', async () => {
+      $diagBtn.disabled = true; $diagBtn.textContent = '⏳ Running…';
+      try {
+        const r = await window.dgaFetch('/api/v2/gp/email-diag');
+        const d = await r.json();
+        // Consider it "ok" if the test send succeeded or no API key error
+        const ok = d?.resend_test_send?.ok === true;
+        _showResult(d, ok);
+      } catch(e) {
+        _showResult({ error: e.message }, false);
+      } finally {
+        $diagBtn.disabled = false; $diagBtn.textContent = '🔍 Run Diagnostics';
+      }
+    });
+  }
+
+  // ── Automation Schedule ───────────────────────────────────────────────────
+  async function loadAutomationSettings() {
+    try {
+      const r = await window.dgaFetch('/api/automation/settings');
+      if (!r.ok) return;
+      const s = await r.json();
+
+      // Daily Brief
+      const briefCfg = s.daily_brief || {};
+      const $briefOn  = document.getElementById('auto-brief-enabled');
+      const $briefT   = document.getElementById('auto-brief-time');
+      const $briefNxt = document.getElementById('auto-brief-next');
+      if ($briefOn) $briefOn.checked = briefCfg.enabled !== false;
+      if ($briefT)  $briefT.value = _fmtTime(briefCfg.hour ?? 8, briefCfg.minute ?? 0);
+      if ($briefNxt) $briefNxt.textContent = _fmtNext(briefCfg);
+
+      // Market Pulse
+      const pulseCfg = s.market_pulse || {};
+      const $pulseOn  = document.getElementById('auto-pulse-enabled');
+      const $pulseT   = document.getElementById('auto-pulse-time');
+      const $pulseNxt = document.getElementById('auto-pulse-next');
+      if ($pulseOn) $pulseOn.checked = pulseCfg.enabled !== false;
+      if ($pulseT)  $pulseT.value = _fmtTime(pulseCfg.hour ?? 8, pulseCfg.minute ?? 15);
+      if ($pulseNxt) $pulseNxt.textContent = _fmtNext(pulseCfg);
+
+      // SnapTrade Sync (opt-in: defaults off)
+      const snapCfg = s.snaptrade_sync || {};
+      const $snapOn  = document.getElementById('auto-snap-enabled');
+      const $snapT   = document.getElementById('auto-snap-time');
+      const $snapNxt = document.getElementById('auto-snap-next');
+      if ($snapOn) $snapOn.checked = snapCfg.enabled === true;
+      if ($snapT)  $snapT.value = _fmtTime(snapCfg.hour ?? 6, snapCfg.minute ?? 0);
+      if ($snapNxt) $snapNxt.textContent = _fmtNext(snapCfg);
+    } catch(e) { console.warn('[automation]', e); }
+  }
+
+  function _fmtTime(h, m) {
+    return String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
+  }
+
+  function _fmtNext(cfg) {
+    if (!cfg.enabled) return '🔴 Off';
+    const secs = cfg.next_run_secs;
+    if (secs == null) return '—';
+    const h = Math.floor(secs / 3600);
+    const min = Math.floor((secs % 3600) / 60);
+    if (h === 0) return `▶ in ${min}m`;
+    return `▶ in ${h}h ${min}m`;
+  }
+
+  document.getElementById('auto-save-btn')?.addEventListener('click', async () => {
+    const $btn = document.getElementById('auto-save-btn');
+    const $msg = document.getElementById('auto-save-msg');
+    $btn.disabled = true; $btn.textContent = 'Saving…';
+
+    const briefTime  = (document.getElementById('auto-brief-time')?.value  || '08:00').split(':');
+    const pulseTime  = (document.getElementById('auto-pulse-time')?.value  || '08:15').split(':');
+    const snapTime   = (document.getElementById('auto-snap-time')?.value   || '06:00').split(':');
+
+    const body = {
+      daily_brief: {
+        enabled: document.getElementById('auto-brief-enabled')?.checked ?? true,
+        hour:    parseInt(briefTime[0], 10),
+        minute:  parseInt(briefTime[1], 10),
+      },
+      market_pulse: {
+        enabled: document.getElementById('auto-pulse-enabled')?.checked ?? true,
+        hour:    parseInt(pulseTime[0], 10),
+        minute:  parseInt(pulseTime[1], 10),
+      },
+      snaptrade_sync: {
+        enabled: document.getElementById('auto-snap-enabled')?.checked ?? false,
+        hour:    parseInt(snapTime[0], 10),
+        minute:  parseInt(snapTime[1], 10),
+      },
+    };
+
+    try {
+      const r = await window.dgaFetch('/api/automation/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const s = await r.json();
+      // Refresh next-run labels from server response
+      const $briefNxt = document.getElementById('auto-brief-next');
+      const $pulseNxt = document.getElementById('auto-pulse-next');
+      const $snapNxt  = document.getElementById('auto-snap-next');
+      if ($briefNxt) $briefNxt.textContent = _fmtNext(s.daily_brief  || {});
+      if ($pulseNxt) $pulseNxt.textContent = _fmtNext(s.market_pulse || {});
+      if ($snapNxt)  $snapNxt.textContent  = _fmtNext(s.snaptrade_sync || {});
+      if ($msg) { $msg.textContent = '✅ Saved'; setTimeout(() => { if($msg) $msg.textContent=''; }, 3000); }
+    } catch(e) {
+      if ($msg) $msg.textContent = '❌ ' + e.message;
+    } finally {
+      $btn.disabled = false; $btn.textContent = 'Save Schedule';
+    }
+  });
+
+  // Toggle Add LP form
+  document.getElementById('lp-add-toggle-btn')?.addEventListener('click', () => {
+    const form = document.getElementById('lp-add-form');
+    const btn  = document.getElementById('lp-add-toggle-btn');
+    const open = form.style.display === 'none';
+    form.style.display = open ? 'block' : 'none';
+    btn.textContent = open ? '✕ Cancel' : '+ Add LP';
+  });
+
+  // Create new LP
+  document.getElementById('lp-new-save-btn')?.addEventListener('click', async () => {
+    const name  = document.getElementById('lp-new-name')?.value?.trim();
+    const email = document.getElementById('lp-new-email')?.value?.trim();
+    const pw    = document.getElementById('lp-new-pw')?.value?.trim();
+    const msg   = document.getElementById('lp-new-msg');
+    const btn   = document.getElementById('lp-new-save-btn');
+    if (!name || !email || !pw) { msg.style.color='var(--red)'; msg.textContent='All fields required.'; return; }
+    if (pw.length < 6) { msg.style.color='var(--red)'; msg.textContent='Password must be ≥6 chars.'; return; }
+    btn.disabled = true; btn.textContent = 'Creating…'; msg.textContent = '';
+    try {
+      const r = await window.dgaFetch('/api/v2/admin/lp/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, password: pw, fund_memberships: {}, managed_account_ids: [] }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || r.status);
+      msg.style.color = 'var(--green)';
+      msg.textContent = '✅ Created — set their assignments below.';
+      document.getElementById('lp-new-name').value = '';
+      document.getElementById('lp-new-email').value = '';
+      document.getElementById('lp-new-pw').value = '';
+      setTimeout(() => {
+        document.getElementById('lp-add-form').style.display = 'none';
+        document.getElementById('lp-add-toggle-btn').textContent = '+ Add LP';
+        loadLPRoster();
+      }, 1400);
+    } catch (e) {
+      msg.style.color = 'var(--red)'; msg.textContent = '❌ ' + e.message;
+    } finally { btn.disabled = false; btn.textContent = 'Create LP'; }
+  });
+
+  // ── Admin User Management ──────────────────────────────────────────────────
+  document.getElementById('admin-add-toggle-btn')?.addEventListener('click', () => {
+    const form = document.getElementById('admin-add-form');
+    const btn  = document.getElementById('admin-add-toggle-btn');
+    const open = form.style.display === 'none';
+    form.style.display = open ? 'block' : 'none';
+    btn.textContent = open ? '✕ Cancel' : '+ Add Admin';
+  });
+
+  document.getElementById('admin-new-save-btn')?.addEventListener('click', async () => {
+    const name  = document.getElementById('admin-new-name')?.value?.trim();
+    const email = document.getElementById('admin-new-email')?.value?.trim();
+    const pw    = document.getElementById('admin-new-pw')?.value?.trim();
+    const msg   = document.getElementById('admin-new-msg');
+    const btn   = document.getElementById('admin-new-save-btn');
+    if (!name || !email || !pw) { msg.style.color='var(--red)'; msg.textContent='All fields required.'; return; }
+    if (pw.length < 6)          { msg.style.color='var(--red)'; msg.textContent='Password must be ≥6 chars.'; return; }
+    btn.disabled = true; btn.textContent = 'Creating…'; msg.textContent = '';
+    try {
+      const r = await window.dgaFetch('/api/auth/v2/admin/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, password: pw, demo_mode: document.getElementById('admin-new-demo')?.checked || false }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || r.status);
+      msg.style.color = 'var(--green)';
+      msg.textContent = '✅ Admin account created — they can log in immediately.';
+      document.getElementById('admin-new-name').value  = '';
+      document.getElementById('admin-new-email').value = '';
+      document.getElementById('admin-new-pw').value    = '';
+      setTimeout(() => {
+        document.getElementById('admin-add-form').style.display = 'none';
+        document.getElementById('admin-add-toggle-btn').textContent = '+ Add Admin';
+        _loadAdminRoster();
+      }, 1400);
+    } catch (e) {
+      msg.style.color = 'var(--red)'; msg.textContent = '❌ ' + e.message;
+    } finally { btn.disabled = false; btn.textContent = 'Create Admin'; }
+  });
+
+  async function _loadAdminRoster() {
+    const el = document.getElementById('admin-roster');
+    if (!el) return;
+    try {
+      const r = await window.dgaFetch('/api/v2/admin/lp/list');
+      if (!r.ok) { el.textContent = 'Could not load users.'; return; }
+      const d = await r.json();
+      const admins = (d.users || []).filter(u => u.role === 'admin');
+      if (!admins.length) { el.textContent = 'No admin accounts yet.'; return; }
+      el.innerHTML = admins.map(u => `
+        <div style="border-bottom:1px solid var(--panel-edge);">
+          <div style="display:flex;align-items:center;gap:10px;padding:9px 14px;">
+            <span style="font-size:12px;font-weight:700;color:var(--text-primary);">${_esc(u.name)}</span>
+            <span style="font-size:10px;color:var(--dim);">${_esc(u.email)}</span>
+            ${u.demo_mode ? '<span style="font-size:9px;font-weight:800;padding:2px 7px;border-radius:4px;background:rgba(91,184,212,0.12);color:var(--blue);border:1px solid rgba(91,184,212,0.3);flex-shrink:0;">🎭 DEMO</span>' : ''}
+            <span style="margin-left:auto;font-size:9px;font-weight:800;letter-spacing:1px;
+                         background:rgba(201,168,76,0.15);color:#a88a3a;border:1px solid rgba(201,168,76,0.30);
+                         padding:2px 7px;border-radius:4px;flex-shrink:0;">⚡ ADMIN</span>
+            <button class="tab-btn sm secondary" style="font-size:9px;padding:0 9px;flex-shrink:0;"
+              data-admin-pw-expand="${_esc(u.lp_id)}">Reset PW ▾</button>
+            <button data-admin-delete="${_esc(u.lp_id)}" data-admin-name="${_esc(u.name)}"
+              style="flex-shrink:0;background:transparent;border:1px solid rgba(220,38,38,0.25);
+                     color:#dc2626;border-radius:5px;padding:3px 10px;font-size:9px;
+                     font-weight:800;letter-spacing:0.8px;cursor:pointer;
+                     transition:background .15s,border-color .15s;"
+              onmouseover="this.style.background='rgba(220,38,38,0.08)'"
+              onmouseout="this.style.background='transparent'">REMOVE</button>
+          </div>
+          <div id="admin-pw-panel-${_esc(u.lp_id)}" style="display:none;padding:12px 18px 14px;background:#fafbfc;border-top:1px solid var(--panel-edge);">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <span style="font-size:10px;font-weight:700;color:var(--mid);letter-spacing:0.5px;flex-shrink:0;">New Password:</span>
+              <input type="password" placeholder="New password (≥8 chars)" id="admin-pw-input-${_esc(u.lp_id)}"
+                style="width:200px;height:32px;background:white;border:1.5px solid var(--panel-edge);border-radius:6px;color:#1e293b;font-size:12px;padding:0 10px;outline:none;">
+              <button class="tab-btn sm" style="height:32px;padding:0 16px;" data-admin-pw-save="${_esc(u.lp_id)}">Set Password</button>
+              <span id="admin-pw-msg-${_esc(u.lp_id)}" style="font-size:11px;"></span>
+            </div>
+          </div>
+        </div>`).join('');
+
+      // Wire admin Remove buttons
+      el.querySelectorAll('[data-admin-delete]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const lpId = btn.dataset.adminDelete;
+          const name = btn.dataset.adminName;
+          if (!(await dgaConfirm({ title: 'Remove admin account', message: `Remove admin account for "${name}"?\n\nThis cannot be undone.`, confirmLabel: 'Remove admin' }))) return;
+          try {
+            const r = await window.dgaFetch('/api/auth/v2/user/' + encodeURIComponent(lpId), { method: 'DELETE' });
+            if (!r.ok) {
+              const d = await r.json().catch(() => ({}));
+              alert('Could not remove: ' + (d.detail || r.status));
+              return;
+            }
+            _loadAdminRoster();
+          } catch (e) { alert('Error: ' + e.message); }
+        });
+      });
+
+      // Wire admin expand/collapse for reset PW
+      el.querySelectorAll('[data-admin-pw-expand]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const lpId = btn.dataset.adminPwExpand;
+          const panel = document.getElementById('admin-pw-panel-' + lpId);
+          const open = panel.style.display === 'none';
+          panel.style.display = open ? 'block' : 'none';
+          btn.textContent = open ? 'Reset PW ▴' : 'Reset PW ▾';
+        });
+      });
+
+      // Wire admin password save buttons
+      el.querySelectorAll('[data-admin-pw-save]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const lpId  = btn.dataset.adminPwSave;
+          const input = document.getElementById('admin-pw-input-' + lpId);
+          const msg   = document.getElementById('admin-pw-msg-' + lpId);
+          const pw    = input?.value?.trim();
+          if (!pw || pw.length < 8) { msg.style.color='var(--red)'; msg.textContent='≥ 8 characters required.'; return; }
+          btn.disabled = true; btn.textContent = 'Saving…'; msg.textContent = '';
+          try {
+            const r = await window.dgaFetch('/api/v2/admin/lp/set-password', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ lp_id: lpId, new_password: pw, must_change: false }),
+            });
+            if (!r.ok) throw new Error((await r.json()).detail || r.status);
+            msg.style.color = 'var(--green)'; msg.textContent = '✅ Password updated.';
+            if (input) input.value = '';
+          } catch (e) { msg.style.color = 'var(--red)'; msg.textContent = '❌ ' + e.message; }
+          btn.disabled = false; btn.textContent = 'Set Password';
+        });
+      });
+
+    } catch { el.textContent = 'Error loading admin roster.'; }
+  }
+
+  async function _deleteUser(lpId, name) {
+    if (!(await dgaConfirm({ title: 'Remove admin account', message: `Remove admin account for "${name}"?\n\nThis cannot be undone.`, confirmLabel: 'Remove admin' }))) return;
+    try {
+      const r = await window.dgaFetch('/api/auth/v2/user/' + encodeURIComponent(lpId), { method: 'DELETE' });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        alert('Could not remove user: ' + (d.detail || r.status));
+        return;
+      }
+      _loadAdminRoster();
+    } catch (e) {
+      alert('Error: ' + e.message);
+    }
+  }
+
+  function _esc(s) { return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+
+  // Show demo mode banner if applicable
+  if (window.DGA_USER && window.DGA_USER.demo_mode) {
+    _renderDemoBanner();
+  }
+  // Also hook after DOMContentLoaded in case DGA_USER isn't set yet
+  document.addEventListener('DOMContentLoaded', function () {
+    if (window.DGA_USER && window.DGA_USER.demo_mode) _renderDemoBanner();
+  });
+
+  // Sliw Agent nav: ONLY alecmazo1@gmail.com + edytasliw@gmail.com (hidden for all other DGA logins)
+  (function _showSliwNavIfAllowed() {
+    var ALLOWED = ['alecmazo1@gmail.com', 'edytasliw@gmail.com'];
+    function apply() {
+      var me = window.DGA_USER || {};
+      var email = String(me.email || '').toLowerCase().trim();
+      var link = document.getElementById('nav-sliw-link');
+      if (link && ALLOWED.indexOf(email) >= 0) {
+        link.style.display = '';
+      }
+    }
+    apply();
+    var n = 0;
+    var t = setInterval(function () {
+      n += 1;
+      if (window.DGA_USER) { apply(); clearInterval(t); }
+      if (n > 50) clearInterval(t);
+    }, 100);
+  })();
+
+  function _renderDemoBanner() {
+    if (document.getElementById('dga-demo-banner')) return;
+    const st = document.createElement('style');
+    st.textContent = [
+      '#dga-demo-banner {',
+      '  position: fixed; top: 0; left: 0; right: 0; z-index: 99998;',
+      '  background: #1e3a5f;',
+      '  border-bottom: 2px solid #5BB8D4;',
+      '  color: #bae6fd;',
+      '  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;',
+      '  font-size: 12px; font-weight: 700;',
+      '  letter-spacing: 0.3px;',
+      '  padding: 7px 16px;',
+      '  text-align: center;',
+      '  pointer-events: none;',
+      '}',
+      'body { padding-top: 34px !important; }',
+    ].join('\n');
+    document.head.appendChild(st);
+    const bar = document.createElement('div');
+    bar.id = 'dga-demo-banner';
+    bar.textContent = '🎭  Demo Mode — Investor identities are anonymised · Real fund performance · Read-only';
+    document.body.insertBefore(bar, document.body.firstChild);
+  }
+
+  _loadAdminRoster();
+
+  // Cache of all funds/accounts for assignment panels
+  let _lpRosterFundsCache = null;
+
+  async function _getRosterFunds() {
+    if (_lpRosterFundsCache) return _lpRosterFundsCache;
+    const r = await window.dgaFetch('/api/v2/lp/me/overview');
+    const d = await r.json();
+    _lpRosterFundsCache = { funds: d.funds || [], accounts: d.managed_accounts || [] };
+    return _lpRosterFundsCache;
+  }
+
+  async function loadLPRoster() {
+    const el    = document.getElementById('lp-roster');
+    const badge = document.getElementById('lp-count-badge');
+    _lpRosterFundsCache = null; // refresh fund list each time
+    try {
+      const [uResp, fData] = await Promise.all([
+        window.dgaFetch('/api/v2/admin/lp/list'),
+        _getRosterFunds(),
+      ]);
+      if (!uResp.ok) throw new Error(uResp.status);
+      const d = await uResp.json();
+      // LP roster shows only lp and gp accounts — admins appear in the separate Admin panel
+      const users = (d.users || []).filter(u => u.role !== 'admin');
+      const funds = fData.funds || [];
+      const accts = fData.accounts || [];
+      if (badge) badge.textContent = String(users.length);
+
+      el.innerHTML = users.map(u => {
+        const isLP  = u.role === 'lp';
+        const fKeys = Object.keys(u.fund_memberships || {});
+        const aKeys = u.managed_account_ids || [];
+        const assignSummary = [
+          fKeys.length ? `${fKeys.length} fund${fKeys.length>1?'s':''}` : '',
+          aKeys.length ? `${aKeys.length} acct${aKeys.length>1?'s':''}` : '',
+        ].filter(Boolean).join(' · ') || '<span style="color:var(--dim);font-style:italic;">none</span>';
+
+        return `
+        <div class="lp-roster-row" data-lp-id="${u.lp_id}" style="width:100%;">
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--panel-edge);">
+            <div style="flex:0 0 260px;min-width:0;text-align:left;">
+              <div style="font-weight:800;color:var(--text-primary);font-size:13px;">${u.name}</div>
+              <div style="color:var(--mid);font-size:11px;margin-top:1px;">${u.email}</div>
+            </div>
+            <div style="flex:1;"></div>
+            <span style="font-size:9px;font-weight:800;letter-spacing:1px;padding:2px 7px;border-radius:4px;flex-shrink:0;
+              ${u.role==='gp' ? 'background:rgba(91,184,212,0.2);color:var(--blue)' : 'background:rgba(0,0,0,0.05);color:var(--mid)'}">${u.role.toUpperCase()}</span>
+            ${u.must_change_password ? '<span style="font-size:9px;font-weight:800;color:#92400e;background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.4);border-radius:4px;padding:2px 7px;flex-shrink:0;letter-spacing:0.5px;">TEMP PW</span>' : ''}
+            <div style="font-size:10px;color:var(--mid);flex-shrink:0;">${assignSummary}</div>
+            ${isLP ? `
+              <button class="tab-btn sm secondary" style="font-size:9px;padding:0 9px;flex-shrink:0;" data-lp-expand="${u.lp_id}">Edit ▾</button>
+              <button style="flex-shrink:0;background:transparent;border:1px solid rgba(220,38,38,0.25);color:#dc2626;border-radius:5px;padding:3px 10px;font-size:9px;font-weight:800;letter-spacing:0.8px;cursor:pointer;transition:background .15s,border-color .15s;"
+                onmouseover="this.style.background='rgba(220,38,38,0.08)'" onmouseout="this.style.background='transparent'"
+                data-lp-delete="${u.lp_id}" data-lp-name="${_esc(u.name)}">✕ Remove</button>
+            ` : ''}
+          </div>
+          ${isLP ? `
+          <div id="lp-panel-${u.lp_id}" style="display:none;padding:16px 18px 14px;background:#f8fafc;border-bottom:1px solid var(--panel-edge);">
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:14px;">
+
+              <!-- LP Funds -->
+              <div>
+                <div style="font-size:9px;font-weight:800;color:var(--blue);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;">LP Funds</div>
+                ${funds.length ? funds.map(f => {
+                  const alias = (u.fund_memberships || {})[f.fund_name] || '';
+                  const checked = f.fund_name in (u.fund_memberships || {}) ? 'checked' : '';
+                  return `
+                  <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;min-height:26px;">
+                    <input type="checkbox" ${checked} data-fund-check="${f.fund_name}"
+                      style="accent-color:var(--blue);width:15px;height:15px;flex-shrink:0;cursor:pointer;">
+                    <span style="font-size:12px;font-weight:600;color:var(--text-primary);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${f.fund_name}</span>
+                    <input type="text" value="${alias}" placeholder="alias" data-fund-alias="${f.fund_name}"
+                      style="width:72px;height:26px;background:white;border:1.5px solid var(--panel-edge);border-radius:6px;color:#1e293b;font-size:11px;padding:0 8px;outline:none;flex-shrink:0;">
+                  </div>`;
+                }).join('') : '<div style="font-size:12px;color:var(--dim);font-style:italic;padding:4px 0;">No LP funds created yet.</div>'}
+              </div>
+
+              <!-- Managed Accounts -->
+              <div>
+                <div style="font-size:9px;font-weight:800;color:#b45309;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;">Managed Accounts</div>
+                ${accts.length ? accts.map(a => {
+                  const aname   = a.account_name || a.fund_name || '';
+                  const checked = (u.managed_account_ids || []).includes(aname) ? 'checked' : '';
+                  return `
+                  <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;min-height:26px;">
+                    <input type="checkbox" ${checked} data-acct-check="${aname}"
+                      style="accent-color:#b45309;width:15px;height:15px;flex-shrink:0;cursor:pointer;">
+                    <span style="font-size:12px;font-weight:600;color:var(--text-primary);flex:1;">${aname}</span>
+                    ${a.short_name ? `<span style="font-size:10px;color:var(--mid);flex-shrink:0;">${a.short_name}</span>` : ''}
+                  </div>`;
+                }).join('') : '<div style="font-size:12px;color:var(--dim);font-style:italic;padding:4px 0;">No managed accounts created yet.</div>'}
+              </div>
+            </div>
+
+            <!-- Email + Password + Save row -->
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:12px;border-top:1px solid var(--panel-edge);">
+              <span style="font-size:10px;font-weight:700;color:var(--mid);letter-spacing:0.5px;flex-shrink:0;">Email:</span>
+              <input type="email" placeholder="${u.email}" value="${u.email}" data-lp-email-input="${u.lp_id}" data-lp-orig-email="${u.email}"
+                style="width:220px;height:32px;background:white;border:1.5px solid var(--panel-edge);border-radius:6px;color:#1e293b;font-size:12px;padding:0 10px;outline:none;">
+              <span style="font-size:10px;font-weight:700;color:var(--mid);letter-spacing:0.5px;flex-shrink:0;margin-left:6px;">Force Reset PW:</span>
+              <input type="password" placeholder="New temp password" data-lp-pw-input="${u.lp_id}"
+                style="width:180px;height:32px;background:white;border:1.5px solid var(--panel-edge);border-radius:6px;color:#1e293b;font-size:12px;padding:0 10px;outline:none;">
+              <button class="tab-btn sm" style="height:32px;padding:0 16px;font-size:11px;font-weight:700;" data-lp-save="${u.lp_id}">Save Changes</button>
+              <span data-lp-save-msg="${u.lp_id}" style="font-size:11px;"></span>
+            </div>
+          </div>` : ''}
+        </div>`;
+      }).join('');
+
+      // Wire expand toggles
+      el.querySelectorAll('[data-lp-expand]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const lpId  = btn.dataset.lpExpand;
+          const panel = document.getElementById('lp-panel-' + lpId);
+          const open  = panel.style.display === 'none';
+          panel.style.display = open ? 'block' : 'none';
+          btn.textContent = open ? 'Close ▴' : 'Edit ▾';
+        });
+      });
+
+      // Wire LP delete buttons
+      el.querySelectorAll('[data-lp-delete]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const lpId = btn.dataset.lpDelete;
+          const name = btn.dataset.lpName;
+          if (!(await dgaConfirm({ title: 'Remove LP account', message: `Remove LP account for "${name}"?\n\nThis will permanently delete their login. Their commitment data in the fund remains. This cannot be undone.`, confirmLabel: 'Remove LP' }))) return;
+          try {
+            const r = await window.dgaFetch('/api/auth/v2/user/' + encodeURIComponent(lpId), { method: 'DELETE' });
+            if (!r.ok) {
+              const d = await r.json().catch(() => ({}));
+              alert('Could not remove: ' + (d.detail || r.status));
+              return;
+            }
+            loadLPRoster();
+          } catch (e) { alert('Error: ' + e.message); }
+        });
+      });
+
+      // Wire Save buttons
+      el.querySelectorAll('[data-lp-save]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const lpId  = btn.dataset.lpSave;
+          const panel = document.getElementById('lp-panel-' + lpId);
+          const msg   = el.querySelector(`[data-lp-save-msg="${lpId}"]`);
+
+          // Collect fund memberships
+          const fm = {};
+          panel.querySelectorAll('[data-fund-check]').forEach(cb => {
+            if (cb.checked) {
+              const fname = cb.dataset.fundCheck;
+              const aliasEl = panel.querySelector(`[data-fund-alias="${fname}"]`);
+              fm[fname] = aliasEl ? aliasEl.value.trim() : '';
+            }
+          });
+
+          // Collect managed accounts
+          const ma = [];
+          panel.querySelectorAll('[data-acct-check]').forEach(cb => {
+            if (cb.checked) ma.push(cb.dataset.acctCheck);
+          });
+
+          // Optional email update
+          const emailInp  = panel.querySelector(`[data-lp-email-input="${lpId}"]`);
+          const newEmail  = emailInp?.value?.trim();
+          const origEmail = emailInp?.dataset?.lpOrigEmail || '';
+
+          // Optional password reset
+          const pwInp = el.querySelector(`[data-lp-pw-input="${lpId}"]`);
+          const pw    = pwInp?.value?.trim();
+
+          btn.disabled = true; btn.textContent = 'Saving…'; msg.textContent = '';
+          try {
+            const assignR = await window.dgaFetch('/api/v2/admin/lp/update-assignments', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ lp_id: lpId, fund_memberships: fm, managed_account_ids: ma }),
+            });
+            if (!assignR.ok) throw new Error((await assignR.json()).detail || assignR.status);
+
+            // Update email if it changed
+            if (newEmail && newEmail !== origEmail) {
+              const emailR = await window.dgaFetch('/api/v2/admin/lp/update-email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ lp_id: lpId, new_email: newEmail }),
+              });
+              if (!emailR.ok) throw new Error('Email: ' + ((await emailR.json()).detail || emailR.status));
+            }
+
+            if (pw) {
+              const pwR = await window.dgaFetch('/api/v2/admin/lp/set-password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ lp_id: lpId, new_password: pw, must_change: true }),
+              });
+              if (!pwR.ok) throw new Error('Password: ' + ((await pwR.json()).detail || pwR.status));
+              if (pwInp) pwInp.value = '';
+            }
+
+            msg.style.color = 'var(--green)'; msg.textContent = '✅ Saved';
+            setTimeout(() => loadLPRoster(), 1200);
+          } catch (e) {
+            msg.style.color = 'var(--red)'; msg.textContent = '❌ ' + e.message;
+          } finally { btn.disabled = false; btn.textContent = 'Save Changes'; }
+        });
+      });
+
+    } catch { el.innerHTML = '<div class="tab-error">Could not load user list.</div>'; }
+  }
+
+  // Change own password
+  document.getElementById('pw-save-btn')?.addEventListener('click', async () => {
+    const old = document.getElementById('pw-old')?.value;
+    const nw  = document.getElementById('pw-new')?.value;
+    const cf  = document.getElementById('pw-confirm')?.value;
+    const msg = document.getElementById('pw-msg');
+    if (!old || !nw) { msg.style.color='var(--red)'; msg.textContent='Fill in all fields.'; return; }
+    if (nw !== cf)   { msg.style.color='var(--red)'; msg.textContent='Passwords do not match.'; return; }
+    if (nw.length < 8) { msg.style.color='var(--red)'; msg.textContent='New password must be ≥ 8 characters.'; return; }
+    const btn = document.getElementById('pw-save-btn');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      const r = await window.dgaFetch('/api/auth/v2/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ old_password: old, new_password: nw }),
+      });
+      if (!r.ok) throw new Error((await r.json()).detail || r.status);
+      msg.style.color = 'var(--green)'; msg.textContent = '✅ Password updated.';
+      document.getElementById('pw-old').value = '';
+      document.getElementById('pw-new').value = '';
+      document.getElementById('pw-confirm').value = '';
+    } catch (e) { msg.style.color='var(--red)'; msg.textContent = 'Error: ' + e.message; }
+    btn.disabled = false; btn.textContent = 'Save Password';
+  });
+
+  async function loadBuildInfo() {
+    try {
+      const r = await fetch('/api/build');
+      const d = await r.json();
+      const el = document.getElementById('build-info');
+      if (el) el.textContent = 'Build: ' + (d.build || '—');
+    } catch {}
+  }
+
+  // ── Create Fund / Managed Account ────────────────────────────
+  document.getElementById('cf-create-btn')?.addEventListener('click', async () => {
+    const name    = document.getElementById('cf-name')?.value?.trim();
+    const short   = document.getElementById('cf-short')?.value?.trim().toUpperCase();
+    const type    = document.getElementById('cf-type')?.value;
+    const inc     = document.getElementById('cf-inception')?.value;
+    const mgmt    = parseFloat(document.getElementById('cf-mgmt')?.value || '1.5') / 100;
+    const carry   = parseFloat(document.getElementById('cf-carry')?.value || '20') / 100;
+    const hurdle  = parseFloat(document.getElementById('cf-hurdle')?.value || '8') / 100;
+    const msg     = document.getElementById('cf-msg');
+    const btn     = document.getElementById('cf-create-btn');
+
+    if (!name) { msg.style.color='var(--red)'; msg.textContent='Fund name is required.'; return; }
+    if (!short || short.length < 2) { msg.style.color='var(--red)'; msg.textContent='Short code must be at least 2 characters.'; return; }
+
+    btn.disabled = true; btn.textContent = '…';
+    msg.textContent = '';
+    try {
+      const r = await window.dgaFetch('/api/v2/gp/fund/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, short_name: short, fund_type: type, inception_date: inc || '', mgmt_fee_pct: mgmt, carry_pct: carry, hurdle_pct: hurdle }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || r.status);
+      msg.style.color = 'var(--green)';
+      msg.textContent = d.created ? `✅ Created "${name}" (${short})` : `✓ Already exists: ${name}`;
+      document.getElementById('cf-name').value = '';
+      document.getElementById('cf-short').value = '';
+      // Refresh fund tab if it's visible
+      if (document.getElementById('tab-fund')?.classList.contains('active')) loadFundOverview();
+    } catch (e) {
+      msg.style.color = 'var(--red)';
+      msg.textContent = 'Error: ' + e.message;
+    } finally {
+      btn.disabled = false; btn.textContent = 'Create';
+    }
+  });
+
+  // ── Rename Fund / Account ─────────────────────────────────────
+  document.getElementById('rn-fund')?.addEventListener('change', function() {
+    const opt = this.options[this.selectedIndex];
+    document.getElementById('rn-name').value  = opt.dataset.name  || '';
+    document.getElementById('rn-short').value = opt.dataset.short || '';
+  });
+
+  document.getElementById('rn-save-btn')?.addEventListener('click', async () => {
+    const fundId = document.getElementById('rn-fund')?.value;
+    const name   = document.getElementById('rn-name')?.value?.trim();
+    const short  = document.getElementById('rn-short')?.value?.trim().toUpperCase();
+    const msg    = document.getElementById('rn-msg');
+    const btn    = document.getElementById('rn-save-btn');
+
+    if (!fundId) { msg.style.color='var(--red)'; msg.textContent='Select a fund or account first.'; return; }
+    if (!name)   { msg.style.color='var(--red)'; msg.textContent='Full name is required.'; return; }
+    if (!short || short.length < 2) { msg.style.color='var(--red)'; msg.textContent='Short code must be ≥ 2 characters.'; return; }
+
+    btn.disabled = true; btn.textContent = '…';
+    msg.textContent = '';
+    try {
+      const r = await window.dgaFetch(`/api/v2/gp/fund/${encodeURIComponent(fundId)}/rename`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, short_name: short }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || r.status);
+      msg.style.color = 'var(--green)';
+      msg.textContent = `✅ Renamed to "${name}" (${short})`;
+      // Refresh dropdown so it shows the new names
+      await loadRenameDropdown();
+      // Pre-select the just-renamed fund and re-populate fields
+      const sel = document.getElementById('rn-fund');
+      if (sel) {
+        for (const opt of sel.options) { if (opt.value === fundId) { sel.value = fundId; break; } }
+      }
+      document.getElementById('rn-name').value  = name;
+      document.getElementById('rn-short').value = short;
+      // Refresh Funds tab if visible so cards update immediately
+      if (document.getElementById('tab-fund')?.classList.contains('active')) loadFundOverview();
+    } catch (e) {
+      msg.style.color = 'var(--red)';
+      msg.textContent = 'Error: ' + e.message;
+    } finally {
+      btn.disabled = false; btn.textContent = 'Rename';
+    }
+  });
+
+  // ── Ticker click → free on-site snapshot (legacy name kept for callers) ──
+  function openGuruFocus(ticker) {
+    // Historical name; now opens FREE on-site data, not GuruFocus (no paywall, no tokens).
+    openStockPeek(ticker);
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // SHARED — draggable + resizable modal utility
+  // ══════════════════════════════════════════════════════════════
+  (function _installResizableModalStyles() {
+    if (document.getElementById('dga-resizable-styles')) return;
+    const s = document.createElement('style');
+    s.id = 'dga-resizable-styles';
+    s.textContent = `
+      .dga-dialog {
+        position: fixed;
+        background: #fff;
+        border-radius: 12px;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 8px 48px rgba(0,0,0,0.28);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        resize: both;           /* native browser resize grip */
+        min-width: 340px;
+        min-height: 260px;
+        width: min(920px, 92vw);
+        height: 90vh;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 9100;
+        will-change: transform;
+      }
+      .dga-dialog.dga-maximized {
+        width:  96vw !important;
+        height: 92vh !important;
+        top:    4vh  !important;
+        left:   2vw  !important;
+        transform: none !important;
+        resize: none !important;
+        border-radius: 10px;
+      }
+      .dga-dialog-handle {
+        cursor: grab;
+        user-select: none;
+        flex-shrink: 0;
+      }
+      .dga-dialog-handle:active { cursor: grabbing; }
+      .dga-dialog-body {
+        flex: 1;
+        overflow-y: auto;
+        min-height: 0;
+      }
+      .dga-dialog-body a { color: #5BB8D4; text-decoration: underline; font-weight: 600; cursor: pointer; word-break: break-all; }
+      .dga-dialog-body a:hover { color: #84CCE3; }
+      .dga-resize-hint {
+        position: absolute;
+        bottom: 3px;
+        right: 3px;
+        width: 12px;
+        height: 12px;
+        opacity: 0;             /* hidden — the native ::resizer handle replaces it */
+        pointer-events: none;
+      }
+      .dga-max-btn {
+        background: rgba(0,0,0,0.04);
+        border: 1px solid #e2e8f0;
+        border-radius: 5px;
+        padding: 3px 9px;
+        font-size: 13px;
+        cursor: pointer;
+        line-height: 1.4;
+        color: #64748b;
+        transition: background .12s;
+        flex-shrink: 0;
+      }
+      .dga-max-btn:hover { background: rgba(91,184,212,0.12); color: #3E9AB8; }
+    `;
+    document.head.appendChild(s);
+  })();
+
+  /** Make a .dga-dialog draggable by its handle element.
+   *  Call once after the dialog is inserted into the DOM. */
+  function _initDragModal(dialog, handle) {
+    // Snap from transform-center to absolute coords so drag math is simple
+    const r = dialog.getBoundingClientRect();
+    dialog.style.transform = 'none';
+    dialog.style.top  = r.top  + 'px';
+    dialog.style.left = r.left + 'px';
+
+    handle.addEventListener('mousedown', (e) => {
+      if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A' || e.target.tagName === 'INPUT') return;
+      if (dialog.classList.contains('dga-maximized')) return;
+      e.preventDefault();
+      const startX = e.clientX, startY = e.clientY;
+      const startL = parseFloat(dialog.style.left), startT = parseFloat(dialog.style.top);
+      const onMove = (e) => {
+        dialog.style.left = (startL + e.clientX - startX) + 'px';
+        dialog.style.top  = (startT + e.clientY - startY) + 'px';
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup',   onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup',   onUp);
+    });
+  }
+
+  /** Toggle maximized state for a .dga-dialog. Returns new state. */
+  function _toggleMaxDialog(dialog, btn) {
+    const maximized = dialog.classList.toggle('dga-maximized');
+    if (btn) btn.textContent = maximized ? '⊡' : '⤢';
+    if (!maximized) {
+      // Restore to center
+      dialog.style.top  = '50%';
+      dialog.style.left = '50%';
+      dialog.style.transform = 'translate(-50%, -50%)';
+      dialog.style.width  = '';
+      dialog.style.height = '';
+    }
+    return maximized;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // REPORT VIEWER MODAL — fetches /api/report/{ticker}
+  // ══════════════════════════════════════════════════════════════
+  function closeReportModal() {
+    const m = document.getElementById('report-modal');
+    if (m) m.style.display = 'none';
+    document.body.style.overflow = '';
+  }
+  function closeFundDetailModal() {
+    const m = document.getElementById('fund-detail-modal');
+    if (m) m.style.display = 'none';
+    document.body.style.overflow = '';
+  }
+  // Fund detail close + backdrop (report modal handles its own events inline)
+  document.addEventListener('click', (e) => {
+    if (e.target.id === 'fdm-close' || e.target.closest('#fdm-close')) {
+      closeFundDetailModal();
+      return;
+    }
+    if (e.target.id === 'fund-detail-modal') closeFundDetailModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { closeReportModal(); closeFundDetailModal(); }
+  });
+
+  function downloadViaFetch(url, filename) {
+    window.dgaFetch(url).then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.blob();
+    }).then(blob => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    }).catch(e => alert('Download failed: ' + e.message));
+  }
+
+  function closeReportModal() {
+    const existing = document.getElementById('report-modal');
+    if (existing) existing.remove();
+    document.body.style.overflow = '';
+  }
+
+  // ── Report meta helpers (hero strip) ─────────────────────────
+  function _extractReportMeta(md) {
+    const meta = { rating: null, target: null, upside: null };
+    if (!md) return meta;
+    const head = md.slice(0, 4000);
+    let m = head.match(/\b(?:Overall\s+)?(?:Rating|Verdict|Recommendation)\s*[:|]\s*\**\s*(BUY|SELL|HOLD|OVERWEIGHT|UNDERWEIGHT|OUTPERFORM|UNDERPERFORM|STRONG\s*BUY|NEUTRAL)\b/i);
+    if (m) meta.rating = m[1].replace(/\s+/g, ' ').toUpperCase();
+    m = head.match(/\b(?:Price\s*Target|Target\s*Price|PT)\s*[:|]\s*\$?\s*([0-9]+(?:\.[0-9]+)?)/i);
+    if (m) meta.target = Number(m[1]);
+    m = head.match(/\b(?:Upside|Implied\s+Upside)\s*[:|]\s*([+\-]?[0-9]+(?:\.[0-9]+)?)\s*%/i);
+    if (m) meta.upside = Number(m[1]);
+    return meta;
+  }
+  function _slugifyHeading(s) {
+    return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 64) || 'section';
+  }
+  function _buildReportToc(mdRoot) {
+    const heads = mdRoot.querySelectorAll('h2, h3');
+    if (!heads.length) return null;
+    const nav = document.createElement('nav');
+    nav.className = 'rm-toc';
+    nav.innerHTML = '<div class="rm-toc-title">On this page</div>';
+    const used = {};
+    heads.forEach(function (h) {
+      let id = _slugifyHeading(h.textContent);
+      if (used[id]) { used[id] += 1; id = id + '-' + used[id]; }
+      else used[id] = 1;
+      h.id = id;
+      const a = document.createElement('a');
+      a.href = '#' + id;
+      a.className = h.tagName === 'H3' ? 'h3' : 'h2';
+      a.textContent = (h.textContent || '').trim().slice(0, 80);
+      a.addEventListener('click', function (e) {
+        e.preventDefault();
+        h.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+      nav.appendChild(a);
+    });
+    return nav;
+  }
+  function _fmtHeroPrice(n) {
+    if (n == null || isNaN(n)) return '—';
+    return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function _fmtHeroPct(n) {
+    if (n == null || isNaN(n)) return '—';
+    const v = Number(n);
+    return (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+  }
+
+  async function openReport(ticker, provider) {
+    if (!ticker) return;
+    provider = (provider || 'grok').toLowerCase();
+
+    closeReportModal();
+
+    const maxBtnId = 'rm-max-btn-' + Date.now();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'report-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9000;';
+
+    overlay.innerHTML = `
+      <div class="dga-dialog" style="display:flex;flex-direction:column;max-height:92vh;">
+        <div class="dga-dialog-handle" style="display:flex;align-items:center;gap:8px;padding:11px 16px 10px;border-bottom:1px solid var(--panel-edge);flex-wrap:wrap;">
+          <span id="rm-ticker" style="font-size:15px;font-weight:800;color:var(--text-primary);letter-spacing:0.8px;">${ticker}</span>
+          ${provider !== 'grok'
+            ? `<span style="font-size:9px;font-weight:800;letter-spacing:0.5px;padding:2px 6px;border-radius:3px;background:#d97706;color:#fff;">${provider.toUpperCase()}</span>`
+            : `<span style="font-size:9px;font-weight:800;letter-spacing:0.5px;padding:2px 6px;border-radius:3px;background:#0A1628;color:#fff;">GROK</span>`}
+          <span id="rm-date"   style="font-size:10px;color:var(--dim);margin-left:2px;"></span>
+          <span id="rm-fresh" class="desk-fresh" style="display:none;"></span>
+          <div style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <button id="rm-compare-btn" type="button"
+               style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:4px 12px;border-radius:5px;border:1px solid rgba(91,184,212,0.30);letter-spacing:0.6px;cursor:pointer;">Compare</button>
+            <a id="rm-gamma-btn" href="#" target="_blank" rel="noopener"
+               style="display:none;background:linear-gradient(180deg,var(--blue-light),var(--blue));color:var(--navy);font-size:10px;font-weight:800;padding:4px 12px;border-radius:5px;text-decoration:none;letter-spacing:1px;">GAMMA</a>
+            <button id="rm-docx-btn"
+               style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:4px 12px;border-radius:5px;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;cursor:pointer;">DOCX</button>
+            <button id="rm-pptx-btn"
+               style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:4px 12px;border-radius:5px;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;cursor:pointer;">PPTX</button>
+            <button id="${maxBtnId}" class="dga-max-btn" title="Expand / restore">⤢</button>
+            <button id="rm-close"
+              style="background:rgba(0,0,0,0.05);border:1px solid var(--panel-edge);color:#475569;border-radius:5px;padding:3px 12px;font-size:14px;cursor:pointer;line-height:1.4;">✕</button>
+          </div>
+        </div>
+        <div class="rm-reader">
+          <div class="rm-hero" id="rm-hero">
+            <div class="rm-hero-metric"><div class="rm-hero-lbl">Price</div><div class="rm-hero-val" id="rm-price">—</div></div>
+            <div class="rm-hero-metric"><div class="rm-hero-lbl">Day</div><div class="rm-hero-val" id="rm-day">—</div></div>
+            <div class="rm-hero-metric"><div class="rm-hero-lbl">Rating</div><div class="rm-hero-val" id="rm-rating">—</div></div>
+            <div class="rm-hero-metric"><div class="rm-hero-lbl">Target</div><div class="rm-hero-val" id="rm-target">—</div></div>
+            <div class="rm-hero-metric"><div class="rm-hero-lbl">Upside</div><div class="rm-hero-val" id="rm-upside">—</div></div>
+          </div>
+          <div class="rm-fresh-row" id="rm-fresh-row"></div>
+          <div class="rm-body-wrap">
+            <div id="rm-toc-slot"></div>
+            <div id="rm-body" class="md-body dga-dialog-body rm-md-scroll" style="padding:14px 20px 28px;">
+              <div class="tab-loading"><span class="spin">↻</span> Loading report…</div>
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+    document.body.appendChild(overlay);
+    document.body.style.overflow = 'hidden';
+
+    overlay.querySelector('#rm-close').addEventListener('click', closeReportModal);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeReportModal(); });
+
+    const dlg    = overlay.querySelector('.dga-dialog');
+    const handle = overlay.querySelector('.dga-dialog-handle');
+    const maxBtn = overlay.querySelector('#' + maxBtnId);
+    if (dlg && handle) _initDragModal(dlg, handle);
+    if (dlg && maxBtn) maxBtn.addEventListener('click', () => _toggleMaxDialog(dlg, maxBtn));
+
+    const dateEl   = overlay.querySelector('#rm-date');
+    const body     = overlay.querySelector('#rm-body');
+    const gammaBtn = overlay.querySelector('#rm-gamma-btn');
+    const docxBtn  = overlay.querySelector('#rm-docx-btn');
+    const pptxBtn  = overlay.querySelector('#rm-pptx-btn');
+    const cmpBtn   = overlay.querySelector('#rm-compare-btn');
+    const freshEl  = overlay.querySelector('#rm-fresh');
+    const freshRow = overlay.querySelector('#rm-fresh-row');
+
+    try {
+      const [r, qRes, listRes] = await Promise.all([
+        window.dgaFetch('/api/report/' + encodeURIComponent(ticker)
+                         + '?provider=' + encodeURIComponent(provider)),
+        window.dgaFetch('/api/quote/' + encodeURIComponent(ticker)).catch(() => null),
+        window.dgaFetch('/api/reports').catch(() => null),
+      ]);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+
+      let quote = null;
+      if (qRes && qRes.ok) {
+        try { quote = await qRes.json(); } catch (_) {}
+      }
+      let listMeta = null;
+      if (listRes && listRes.ok) {
+        try {
+          const list = await listRes.json();
+          listMeta = (Array.isArray(list) ? list : []).find(function (x) {
+            return String(x.ticker || '').toUpperCase() === String(ticker).toUpperCase();
+          }) || null;
+        } catch (_) {}
+      }
+
+      if (d.generated_at) {
+        dateEl.textContent = '· ' + fmtDate(d.generated_at);
+        const ageMs = Date.now() - new Date(d.generated_at).getTime();
+        const ageDays = ageMs / 86400000;
+        freshEl.style.display = '';
+        if (ageDays <= 3) {
+          freshEl.textContent = 'Fresh';
+          freshEl.className = 'desk-fresh';
+        } else if (ageDays <= 14) {
+          freshEl.textContent = Math.floor(ageDays) + 'd old';
+          freshEl.className = 'desk-fresh stale';
+        } else {
+          freshEl.textContent = 'Stale · ' + Math.floor(ageDays) + 'd';
+          freshEl.className = 'desk-fresh stale';
+        }
+        freshRow.textContent = 'As of ' + fmtDate(d.generated_at)
+          + ' · provider ' + (d.provider || provider).toUpperCase()
+          + ' · cache-first (regenerate from Research if needed)';
+      }
+      if (d.gamma_url) {
+        gammaBtn.href = d.gamma_url;
+        gammaBtn.style.display = '';
+      }
+      if (d.has_docx) {
+        docxBtn.onclick = () => downloadViaFetch(
+          '/api/download/' + encodeURIComponent(ticker) + '/docx',
+          ticker + '_DGA_Report.docx'
+        );
+        docxBtn.style.display = '';
+      }
+      if (d.has_pptx) {
+        pptxBtn.onclick = () => downloadViaFetch(
+          '/api/download/' + encodeURIComponent(ticker) + '/pptx',
+          ticker + '_DGA_Report.pptx'
+        );
+        pptxBtn.style.display = '';
+      }
+      if (cmpBtn) {
+        cmpBtn.style.display = '';
+        cmpBtn.onclick = function () {
+          try {
+            if (typeof openCompareModal === 'function') openCompareModal(ticker);
+            else if (typeof _openCompare === 'function') _openCompare(ticker);
+            else showTab('lab');
+          } catch (_) { showTab('lab'); }
+        };
+      }
+
+      // Hero metrics
+      const priceEl = overlay.querySelector('#rm-price');
+      const dayEl = overlay.querySelector('#rm-day');
+      const ratingEl = overlay.querySelector('#rm-rating');
+      const targetEl = overlay.querySelector('#rm-target');
+      const upsideEl = overlay.querySelector('#rm-upside');
+      const px = quote && (quote.price != null) ? Number(quote.price) : null;
+      const day = quote && (quote.pct_change != null) ? Number(quote.pct_change) : null;
+      if (priceEl) priceEl.textContent = _fmtHeroPrice(px);
+      if (dayEl) {
+        dayEl.textContent = _fmtHeroPct(day);
+        dayEl.className = 'rm-hero-val' + (day == null ? '' : (day >= 0 ? ' up' : ' dn'));
+      }
+      const mdText = d.report_md || d.markdown || '';
+      const parsed = _extractReportMeta(mdText);
+      const rating = (listMeta && listMeta.rating) || parsed.rating;
+      const target = (listMeta && listMeta.price_target != null) ? Number(listMeta.price_target) : parsed.target;
+      let upside = (listMeta && listMeta.upside_pct != null) ? Number(listMeta.upside_pct) : parsed.upside;
+      if (upside == null && target != null && px != null && px > 0) upside = (target - px) / px * 100;
+      if (ratingEl) ratingEl.textContent = rating || '—';
+      if (targetEl) targetEl.textContent = target != null ? _fmtHeroPrice(target) : '—';
+      if (upsideEl) {
+        upsideEl.textContent = _fmtHeroPct(upside);
+        upsideEl.className = 'rm-hero-val' + (upside == null ? '' : (upside >= 0 ? ' up' : ' dn'));
+      }
+
+      if (!mdText) {
+        body.innerHTML = '<div class="tab-empty">Report exists but has no text content. Use the download buttons above.</div>';
+      } else {
+        renderMd(body, mdText);
+        const mdRoot = body.querySelector('.md-body') || body;
+        const toc = _buildReportToc(mdRoot);
+        const slot = overlay.querySelector('#rm-toc-slot');
+        if (toc && slot) {
+          slot.appendChild(toc);
+        } else {
+          const wrap = overlay.querySelector('.rm-body-wrap');
+          if (wrap) wrap.style.gridTemplateColumns = '1fr';
+        }
+      }
+    } catch (e) {
+      body.innerHTML = `<div class="tab-error">Could not load report for ${ticker}: ${e.message}</div>`;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // MINI SCAN CARD — mirrors watchlist, SCAN NOW → Scan tab
+  // ══════════════════════════════════════════════════════════════
+  // (Market Scan card JS removed in ui250 — card retired; Idea Generator + per-report news feeds cover it.)
+
+  // ── Reports Scan — Active (movers only) + optional "scan all" ───────────
+  (function() {
+    const $rBtn  = document.getElementById('reports-scan-btn');
+    const $rAll  = document.getElementById('reports-scan-all-btn');
+    const $rCost = document.getElementById('reports-scan-cost');
+    if (!$rBtn) return;
+    let _scanActiveJobId = null;
+
+    // Fetch preview on tab load so the cost badge is informative before any click
+    async function _refreshScanCostBadge() {
+      try {
+        const r = await window.dgaFetch('/api/scan/preview?threshold=2.5&source=reports');
+        if (!r.ok) return;
+        const d = await r.json();
+        if ($rCost) {
+          if (!d.movers_count) {
+            $rCost.textContent = '(0 movers · no scan needed)';
+            $rCost.style.color = 'var(--dim)';
+          } else {
+            $rCost.textContent = `(${d.movers_count} movers · ~$${d.est_cost_low_usd.toFixed(2)})`;
+            $rCost.style.color = 'var(--mid)';
+          }
+        }
+      } catch (e) { /* swallow */ }
+    }
+    _refreshScanCostBadge();
+    // Refresh every 5 min while the user has the page open (skipped when hidden)
+    setInterval(function() { if (document.hidden) return; _refreshScanCostBadge(); }, 5 * 60 * 1000);
+
+    // Generic scan kicker — used by both Active and "scan all" paths
+    async function _startScan(threshold, label) {
+      $rBtn.disabled = false;
+      const origLabel = $rBtn.textContent;
+      $rBtn.textContent = '⏳ Starting…';
+      const pulse = document.getElementById('gp-pulse-rows');
+      if (pulse) pulse.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">' + label + '…</div>';
+      try {
+        const url = '/api/scan/reports' + (threshold > 0 ? '?threshold=' + threshold : '');
+        const r = await window.dgaFetch(url, { method: 'POST' });
+        if (!r.ok) {
+          let detail = r.status;
+          try { const e = await r.json(); detail = e.detail || r.status; } catch {}
+          throw new Error(detail);
+        }
+        const job = await r.json();
+        _scanActiveJobId = job.job_id;
+        _pollScanJob(job.job_id,
+          function(tk, res) {
+            const done = (job.tickers_done && job.tickers_done.length) || 0;
+            const total = (job.tickers || []).length;
+            $rBtn.textContent = '⊘ CANCEL (' + done + '/' + total + ')';
+          },
+          function(jp) {
+            _scanActiveJobId = null;
+            $rBtn.disabled = false;
+            $rBtn.textContent = (jp && jp.status === 'cancelled') ? '⚡ Scan Active (cancelled)' : '⚡ Scan Active';
+            loadGPMarketPulse();
+            setTimeout(function() { $rBtn.textContent = '⚡ Scan Active'; _refreshScanCostBadge(); }, 4000);
+          },
+          function(err) {
+            _scanActiveJobId = null;
+            $rBtn.disabled = false; $rBtn.textContent = '⚡ Scan Active';
+          }
+        );
+      } catch(e) {
+        _scanActiveJobId = null;
+        $rBtn.disabled = false; $rBtn.textContent = origLabel;
+        alert('Scan failed: ' + e.message);
+      }
+    }
+
+    // ── ⚡ Scan Active (movers ≥2.5% only — cheap) ─────────────────
+    $rBtn.addEventListener('click', async function() {
+      if ($rBtn.disabled) return;
+      if (_scanActiveJobId) {
+        if (!confirm('Cancel the in-flight scan?\nCurrent ticker (already billed) will finish, then it stops.')) return;
+        try {
+          await window.dgaFetch('/api/scan/reports/' + encodeURIComponent(_scanActiveJobId) + '/cancel', { method: 'POST' });
+          $rBtn.textContent = '⊘ CANCELLING…';
+        } catch(e) { console.warn('[scan cancel]', e); }
+        return;
+      }
+      // Fetch live preview to confirm the cost RIGHT NOW
+      let preview = null;
+      try {
+        const r = await window.dgaFetch('/api/scan/preview?threshold=2.5&source=reports');
+        preview = await r.json();
+      } catch {}
+      if (!preview || !preview.movers_count) {
+        alert('No movers ≥2.5% in your saved reports right now — nothing to scan.\n\nUse "(or scan all)" if you want to scan everything regardless.');
+        return;
+      }
+      const msg = `Scan ${preview.movers_count} active movers from your saved reports?\n\n`
+        + `Est cost: $${preview.est_cost_low_usd.toFixed(2)} – $${preview.est_cost_high_usd.toFixed(2)}\n`
+        + `Est time: ~${Math.ceil(preview.movers_count * 7 / 60)} min (sequential, cancellable)\n\n`
+        + `Tickers: ${preview.movers.slice(0, 8).map(m => m.ticker).join(', ')}${preview.movers.length > 8 ? '…' : ''}`;
+      if (!confirm(msg)) return;
+      _startScan(2.5, 'Scanning movers');
+    });
+
+    // ── (or scan all) — full universe, expensive, explicit confirm ─
+    if ($rAll) $rAll.addEventListener('click', async function() {
+      if (_scanActiveJobId) return;   // active scan in progress
+      let preview = null;
+      try {
+        const r = await window.dgaFetch('/api/scan/preview?threshold=2.5&source=reports');
+        preview = await r.json();
+      } catch {}
+      const total = (preview && preview.total_universe) || 0;
+      if (!total) { alert('No saved reports to scan.'); return; }
+      const allLow  = (preview.all_cost_low_usd  || total * 0.04).toFixed(2);
+      const allHigh = (preview.all_cost_high_usd || total * 0.06).toFixed(2);
+      const msg = `⚠ Scan ALL ${total} saved-report tickers (not just movers)?\n\n`
+        + `Est cost: $${allLow} – $${allHigh}\n`
+        + `Est time: ~${Math.ceil(total * 7 / 60)} min\n\n`
+        + `RECOMMEND: just hit "⚡ Scan Active" (${preview.movers_count || 0} movers, ~$${(preview.est_cost_low_usd || 0).toFixed(2)}) instead.\n\n`
+        + `Proceed with full scan?`;
+      if (!confirm(msg)) return;
+      _startScan(0, 'Scanning everything');
+    });
+  })();
+
+  // ── Bulk Re-analyze All Saved Reports ─────────────────────────────────────
+  // Sequential server-side; non-blocking for the rest of the site.
+  // Each ticker re-runs WITHOUT regenerating the Gamma deck (existing PPTs
+  // stay on disk but are marked pptx_stale so the UI fades them).
+  (function() {
+    const btn      = document.getElementById('reports-reanalyze-btn');
+    const banner   = document.getElementById('reanalyze-banner');
+    const bStatus  = document.getElementById('reanalyze-banner-status');
+    const bDetail  = document.getElementById('reanalyze-banner-detail');
+    const bFill    = document.getElementById('reanalyze-banner-fill');
+    const bCancel  = document.getElementById('reanalyze-banner-cancel');
+    const bClose   = document.getElementById('reanalyze-banner-close');
+    if (!btn || !banner) return;
+
+    let pollTimer = null;
+    let activeBulkId = null;
+
+    function _renderBulkProgress(j) {
+      if (!j) { banner.style.display = 'none'; return; }
+      banner.style.display = 'block';
+      activeBulkId = j.bulk_job_id;
+      const total = j.total || 0;
+      const idx   = j.current_index || 0;
+      const done  = (j.completed || []).length;
+      const failed = (j.failed || []).length;
+      const pct = Math.min(100, Math.max(0, j.progress_pct || 0));
+      bFill.style.width = pct + '%';
+      if (j.status === 'done') {
+        bStatus.textContent = '✓ Re-analyze complete';
+        bDetail.textContent = `${done}/${total} succeeded · ${failed} failed`;
+        bCancel.style.display = 'none';
+        bFill.style.background = '#10b981';
+      } else if (j.status === 'cancelled') {
+        bStatus.textContent = '⊘ Re-analyze cancelled';
+        bDetail.textContent = `${done}/${total} done before cancel · ${failed} failed`;
+        bCancel.style.display = 'none';
+        bFill.style.background = '#94a3b8';
+      } else {
+        const cur = j.current_ticker || '…';
+        bStatus.textContent = `Re-analyzing ${cur} (${idx + 1}/${total})`;
+        bDetail.textContent = `${done} done · ${failed} failed · ETA ~${Math.max(1, (total - idx) * 2.5)} min`;
+        bCancel.style.display = '';
+        bFill.style.background = '#9333ea';
+      }
+
+      // ── Surface the failed list with reasons + a Retry button ──────────────
+      // Only render when the run is over (done/cancelled) and there are failures.
+      let failBlock = document.getElementById('reanalyze-banner-failed');
+      const showFailList = (j.status === 'done' || j.status === 'cancelled') && failed > 0;
+      if (showFailList) {
+        if (!failBlock) {
+          failBlock = document.createElement('div');
+          failBlock.id = 'reanalyze-banner-failed';
+          failBlock.style.cssText = 'margin-top:8px;padding-top:8px;border-top:1px solid #e9d5ff;font-size:10px;color:#6b21a8;max-height:160px;overflow-y:auto;';
+          banner.appendChild(failBlock);
+        }
+        const failHtml = (j.failed || []).map(function(f) {
+          const errShort = String(f.error || 'unknown').replace(/</g,'&lt;').slice(0, 140);
+          return '<div style="padding:3px 0;display:flex;gap:8px;">'
+            + '<span style="font-weight:800;min-width:60px;">' + f.ticker + '</span>'
+            + '<span style="opacity:0.8;flex:1;">' + errShort + '</span>'
+            + '</div>';
+        }).join('');
+        failBlock.innerHTML =
+          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'
+          +   '<strong>' + failed + ' failed:</strong>'
+          +   '<button id="reanalyze-retry-failed" style="background:#9333ea;border:none;color:#fff;font-size:9px;font-weight:800;letter-spacing:0.5px;padding:3px 8px;border-radius:3px;cursor:pointer;">↻ RETRY FAILED</button>'
+          + '</div>'
+          + failHtml;
+        const retryBtn = document.getElementById('reanalyze-retry-failed');
+        if (retryBtn) {
+          retryBtn.addEventListener('click', async function() {
+            if (!confirm('Retry ' + failed + ' failed ticker(s)? Same sequential, background process.')) return;
+            retryBtn.disabled = true; retryBtn.textContent = 'STARTING…';
+            try {
+              const tks = (j.failed || []).map(function(f) { return f.ticker; });
+              const r = await window.dgaFetch('/api/reports/reanalyze-all', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tickers: tks }),
+              });
+              if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.detail || r.status); }
+              const job = await r.json();
+              if (failBlock) failBlock.remove();
+              _startPolling(job.bulk_job_id);
+            } catch (e) {
+              alert('Retry failed: ' + e.message);
+              retryBtn.disabled = false; retryBtn.textContent = '↻ RETRY FAILED';
+            }
+          });
+        }
+      } else if (failBlock) {
+        failBlock.remove();
+      }
+    }
+
+    async function _pollBulk(bulkId) {
+      try {
+        const r = await window.dgaFetch('/api/reports/reanalyze-all/' + encodeURIComponent(bulkId));
+        if (!r.ok) throw new Error('poll ' + r.status);
+        const j = await r.json();
+        _renderBulkProgress(j);
+        if (j.status === 'done' || j.status === 'cancelled' || j.status === 'failed') {
+          clearInterval(pollTimer); pollTimer = null;
+          btn.disabled = false; btn.textContent = '🔄 Re-analyze All';
+          // Refresh the reports list to pick up new pptx_stale flags + updated dates
+          if (typeof loadReports === 'function') loadReports();
+        }
+      } catch (e) {
+        console.warn('[bulk-reanalyze poll]', e);
+      }
+    }
+
+    function _startPolling(bulkId) {
+      if (pollTimer) clearInterval(pollTimer);
+      _pollBulk(bulkId);
+      pollTimer = setInterval(function() { _pollBulk(bulkId); }, 5000);
+    }
+
+    btn.addEventListener('click', async function() {
+      if (btn.disabled) return;
+      const reportsCount = (document.getElementById('reports-count') || {}).textContent || '?';
+      const estMin = Math.max(2, Number(reportsCount) * 2.5) || '?';
+      const ok = confirm(
+        'Re-analyze ALL ' + reportsCount + ' saved reports?\n\n'
+        + '• Runs sequentially in the background — site stays responsive\n'
+        + '• ~2-3 min per report (≈ ' + estMin + ' min total for ' + reportsCount + ')\n'
+        + '• Existing PowerPoint files are KEPT but marked as older (faded PPT pill)\n'
+        + '• To get a fresh PPT for any report, re-run that ticker individually with the Gamma checkbox\n\n'
+        + 'Proceed?'
+      );
+      if (!ok) return;
+      btn.disabled = true; btn.textContent = '⏳ Starting…';
+      try {
+        const r = await window.dgaFetch('/api/reports/reanalyze-all', { method: 'POST' });
+        if (!r.ok) {
+          const err = await r.json().catch(function(){ return {detail: r.status}; });
+          throw new Error(err.detail || r.status);
+        }
+        const j = await r.json();
+        _startPolling(j.bulk_job_id);
+      } catch(e) {
+        btn.disabled = false; btn.textContent = '🔄 Re-analyze All';
+        alert('Could not start: ' + e.message);
+      }
+    });
+
+    bCancel.addEventListener('click', async function() {
+      if (!activeBulkId) return;
+      if (!confirm('Cancel re-analysis after the current ticker finishes?')) return;
+      try {
+        await window.dgaFetch('/api/reports/reanalyze-all/' + encodeURIComponent(activeBulkId) + '/cancel', { method: 'POST' });
+        bCancel.textContent = 'CANCELLING…';
+        bCancel.disabled = true;
+      } catch(e) { console.warn('[bulk-reanalyze cancel]', e); }
+    });
+
+    bClose.addEventListener('click', function() {
+      banner.style.display = 'none';
+      // NOTE: job keeps running on the server. Hide the banner only.
+    });
+
+    // On page load: resume display if there's an active or recent bulk job
+    setTimeout(async function() {
+      try {
+        const r = await window.dgaFetch('/api/reports/reanalyze-all');
+        if (!r.ok) return;
+        const d = await r.json();
+        if (d.active && d.active.status === 'running') {
+          btn.disabled = true; btn.textContent = '⏳ Running…';
+          _startPolling(d.active.bulk_job_id);
+        }
+      } catch(e) {}
+    }, 800);
+  })();
+
+  // Check if Gamma API key is configured, update label
+  (async () => {
+    try {
+      const r = await window.dgaFetch('/api/build');
+      if (!r.ok) return;
+      const d = await r.json();
+      const st = document.getElementById('hero-gamma-status');
+      if (st) {
+        st.textContent = d.gamma_api_key_set
+          ? '✓ Gamma connected'
+          : 'requires Gamma API key';
+        st.style.color = d.gamma_api_key_set ? 'var(--green)' : 'var(--dimmer)';
+      }
+    } catch {}
+  })();
+
+  // ══════════════════════════════════════════════════════════════
+  // RIGHT COLUMN — Trending Tickers (live watchlist)
+  // ══════════════════════════════════════════════════════════════
+  async function loadTrendingTickers() {
+    const el    = document.getElementById('trending-rows');
+    const badge = document.getElementById('trending-count');
+    if (!el) return;
+    try {
+      // The biggest BROAD-MARKET movers today (Yahoo gainers/losers), regardless
+      // of whether DGA tracks them — ranked by absolute % move.
+      const r = await window.dgaFetch('/api/market/movers?limit=12');
+      if (!r.ok) throw new Error('movers ' + r.status);
+      const d = await r.json();
+      const movers = d.movers || [];
+      if (badge) badge.textContent = movers.length ? 'LIVE' : '—';
+      if (!movers.length) {
+        el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">No market movers right now.</div>';
+        return;
+      }
+      const _safe = s => String(s || '').replace(/[<>&]/g, '');
+      el.innerHTML = movers.map((m, i) => {
+        return `
+          <div class="tr-row" data-ticker="${_safe(m.ticker)}">
+            <div class="tr-rank">${i + 1}</div>
+            <div class="tr-main">
+              <div class="tr-tk">${_safe(m.ticker)}</div>
+              <div class="tr-meta">${_safe(m.name).slice(0, 28) || 'biggest mover'}</div>
+            </div>
+            <div class="tr-right">
+              <div class="tr-px">${m.price != null ? '$' + fmtPx(m.price) : '—'}</div>
+              <div class="tr-chg ${cssClass(m.pct_change)}">${fmtPct(m.pct_change)}</div>
+            </div>
+          </div>`;
+      }).join('');
+      el.querySelectorAll('.tr-row[data-ticker]').forEach(row =>
+        row.addEventListener('click', () =>
+          openGuruFocus(row.getAttribute('data-ticker'))));
+    } catch (e) {
+      console.warn('[movers]', e);
+      if (el) el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);">Market movers unavailable.</div>';
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // RIGHT COLUMN — Market Pulse (scan results as news)
+  // Auto-refreshes every 15 minutes
+  // ══════════════════════════════════════════════════════════════
+  // ── 🔬 Compare modal — Grok vs Claude side-by-side ───────────────────────
+  // Opens with whatever's already on disk; if the Claude (alt) side is
+  // missing, shows a button to kick off the comparison run. Polls the
+  // job and live-replaces the empty pane with the rendered report once done.
+  var _cmpActiveJobId  = null;
+  var _cmpActiveTicker = null;
+  var _cmpPollTimer    = null;
+  var _cmpJobStartMs   = null;   // wall-clock start for elapsed-time display
+  var _cmpFirstTokenMs = null;   // when streaming first produced text
+
+  // Render markdown into the given element using the SAME rich renderMd()
+  // that openReport() uses for the saved-report viewer. Falls back to
+  // marked.parse() only if renderMd isn't available for some reason.
+  function _cmpRenderMdInto(el, md) {
+    if (!el) return;
+    if (typeof renderMd === 'function') {
+      renderMd(el, md || '');
+      return;
+    }
+    if (window.marked && typeof window.marked.parse === 'function') {
+      el.innerHTML = window.marked.parse(md || '');
+      return;
+    }
+    el.textContent = md || '';
+  }
+
+  function _cmpSummaryStrip(grok, alt) {
+    // Quick at-a-glance row: price target delta + rating + upside between the two
+    const gs = (grok.summary || {});
+    const as = (alt.summary || {});
+    const gt = gs.price_target, at = as.price_target;
+    const gu = gs.upside_pct,   au = as.upside_pct;
+    if (gt == null && at == null && gu == null && au == null) return '';
+    let row = '<div class="cmp-summary-strip">';
+    row += '<div>Grok: <strong>' + (gs.rating || '—') + '</strong>'
+        + ' · target <strong>' + (gt != null ? ('$' + Number(gt).toFixed(2)) : '—') + '</strong>'
+        + ' · upside <strong>' + (gu != null ? ((gu>=0?'+':'')+Number(gu).toFixed(1)+'%') : '—') + '</strong></div>';
+    row += '<div>Claude: <strong>' + (as.rating || '—') + '</strong>'
+        + ' · target <strong>' + (at != null ? ('$' + Number(at).toFixed(2)) : '—') + '</strong>'
+        + ' · upside <strong>' + (au != null ? ((au>=0?'+':'')+Number(au).toFixed(1)+'%') : '—') + '</strong></div>';
+    // Delta
+    if (gt != null && at != null) {
+      const pctDelta = ((at - gt) / gt) * 100;
+      const cls = Math.abs(pctDelta) > 5 ? 'delta-bad' : 'delta-good';
+      row += '<div>Δ Target: <span class="' + cls + '">'
+        + ((pctDelta>=0?'+':'')+pctDelta.toFixed(1)+'%') + '</span></div>';
+    }
+    row += '</div>';
+    return row;
+  }
+
+  function _cmpRenderModal(data) {
+    let modal = document.getElementById('cmp-modal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'cmp-modal';
+      modal.className = 'cmp-modal-backdrop';
+      document.body.appendChild(modal);
+    }
+    const grok = data.grok || {};
+    const alt  = data.alt  || {};
+    const tk   = data.ticker;
+    const altProvider = (alt.provider || 'claude');
+
+    const grokDate = grok.generated_at ? new Date(grok.generated_at).toLocaleString('en-US', { ..._PT, year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
+    const altDate  = alt.generated_at  ? new Date(alt.generated_at).toLocaleString('en-US',  { ..._PT, year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
+
+    const grokPane = grok.has_report
+      ? '<div class="cmp-pane-body md-body" id="cmp-grok-body"></div>'
+      : '<div class="cmp-pane-empty">No Grok report on disk for ' + tk + '.</div>';
+
+    let altPane;
+    if (alt.has_report) {
+      altPane = '<div class="cmp-pane-body md-body" id="cmp-alt-body"></div>';
+    } else if (_cmpActiveJobId && _cmpActiveTicker === tk) {
+      // Live-streaming state: sticky progress header on top + scrollable body
+      // below that progressively fills with the rendered Markdown as deltas
+      // arrive from /api/jobs/{id} polling (1s interval while streaming).
+      altPane = '<div style="display:flex;flex-direction:column;height:100%;">'
+        + '<div class="cmp-progress" id="cmp-progress-' + tk + '" style="margin:0;border-radius:0;'
+        + 'border-bottom:1px solid #fed7aa;flex-shrink:0;">'
+        + '<div id="cmp-progress-label">Starting comparison…</div>'
+        + '<div class="cmp-progress-bar"><div class="cmp-progress-fill" id="cmp-progress-fill"></div></div>'
+        + '</div>'
+        + '<div class="cmp-pane-body md-body" id="cmp-stream-body" style="flex:1;">'
+        + '<div style="padding:20px;color:#94a3b8;font-size:12px;line-height:1.6;">'
+        +   '<div style="display:flex;align-items:center;gap:8px;">'
+        +     '<span class="cmp-wait-pulse"></span>'
+        +     '<span style="font-weight:600;">Starting up</span>'
+        +   '</div>'
+        +   '<div style="margin-top:10px;">Initialising comparison job — polling for status'
+        +     '<span class="cmp-dots"><span>.</span><span>.</span><span>.</span></span>'
+        +   '</div>'
+        + '</div>'
+        + '</div>'
+        + '</div>';
+    } else {
+      altPane = '<div class="cmp-pane-empty">'
+        + 'No ' + altProvider.toUpperCase() + ' comparison report yet.<br>'
+        + '<small style="color:#94a3b8;">Reruns the analysis using ' + altProvider.toUpperCase() + ' with the same system prompt + gathered data (~2-3 min).</small><br>'
+        + '<button id="cmp-start-btn" data-ticker="' + tk + '">⚡ Run ' + altProvider.toUpperCase() + ' analysis now</button>'
+        + '</div>';
+    }
+
+    modal.innerHTML =
+      '<div class="cmp-modal">'
+        + '<div class="cmp-modal-hdr">'
+          + '<div class="cmp-modal-title">🔬 Comparison: ' + tk + ' &nbsp;—&nbsp; Grok vs ' + altProvider.toUpperCase() + '</div>'
+          + '<button class="cmp-modal-close" id="cmp-modal-close">×</button>'
+        + '</div>'
+        + (grok.has_report && alt.has_report ? _cmpSummaryStrip(grok, alt) : '')
+        + '<div class="cmp-modal-body">'
+          + '<div class="cmp-pane">'
+            + '<div class="cmp-pane-hdr">'
+              + '<span class="cmp-pane-engine grok">GROK</span>'
+              + '<span class="cmp-pane-meta">' + (grok.model || 'grok') + ' · <strong>' + grokDate + '</strong></span>'
+            + '</div>'
+            + grokPane
+          + '</div>'
+          + '<div class="cmp-pane">'
+            + '<div class="cmp-pane-hdr">'
+              + '<span class="cmp-pane-engine claude">' + altProvider.toUpperCase() + '</span>'
+              + '<span class="cmp-pane-meta">' + (alt.model || altProvider) + ' · <strong>' + altDate + '</strong></span>'
+            + '</div>'
+            + altPane
+          + '</div>'
+        + '</div>'
+        + '<div class="cmp-disclaimer">Note: Grok runs with live web/X search; Claude works only from the same gathered SEC + market data passed via system prompt. This reflects the real capability difference between the two providers — read accordingly.</div>'
+      + '</div>';
+
+    // Wire close
+    document.getElementById('cmp-modal-close').addEventListener('click', _cmpCloseModal);
+    modal.addEventListener('click', function(e) {
+      if (e.target === modal) _cmpCloseModal();
+    });
+    // Wire start button (if shown)
+    const startBtn = document.getElementById('cmp-start-btn');
+    if (startBtn) {
+      startBtn.addEventListener('click', function() {
+        startBtn.disabled = true;
+        startBtn.textContent = 'Starting…';
+        _cmpStartCompare(tk, altProvider);
+      });
+    }
+    // Render Markdown into both panes using the SAME renderMd() that
+    // openReport() uses → matching look-and-feel between the two viewers.
+    if (grok.has_report) {
+      _cmpRenderMdInto(document.getElementById('cmp-grok-body'), grok.text);
+    }
+    if (alt.has_report) {
+      _cmpRenderMdInto(document.getElementById('cmp-alt-body'), alt.text);
+    }
+  }
+
+  async function openCompareModal(ticker) {
+    _cmpActiveTicker = ticker;
+    // First render with current disk state
+    try {
+      const r = await window.dgaFetch('/api/reports/' + encodeURIComponent(ticker) + '/comparison?provider=claude');
+      if (!r.ok) throw new Error('comparison ' + r.status);
+      const data = await r.json();
+      _cmpRenderModal(data);
+    } catch (e) {
+      console.warn('[compare]', e);
+      alert('Could not open comparison: ' + e.message);
+    }
+  }
+
+  async function _cmpStartCompare(ticker, provider) {
+    try {
+      const r = await window.dgaFetch('/api/reports/' + encodeURIComponent(ticker)
+        + '/compare?provider=' + encodeURIComponent(provider), { method: 'POST' });
+      if (!r.ok) {
+        const err = await r.json().catch(function(){ return {detail: r.status}; });
+        throw new Error(err.detail || r.status);
+      }
+      const job = await r.json();
+      _cmpActiveJobId   = job.job_id;
+      _cmpJobStartMs    = Date.now();
+      _cmpFirstTokenMs  = null;
+      // Re-render modal to show progress block
+      const data = await (await window.dgaFetch('/api/reports/' + encodeURIComponent(ticker) + '/comparison?provider=' + encodeURIComponent(provider))).json();
+      _cmpRenderModal(data);
+      // Poll fast (1s) while streaming so the live-text view is fluid.
+      _cmpPollTimer = setInterval(function() { _cmpPollCompare(ticker, provider, job.job_id); }, 1000);
+      _cmpPollCompare(ticker, provider, job.job_id);
+    } catch (e) {
+      alert('Could not start compare: ' + e.message);
+    }
+  }
+
+  // Track scroll position so we only auto-follow if user is already at bottom.
+  // If they scroll up to read earlier sections, we leave them alone.
+  function _cmpIsAtBottom(el, slack) {
+    if (!el) return true;
+    return (el.scrollTop + el.clientHeight) >= (el.scrollHeight - (slack || 24));
+  }
+
+  function _cmpFmtElapsed(ms) {
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return s + 's';
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return m + 'm ' + (r < 10 ? '0' : '') + r + 's';
+  }
+
+  async function _cmpPollCompare(ticker, provider, jobId) {
+    try {
+      const r = await window.dgaFetch('/api/jobs/' + encodeURIComponent(jobId));
+      if (!r.ok) throw new Error('job ' + r.status);
+      const job = await r.json();
+
+      const streamedLen = (job.streamed_text || '').length;
+      const elapsedMs   = _cmpJobStartMs ? (Date.now() - _cmpJobStartMs) : 0;
+      const elapsedTxt  = _cmpFmtElapsed(elapsedMs);
+
+      // Capture time-to-first-token for the streaming rate display
+      if (streamedLen > 0 && _cmpFirstTokenMs == null) {
+        _cmpFirstTokenMs = Date.now();
+      }
+
+      // ── Update progress header ────────────────────────────────────────
+      const lbl  = document.getElementById('cmp-progress-label');
+      const fill = document.getElementById('cmp-progress-fill');
+      if (lbl && job.progress) {
+        const pct = Math.round((job.progress.pct || 0) * 100);
+        let label = job.progress.label || 'Running';
+        if (job.status === 'running' && streamedLen > 0) {
+          // Streaming: char count + rough chars/sec rate
+          const streamMs = _cmpFirstTokenMs ? (Date.now() - _cmpFirstTokenMs) : 1;
+          const rate = streamMs > 0 ? Math.round((streamedLen / streamMs) * 1000) : 0;
+          lbl.textContent = label + ' — streaming · ' + streamedLen.toLocaleString() + ' chars · '
+            + rate + ' chars/s · ' + elapsedTxt + ' total';
+        } else {
+          lbl.textContent = label + ' — ' + pct + '% · ' + elapsedTxt;
+        }
+      }
+      if (fill && job.progress) fill.style.width = Math.round((job.progress.pct||0)*100) + '%';
+
+      // ── Right pane body: either waiting state or live-streamed text ──
+      const streamBody = document.getElementById('cmp-stream-body');
+      if (streamBody) {
+        if (streamedLen === 0 && job.status !== 'done' && job.status !== 'failed') {
+          // No tokens yet — show informative wait state that changes over time
+          const sec = Math.floor(elapsedMs / 1000);
+          let msg, color = '#94a3b8';
+          if (sec < 15) {
+            msg = 'Waiting for Claude to start generating';
+          } else if (sec < 45) {
+            msg = 'Claude is processing your prompt — Opus typically needs 30–60s before the first token on large inputs (your DGA prompt is ~50K tokens)';
+          } else if (sec < 120) {
+            msg = 'Still processing — large reasoning models can take 1–2 min on dense prompts. Hang tight, this is normal';
+            color = '#d97706';
+          } else {
+            msg = 'Taking longer than expected (>2 min with no text). The request may have stalled — if it doesn\'t start streaming in another 60s, close this modal and try again';
+            color = '#dc2626';
+          }
+          streamBody.innerHTML =
+            '<div style="padding:20px;color:' + color + ';font-size:12px;line-height:1.6;">'
+            +   '<div style="display:flex;align-items:center;gap:8px;">'
+            +     '<span class="cmp-wait-pulse"></span>'
+            +     '<span style="font-weight:600;">' + _cmpFmtElapsed(elapsedMs) + ' elapsed</span>'
+            +   '</div>'
+            +   '<div style="margin-top:10px;">' + msg + '<span class="cmp-dots"><span>.</span><span>.</span><span>.</span></span></div>'
+            +   '<div style="margin-top:14px;font-size:10px;color:#94a3b8;border-top:1px solid #e2e8f0;padding-top:10px;">'
+            +     '💡 You can close this modal and keep using the site — the job is running on the server and reopening 🔬 will resume the live view.'
+            +   '</div>'
+            + '</div>';
+        } else if (streamedLen > 0) {
+          const wasAtBottom = _cmpIsAtBottom(streamBody, 40);
+          // Render rich markdown via the same helper as openReport, then
+          // append the blinking caret so the user can see it's still writing.
+          _cmpRenderMdInto(streamBody, job.streamed_text);
+          const caret = document.createElement('span');
+          caret.style.cssText = 'display:inline-block;width:7px;height:13px;background:#d97706;margin-left:2px;vertical-align:-2px;animation:cmpBlink 1s steps(2) infinite;';
+          streamBody.appendChild(caret);
+          if (wasAtBottom) streamBody.scrollTop = streamBody.scrollHeight;
+        }
+      }
+
+      // ── Terminal states ───────────────────────────────────────────────
+      if (job.status === 'done' || job.status === 'failed') {
+        clearInterval(_cmpPollTimer); _cmpPollTimer = null;
+        if (job.status === 'failed') {
+          if (lbl) lbl.textContent = 'Failed: ' + (job.error || 'unknown error');
+          // Show error in the pane body too
+          if (streamBody) {
+            streamBody.innerHTML = '<div style="padding:20px;color:#dc2626;font-size:12px;">'
+              + '<strong>Claude analysis failed.</strong><br>'
+              + (job.error || 'Unknown error') + '</div>';
+          }
+          return;
+        }
+        _cmpActiveJobId  = null;
+        _cmpJobStartMs   = null;
+        _cmpFirstTokenMs = null;
+        // Re-fetch comparison data so the summary strip + final formatted
+        // text replace the streaming view (drops the blinking cursor too).
+        try {
+          const d = await (await window.dgaFetch('/api/reports/' + encodeURIComponent(ticker) + '/comparison?provider=' + encodeURIComponent(provider))).json();
+          _cmpRenderModal(d);
+        } catch(e) {}
+      }
+    } catch (e) {
+      console.warn('[compare poll]', e);
+    }
+  }
+
+  function _cmpCloseModal() {
+    const m = document.getElementById('cmp-modal');
+    if (m) m.remove();
+    if (_cmpPollTimer) { clearInterval(_cmpPollTimer); _cmpPollTimer = null; }
+    // Note: Compare job keeps running on the server if still in flight.
+    // Reopen the modal anytime to resume display.
+    _cmpActiveTicker = null;
+  }
+
+  // Expose for inline handlers + console
+  window.openCompareModal = openCompareModal;
+
+  // ── Market Pulse detail modal ─────────────────────────────────────────────
+  function _openPulseDetail(ticker, res) {
+    // Remove any existing modal
+    const existing = document.getElementById('pulse-detail-modal');
+    if (existing) existing.remove();
+
+    const sent    = (res.sentiment || 'NEUTRAL').toUpperCase();
+    const sentCls = sent === 'BULLISH' ? 'low' : sent === 'BEARISH' ? 'high' : 'mid';
+    const md      = res.markdown || res.summary || 'No detail available.';
+    const scannedAt = res._scanned_at ? new Date(res._scanned_at).toLocaleString('en-US', _PT) + ' PT' : '';
+
+    // Convert markdown to simple HTML (bold, headers, lists, links)
+    function _mdToHtml(text) {
+      const LINK_STYLE = 'color:#5BB8D4;text-decoration:underline;font-weight:600;';
+      return text
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+        .replace(/^### (.+)$/gm, '<div style="font-size:11px;font-weight:800;color:var(--blue);letter-spacing:1px;margin:10px 0 4px;text-transform:uppercase;">$1</div>')
+        .replace(/^## (.+)$/gm,  '<div style="font-size:12px;font-weight:800;color:var(--text-primary);margin:12px 0 4px;">$1</div>')
+        .replace(/^# (.+)$/gm,   '<div style="font-size:13px;font-weight:800;color:var(--text-primary);margin:12px 0 4px;">$1</div>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g,    '<em>$1</em>')
+        // Markdown links: [label](url)
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+          '<a href="$2" target="_blank" rel="noopener noreferrer" style="' + LINK_STYLE + '">$1</a>')
+        // Bare URLs not already in an href
+        .replace(/(?<!href=")(https?:\/\/[^\s<>")\]]+)/g,
+          '<a href="$1" target="_blank" rel="noopener noreferrer" style="' + LINK_STYLE + '">$1</a>')
+        .replace(/^- (.+)$/gm,   '<div style="padding:2px 0 2px 12px;border-left:2px solid var(--blue);margin:3px 0;">$1</div>')
+        .replace(/\n{2,}/g,      '<div style="height:8px;"></div>')
+        .replace(/\n/g,          ' ');
+    }
+
+    const overlay = document.createElement('div');
+    overlay.id = 'pulse-detail-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9000;display:flex;align-items:center;justify-content:center;';
+
+    const maxBtnId = 'pdm-max-btn-' + Date.now();
+    overlay.innerHTML = `
+      <div class="dga-dialog" style="width:min(640px,92vw);height:min(72vh,600px);">
+        <div class="dga-dialog-handle" style="display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid #e2e8f0;">
+          <span style="font-size:15px;font-weight:800;color:var(--text-primary);">${ticker}</span>
+          <span class="news-impact ${sentCls}" style="font-size:9px;">${sent}</span>
+          ${res.price != null ? `<span style="font-size:12px;color:#475569;">$${fmtPx(res.price)}</span>` : ''}
+          ${res.pct_change != null ? `<span class="${cssClass(res.pct_change)}" style="font-size:11px;">${fmtPct(res.pct_change)}</span>` : ''}
+          ${scannedAt ? `<span style="font-size:10px;color:var(--dim);">Scanned ${scannedAt}</span>` : ''}
+          <span style="margin-left:auto;display:flex;gap:6px;align-items:center;">
+            <button id="${maxBtnId}" class="dga-max-btn" title="Expand / restore">⤢</button>
+            <button onclick="document.getElementById('pulse-detail-modal').remove()"
+              style="background:rgba(0,0,0,0.05);border:1px solid #e2e8f0;color:#475569;border-radius:5px;padding:3px 11px;font-size:14px;cursor:pointer;line-height:1.4;">&times;</button>
+          </span>
+        </div>
+        <div class="dga-dialog-body" style="padding:16px 18px;font-size:12px;color:var(--text-secondary);line-height:1.7;">
+          ${_mdToHtml(md)}
+        </div>
+      </div>`;
+
+    // Close on backdrop click
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+
+    // Wire drag + maximize
+    const dlg    = overlay.querySelector('.dga-dialog');
+    const handle = overlay.querySelector('.dga-dialog-handle');
+    const maxBtn = overlay.querySelector('#' + maxBtnId);
+    if (dlg && handle) _initDragModal(dlg, handle);
+    if (dlg && maxBtn) maxBtn.addEventListener('click', () => _toggleMaxDialog(dlg, maxBtn));
+  }
+
+  async function loadGPMarketPulse() {
+    const el = document.getElementById('gp-pulse-rows');
+    const ts = document.getElementById('gp-pulse-ts');
+    if (!el) return;
+    try {
+      const r = await window.dgaFetch('/api/scan/latest');
+      if (!r.ok) throw new Error(r.status);
+      const d = await r.json();
+      if (!d.exists || !d.results || !Object.keys(d.results).length) {
+        el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">No scan data yet. Run a scan to populate.</div>';
+        return;
+      }
+      if (ts) {
+        const age = d.scanned_at
+          ? Math.round((Date.now() - new Date(d.scanned_at)) / 60000)
+          : null;
+        ts.textContent = age != null ? `⟳ ${age}m ago` : '⟳ now';
+      }
+      const entries = Object.entries(d.results);
+      el.innerHTML = entries.map(([tk, res]) => {
+        const sent   = (res.sentiment || 'NEUTRAL').toUpperCase();
+        const impCls = sent === 'BULLISH' ? 'low' : sent === 'BEARISH' ? 'high' : 'mid';
+        const summary = (res.markdown || '')
+          .replace(/#{1,3} .+\n?/g, '').replace(/\*\*?/g, '').replace(/\n/g, ' ')
+          .trim().slice(0, 105);
+        return `
+          <div class="news-row" data-ticker="${tk}" style="position:relative;">
+            <button class="pulse-rescan-btn" data-rescan="${tk}"
+              title="Re-scan just this ticker (~$0.05)"
+              style="position:absolute;top:8px;right:8px;background:transparent;border:1px solid var(--panel-edge);color:var(--mid);font-size:11px;cursor:pointer;padding:2px 6px;border-radius:3px;font-weight:700;line-height:1.2;">📡</button>
+            <div class="news-title" style="padding-right:34px;">${tk}: ${summary || 'Analysis available.'}</div>
+            <div class="news-meta">
+              <span class="news-impact ${impCls}">${sent}</span>
+              <span class="news-source">DGA Scan</span>
+              ${res.price != null ? `<span>· $${fmtPx(res.price)} <span class="${cssClass(res.pct_change)}">${fmtPct(res.pct_change)}</span></span>` : ''}
+            </div>
+          </div>`;
+      }).join('');
+      el.querySelectorAll('.news-row[data-ticker]').forEach(row =>
+        row.addEventListener('click', (e) => {
+          // Don't open the modal if the user hit the 📡 button
+          if (e.target.closest('.pulse-rescan-btn')) return;
+          const tk  = row.getAttribute('data-ticker');
+          const res = d.results[tk] || {};
+          _openPulseDetail(tk, res);
+        }));
+      // Wire 📡 per-row rescan
+      el.querySelectorAll('.pulse-rescan-btn').forEach(btn =>
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const tk = btn.getAttribute('data-rescan');
+          if (!tk) return;
+          if (!confirm(`Re-scan ${tk}? ~$0.05 (Grok live web/X search).`)) return;
+          const orig = btn.textContent;
+          btn.disabled = true; btn.textContent = '⏳';
+          try {
+            const r = await window.dgaFetch('/api/scan/ticker/' + encodeURIComponent(tk), { method: 'POST' });
+            if (!r.ok) { const er = await r.json(); throw new Error(er.detail || r.status); }
+            const job = await r.json();
+            _pollScanJob(job.job_id, null, function() {
+              loadGPMarketPulse();   // refresh table when single-ticker scan finishes
+            }, function() {
+              btn.disabled = false; btn.textContent = orig;
+            });
+          } catch (err) {
+            alert('Rescan failed: ' + err.message);
+            btn.disabled = false; btn.textContent = orig;
+          }
+        })
+      );
+    } catch (e) {
+      console.warn('[gp-pulse]', e);
+      if (el) el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);">Could not load market pulse.</div>';
+    }
+  }
+
+  // ── Universal auto-collapsify ────────────────────────────────────────────
+  // Converts any <section class="panel"> that contains a <table> and has a
+  // direct-child <header class="panel-head"> into a <details>/<summary> panel.
+  // Runs once at init (static HTML) and re-runs whenever the DOM changes
+  // (dynamic renders).  Panels already using <details> are left untouched.
+  (function _installAutoCollapsify() {
+    function collapsify() {
+      document.querySelectorAll('section.panel:not([data-ac])').forEach(function(section) {
+        // Already converted or uses manual <details> pattern
+        if (section.querySelector(':scope > details')) return;
+
+        // Must have a direct-child <header class="panel-head">
+        var hdr = null;
+        for (var i = 0; i < section.childNodes.length; i++) {
+          var c = section.childNodes[i];
+          if (c.nodeType === 1 && c.tagName === 'HEADER' && c.classList.contains('panel-head')) {
+            hdr = c; break;
+          }
+        }
+        if (!hdr) return;
+
+        // Must contain at least one <table> (or a loading placeholder that
+        // will eventually contain one — still wrap it so dynamic content
+        // that arrives later is inside the open details).
+        // We skip panels that are pure-tile/chart with no table at all,
+        // UNLESS they have already been opted in via data-collapsible.
+        var hasTable = section.querySelector('table');
+        var optedIn  = section.dataset.collapsible === '1';
+        if (!hasTable && !optedIn) return;
+
+        section.setAttribute('data-ac', '1');
+
+        // Build <details><summary>…header children…<span.ac-chevron>▸</summary>…rest…
+        var details = document.createElement('details');
+        var summary = document.createElement('summary');
+        summary.className = 'panel-head';
+        // Transfer any inline style from the original header (e.g. justify-content)
+        var hdrStyle = hdr.getAttribute('style');
+        summary.style.cssText = 'display:flex;align-items:center;gap:8px;' + (hdrStyle || '');
+
+        while (hdr.firstChild) summary.appendChild(hdr.firstChild);
+
+        // Add rotating chevron (CSS rotates it when [open])
+        var chev = document.createElement('span');
+        chev.className = 'ac-chevron';
+        chev.textContent = '▸';
+        summary.appendChild(chev);
+
+        details.appendChild(summary);
+
+        // Expand by default if the section opts in via data-expanded="1"
+        if (section.dataset.expanded === '1') details.open = true;
+
+        // Move all remaining section children into <details>
+        var toMove = [];
+        section.childNodes.forEach(function(n) { if (n !== hdr) toMove.push(n); });
+        toMove.forEach(function(n) { details.appendChild(n); });
+        hdr.remove();
+        section.appendChild(details);
+      });
+    }
+
+    // Run after static HTML is ready
+    collapsify();
+
+    // Re-run whenever nodes are added (catches dynamic innerHTML updates).
+    // Debounced with rAF so rapid mutations collapse into one pass.
+    var _acPending = false;
+    new MutationObserver(function(muts) {
+      var added = false;
+      for (var i = 0; i < muts.length; i++) {
+        if (muts[i].addedNodes.length) { added = true; break; }
+      }
+      if (added && !_acPending) {
+        _acPending = true;
+        requestAnimationFrame(function() { _acPending = false; collapsify(); });
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+
+    window._collapsifyPanels = collapsify;
+  })();
+
+  // ── "📰 Run Brief" button on Today's Movers ───────────────────
+  // Kicks off /api/daily-brief, polls for completion, then refreshes
+  // both the Today's Movers panel AND the Idea Generator (the brief
+  // tickers now feed into the idea-feed universe — server-side Option A).
+  (function wireRunBriefBtn(){
+    const btn = document.getElementById('trending-run-brief');
+    if (!btn) return;
+    llmStampControl(btn, 'daily_brief');
+    btn.addEventListener('click', async function(){
+      const meta = llmDescribe('daily_brief');
+      const orig = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '⏳ ' + meta.model.slice(0, 12) + '…';
+      llmToast('daily_brief', 'Starting daily brief');
+      try {
+        const r = await window.dgaFetch('/api/daily-brief', { method:'POST' });
+        const j = await r.json();
+        if (!j.job_id) throw new Error('No job_id returned');
+        const t0 = Date.now();
+        let lastProv = meta.provider, lastModel = meta.model;
+        await new Promise((resolve, reject) => {
+          const poll = setInterval(async () => {
+            if ((Date.now() - t0) > 180000) {
+              clearInterval(poll); reject(new Error('timed out after 3 min')); return;
+            }
+            try {
+              const pr = await window.dgaFetch('/api/daily-brief/' + j.job_id);
+              const pj = await pr.json();
+              const res = pj.result || {};
+              if (res.model) lastModel = res.model;
+              if (res.provider) lastProv = res.provider;
+              btn.textContent = '⏳ ' + (lastModel || pj.status || 'run').toString().slice(0, 14) + '…';
+              if (pj.status === 'completed' || pj.status === 'done') { clearInterval(poll); resolve(); }
+              else if (pj.status === 'error' || pj.status === 'failed') {
+                clearInterval(poll); reject(new Error(pj.error || 'brief failed'));
+              }
+            } catch(e) { /* transient */ }
+          }, 2500);
+        });
+        try {
+          window.toast && window.toast('Brief done · ' + lastProv + ' · ' + lastModel + ' · ' + meta.cost, { type: 'info', ttl: 4000 });
+        } catch (_) {}
+        loadTrendingTickers();
+        try { if (typeof loadIdeaFeed === 'function') loadIdeaFeed(true); } catch {}
+      } catch (e) {
+        alert('Daily Brief failed: ' + e.message);
+      } finally {
+        btn.disabled = false; btn.textContent = orig;
+        llmStampControl(btn, 'daily_brief');
+      }
+    });
+  })();
+
+  // ══════════════════════════════════════════════════════════════
+  // 📄 DGA MEMOS — list + export-from-podcast + email modals
+  // ══════════════════════════════════════════════════════════════
+  window._memoFunds = [];          // cached fund list for modal dropdowns
+  window._currentExportJobKey = null;
+  window._currentEmailMemo = null;
+
+  async function _loadFundsForMemoModal() {
+    if (window._memoFunds.length) return window._memoFunds;
+    try {
+      const r = await window.dgaFetch('/api/fund/list');
+      const j = await r.json();
+      const list = Array.isArray(j) ? j : (j.funds || []);
+      window._memoFunds = list.filter(f => f && f.id);
+    } catch (e) {
+      console.warn('[memos] fund load failed', e);
+    }
+    return window._memoFunds;
+  }
+  function _populateFundSelect(selectEl, includeAll) {
+    const opts = [includeAll
+      ? '<option value="">All funds</option>'
+      : '<option value="">— unassigned —</option>'];
+    (window._memoFunds || []).forEach(f => {
+      const nm = f.legal_name || f.name || f.id;
+      opts.push(`<option value="${f.id}">${nm}</option>`);
+    });
+    selectEl.innerHTML = opts.join('');
+  }
+
+  // ── Load + render Memos tab ────────────────────────────────────
+  async function loadMemosTab() {
+    await _loadFundsForMemoModal();
+    const filterSel = document.getElementById('memos-fund-filter');
+    if (filterSel) {
+      _populateFundSelect(filterSel, true);
+      filterSel.onchange = () => _renderMemosList();
+    }
+    const refresh = document.getElementById('memos-refresh-btn');
+    if (refresh) refresh.onclick = () => _renderMemosList();
+    const selftest = document.getElementById('memos-selftest-btn');
+    if (selftest) selftest.onclick = _memoSelfTest;
+    _renderMemosList();
+    _initQuarterlyLetter();
+  }
+
+  // ── 🗒️ Quarterly Letter composer (shared intro + per-fund sections) ───────
+  let _qlCurrentId = null;
+  let _qlInit = false;
+  let _qlFunds = [];          // [{fund_id, name, short_name, fund_type, has_positions, has_attribution}]
+  function _qlYear() { return parseInt(document.getElementById('ql-year')?.value, 10) || new Date().getFullYear(); }
+  function _initQuarterlyLetter() {
+    const yr = document.getElementById('ql-year');
+    if (yr && !yr.value) yr.value = new Date().getFullYear();
+    if (_qlInit) { _qlRenderSaved(); return; }
+    _qlInit = true;
+    document.getElementById('ql-gen-intro')?.addEventListener('click', _qlGenIntro);
+    document.getElementById('ql-gen-all')?.addEventListener('click', _qlGenAll);
+    document.getElementById('ql-preview')?.addEventListener('click', _qlPreview);
+    document.getElementById('ql-save')?.addEventListener('click', function(){ _qlSave('draft'); });
+    document.getElementById('ql-publish')?.addEventListener('click', _qlPublishAll);
+    _qlLoadFunds();
+    _qlRenderSaved();
+  }
+  // Shared poller: runs an agentic job to completion, returns its answer markdown.
+  async function _qlPoll(jobId, statusEl, label) {
+    let tries = 0;
+    while (tries < 120) {
+      await new Promise(res => setTimeout(res, 3000));
+      tries++;
+      let j;
+      try { j = await (await window.dgaFetch('/api/research/agentic/' + jobId)).json(); } catch(e) { continue; }
+      if (statusEl) statusEl.textContent = label + ': ' + (j.label || 'working…') + '  ·  $' + (j.cost_usd||0).toFixed(2);
+      if (j.status === 'done' && j.result) return j.result.answer || '';
+      if (j.status === 'error') throw new Error(j.error || j.label || 'generation failed');
+    }
+    throw new Error('timed out — try again');
+  }
+  async function _qlGenIntro() {
+    const btn = document.getElementById('ql-gen-intro');
+    const status = document.getElementById('ql-status');
+    const intro = document.getElementById('ql-intro');
+    if (intro && intro.value.trim() && !confirm('Replace the shared intro with a fresh draft?')) return;
+    if (btn) { btn.disabled = true; btn.textContent = '✨ Generating…'; }
+    try {
+      const r = await (await window.dgaFetch('/api/research/quarterly-letter/intro', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ year: _qlYear() }) })).json();
+      if (!r.ok || !r.job_id) throw new Error(r.error || r.detail || 'could not start');
+      const md = await _qlPoll(r.job_id, status, 'Intro');
+      if (intro) intro.value = md;
+      if (status) status.textContent = '✓ Intro ready — edit freely.';
+    } catch (e) { if (status) status.textContent = '❌ intro: ' + (e.message || e); }
+    if (btn) { btn.disabled = false; btn.textContent = '✨ Generate intro'; }
+  }
+  async function _qlGenFund(fid, name, opts) {
+    opts = opts || {};
+    const status = document.getElementById('ql-status');
+    const ta = document.getElementById('ql-fund-' + fid);
+    const btn = document.getElementById('ql-genbtn-' + fid);
+    if (!opts.force && ta && ta.value.trim() && !confirm('Replace the ' + name + ' section with a fresh draft?')) return;
+    if (btn) { btn.disabled = true; btn.textContent = '✨ …'; }
+    try {
+      const r = await (await window.dgaFetch('/api/research/quarterly-letter/fund-section', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ fund_id: fid, year: _qlYear() }) })).json();
+      if (!r.ok || !r.job_id) throw new Error(r.error || r.detail || 'could not start');
+      const md = await _qlPoll(r.job_id, status, opts.progressLabel || name);
+      if (ta) ta.value = md;
+      if (status) status.textContent = '✓ ' + name + ' section ready.';
+    } catch (e) {
+      if (status) status.textContent = '❌ ' + name + ': ' + (e.message || e);
+      if (opts.rethrow) { if (btn) { btn.disabled = false; btn.textContent = '✨ Generate'; } throw e; }
+    }
+    if (btn) { btn.disabled = false; btn.textContent = '✨ Generate'; }
+  }
+  // Generate every fund's section sequentially with progress text in the
+  // header button + status line. Skips nothing — overwrites after ONE confirm.
+  async function _qlGenAll() {
+    const btn = document.getElementById('ql-gen-all');
+    const status = document.getElementById('ql-status');
+    if (!_qlFunds.length) { if (status) status.textContent = 'No funds with live positions yet.'; return; }
+    const hasContent = _qlFunds.some(function(f){
+      const ta = document.getElementById('ql-fund-' + f.fund_id);
+      return ta && ta.value.trim();
+    });
+    if (hasContent && !confirm('Some fund sections already have text. Regenerate ALL sections and replace them?')) return;
+    if (btn) btn.disabled = true;
+    let done = 0, failed = 0;
+    for (let i = 0; i < _qlFunds.length; i++) {
+      const f = _qlFunds[i];
+      const name = f.short_name || f.name;
+      if (btn) btn.textContent = '✨ ' + (i + 1) + '/' + _qlFunds.length + ' — ' + name + '…';
+      try {
+        await _qlGenFund(f.fund_id, name, { force: true, rethrow: true,
+          progressLabel: '(' + (i + 1) + '/' + _qlFunds.length + ') ' + name });
+        done++;
+      } catch (e) { failed++; }
+    }
+    if (btn) { btn.disabled = false; btn.textContent = '✨ Generate all fund sections'; }
+    if (status) status.textContent = '✓ Generated ' + done + '/' + _qlFunds.length + ' fund section(s)'
+      + (failed ? ' · ' + failed + ' failed — see above.' : '. Review, edit, then Save/Publish.');
+  }
+  // Non-blocking freshness check before publish: flags funds whose YTD cache
+  // has estimated flows or hasn't been updated in >48h.
+  async function _qlFreshnessWarn(fundIds) {
+    const warnEl = document.getElementById('ql-fresh-warn');
+    if (!warnEl) return;
+    warnEl.style.display = 'none';
+    const staleNames = [];
+    for (const fid of (fundIds || [])) {
+      try {
+        const r = await window.dgaFetch('/api/fund/account/' + encodeURIComponent(fid) + '/ytd-cache');
+        if (!r.ok) continue;
+        const c = await r.json();
+        let flowsEst = !!c.flows_estimated;
+        try {
+          const rj = c.result_json ? (typeof c.result_json === 'string' ? JSON.parse(c.result_json) : c.result_json) : null;
+          if (rj && rj.flows_estimated) flowsEst = true;
+        } catch (e) {}
+        const upd = c.updated_at ? _parseServerDate(c.updated_at) : null;
+        const oldCache = !upd || isNaN(upd) || (Date.now() - upd.getTime()) > 48 * 3600 * 1000;
+        if (flowsEst || oldCache) {
+          const f = _qlFunds.find(function(x){ return x.fund_id === fid; });
+          staleNames.push((f && (f.short_name || f.name)) || fid);
+        }
+      } catch (e) { /* health check only — never blocks publish */ }
+    }
+    if (staleNames.length) {
+      warnEl.innerHTML = '⚠ <strong>' + _gfEsc(staleNames.join(', ')) + '</strong>: some balance months are estimated / data may be stale — sync SnapTrade before publishing.';
+      warnEl.style.display = '';
+    }
+  }
+  async function _qlLoadFunds() {
+    const wrap = document.getElementById('ql-funds');
+    if (!wrap) return;
+    try {
+      const d = await (await window.dgaFetch('/api/quarterly-letter/funds')).json();
+      _qlFunds = (d.funds || []).filter(function(f){ return f.has_positions; });
+      if (!_qlFunds.length) { wrap.innerHTML = '<span style="color:#94a3b8;">No funds with live positions yet.</span>'; return; }
+      wrap.innerHTML = _qlFunds.map(function(f){
+        const tag = f.fund_type === 'lp_fund' ? 'LP fund (shared by all its LPs)' : 'managed account';
+        const attr = f.has_attribution ? '' : ' <span style="color:#d97706;">· no YTD CSV on file</span>';
+        return '<div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;">'
+          + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
+          + '<span style="font-weight:700;color:#0A1628;">'+_gfEsc(f.short_name||f.name)+'</span>'
+          + '<span style="font-size:10px;color:#94a3b8;">'+tag+attr+'</span>'
+          + '<span id="ql-pubtag-'+_gfEsc(f.fund_id)+'" style="display:none;font-size:10px;color:#16a34a;font-weight:800;">✓ published</span>'
+          + '<span style="flex:1;"></span>'
+          + '<button id="ql-genbtn-'+_gfEsc(f.fund_id)+'" type="button" class="tab-btn" style="font-size:11px;height:26px;" data-ql-fund="'+_gfEsc(f.fund_id)+'" data-ql-name="'+_gfEsc(f.short_name||f.name)+'">✨ Generate</button>'
+          + '<button id="ql-pubbtn-'+_gfEsc(f.fund_id)+'" type="button" class="tab-btn" style="font-size:11px;height:26px;margin-left:6px;color:#2563eb;" data-ql-pub="'+_gfEsc(f.fund_id)+'" data-ql-pubname="'+_gfEsc(f.short_name||f.name)+'">📢 Publish to LP</button>'
+          + '</div>'
+          + '<textarea id="ql-fund-'+_gfEsc(f.fund_id)+'" rows="6" placeholder="Generate this fund’s section, then edit…" style="width:100%;border:1px solid var(--panel-edge);border-radius:6px;padding:10px;font-size:12.5px;line-height:1.55;resize:vertical;font-family:inherit;"></textarea>'
+          + '</div>';
+      }).join('');
+      wrap.querySelectorAll('[data-ql-fund]').forEach(function(b){
+        b.addEventListener('click', function(){ _qlGenFund(b.getAttribute('data-ql-fund'), b.getAttribute('data-ql-name')); });
+      });
+      wrap.querySelectorAll('[data-ql-pub]').forEach(function(b){
+        b.addEventListener('click', function(){ _qlPublishFund(b.getAttribute('data-ql-pub'), b.getAttribute('data-ql-pubname')); });
+      });
+      if (_qlCurrentId) { try { _qlSyncPublishedBadges(); } catch(e){} }
+    } catch (e) { wrap.innerHTML = '<span style="color:#94a3b8;">Could not load funds.</span>'; }
+  }
+  function _qlPreviewMd(text) {
+    const LINK = 'color:#2563eb;text-decoration:underline;font-weight:600;';
+    return String(text || '')
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/^### (.+)$/gm, '<div style="font-size:12px;font-weight:800;color:#5BB8D4;letter-spacing:.6px;margin:14px 0 4px;text-transform:uppercase;">$1</div>')
+      .replace(/^## (.+)$/gm,  '<div style="font-size:16px;font-weight:800;color:#0A1628;margin:16px 0 6px;">$1</div>')
+      .replace(/^# (.+)$/gm,   '<div style="font-size:17px;font-weight:800;color:#0A1628;margin:16px 0 6px;">$1</div>')
+      .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g,   '<em>$1</em>')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" style="'+LINK+'">$1</a>')
+      .replace(/^- (.+)$/gm,   '<div style="padding:2px 0 2px 12px;border-left:2px solid #5BB8D4;margin:3px 0;">$1</div>')
+      .replace(/\n{2,}/g,      '<div style="height:9px;"></div>')
+      .replace(/\n/g,          ' ');
+  }
+  function _qlPreview() {
+    const year = _qlYear();
+    const note = document.getElementById('ql-note')?.value || '';
+    const intro = document.getElementById('ql-intro')?.value || '';
+    const sections = _qlCollectSections();
+    const slist = Object.keys(sections).map(function(fid){ return sections[fid]; });
+    document.getElementById('ql-preview-modal')?.remove();
+    let inner = '<div style="font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#5BB8D4;">DGA Capital · YTD ' + year + '</div>'
+      + '<div style="font-size:20px;font-weight:800;color:#0A1628;margin:2px 0 14px;">Quarterly Letter</div>';
+    if (note.trim()) inner += '<div style="background:#f8fafc;border-left:3px solid #5BB8D4;border-radius:6px;padding:12px 14px;margin-bottom:14px;font-size:14px;line-height:1.6;color:#1e293b;font-style:italic;">' + _qlPreviewMd(note) + '</div>';
+    if (intro.trim()) inner += '<div style="font-size:14px;line-height:1.7;color:#1e293b;">' + _qlPreviewMd(intro) + '</div>';
+    if (slist.length) {
+      slist.forEach(function(s){
+        inner += '<div style="margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0;">'
+          + '<div style="font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#5BB8D4;margin-bottom:6px;">' + _gfEsc(s.name) + '</div>'
+          + '<div style="font-size:14px;line-height:1.7;color:#1e293b;">' + _qlPreviewMd(s.md) + '</div></div>';
+      });
+    } else {
+      inner += '<div style="margin-top:14px;color:#94a3b8;font-size:13px;">No fund sections filled in yet.</div>';
+    }
+    inner += '<div style="margin-top:18px;font-size:11px;color:#94a3b8;border-top:1px solid #e2e8f0;padding-top:10px;">'
+      + 'GP preview — shows ALL filled sections. Each LP sees the note, intro, and only the sections for funds they hold.</div>';
+    const overlay = document.createElement('div');
+    overlay.id = 'ql-preview-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(10,22,40,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;';
+    overlay.innerHTML = '<div style="background:#fff;border-radius:10px;width:min(720px,94vw);max-height:86vh;overflow:auto;box-shadow:0 18px 48px rgba(0,0,0,0.3);">'
+      + '<div style="display:flex;align-items:center;gap:8px;padding:12px 18px;border-bottom:1px solid #e2e8f0;position:sticky;top:0;background:#fff;">'
+      + '<span style="font-size:13px;font-weight:800;color:#0A1628;">👁 Letter preview</span><span style="flex:1;"></span>'
+      + '<button onclick="document.getElementById(\'ql-preview-modal\').remove()" style="background:rgba(0,0,0,0.05);border:1px solid #e2e8f0;color:#475569;border-radius:5px;padding:3px 11px;font-size:14px;cursor:pointer;">&times;</button></div>'
+      + '<div style="padding:22px 26px;">' + inner + '</div></div>';
+    overlay.addEventListener('click', function(e){ if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+  }
+  function _qlCollectSections() {
+    const out = {};
+    _qlFunds.forEach(function(f){
+      const ta = document.getElementById('ql-fund-' + f.fund_id);
+      const v = ta ? ta.value.trim() : '';
+      if (v) out[f.fund_id] = { md: v, name: f.short_name || f.name };
+    });
+    return out;
+  }
+  // Persist current composer content as a draft; returns the letter id (or null).
+  async function _qlPersist() {
+    const year = _qlYear();
+    const note = document.getElementById('ql-note')?.value || '';
+    const intro = document.getElementById('ql-intro')?.value || '';
+    const sections = _qlCollectSections();
+    if (!note.trim() && !intro.trim() && !Object.keys(sections).length) return null;
+    const payload = { id: _qlCurrentId, title: 'Quarterly Letter ' + year, period: 'YTD ' + year, year: year,
+                      manual_note: note, shared_intro_md: intro, fund_sections: sections,
+                      scope_fund_ids: Object.keys(sections), status: 'draft' };
+    const r = await (await window.dgaFetch('/api/quarterly-letter/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })).json();
+    if (!r.ok) throw new Error(r.detail || 'save failed');
+    _qlCurrentId = r.id;
+    return r.id;
+  }
+  async function _qlSave() {
+    const btn = document.getElementById('ql-save');
+    const status = document.getElementById('ql-status');
+    if (btn) { btn.disabled = true; btn.textContent = '💾 Saving…'; }
+    try {
+      const id = await _qlPersist();
+      if (status) status.textContent = id ? '✓ Saved (' + Object.keys(_qlCollectSections()).length + ' fund section(s)).' : 'Nothing to save yet.';
+      _qlRenderSaved();
+    } catch (e) { if (status) status.textContent = '❌ ' + (e.message || e); }
+    if (btn) { btn.disabled = false; btn.textContent = '💾 Save draft'; }
+  }
+  function _qlEmailMsg(em) {
+    if (!em) return '';
+    return ' Emailed ' + (em.sent||0) + ' LP(s)' + (em.skipped ? ' (' + em.skipped + ' skipped)' : '') + ((em.errors && em.errors.length) ? ', ' + em.errors.length + ' failed' : '') + '.';
+  }
+  async function _qlPublishAll() {
+    const btn = document.getElementById('ql-publish');
+    const status = document.getElementById('ql-status');
+    // Freshness warning (non-blocking) — covers every fund with a filled section.
+    try { await _qlFreshnessWarn(Object.keys(_qlCollectSections())); } catch (e) {}
+    if (!confirm('Publish ALL filled fund sections to every holding LP (and email them)?')) return;
+    if (btn) { btn.disabled = true; btn.textContent = '📢 Publishing…'; }
+    try {
+      const id = await _qlPersist();
+      if (!id) throw new Error('nothing to publish');
+      const r = await (await window.dgaFetch('/api/quarterly-letter/' + encodeURIComponent(id) + '/publish-all', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json();
+      if (!r.ok) throw new Error(r.detail || 'publish failed');
+      if (status) status.textContent = '📢 Published all ' + (r.published_fund_ids||[]).length + ' section(s).' + _qlEmailMsg(r.email);
+      _qlMarkPublished(r.published_fund_ids || []);
+    } catch (e) { if (status) status.textContent = '❌ ' + (e.message || e); }
+    if (btn) { btn.disabled = false; btn.textContent = '📢 Publish to all LPs'; }
+  }
+  async function _qlPublishFund(fid, name) {
+    const status = document.getElementById('ql-status');
+    const btn = document.getElementById('ql-pubbtn-' + fid);
+    const ta = document.getElementById('ql-fund-' + fid);
+    if (!ta || !ta.value.trim()) { if (status) status.textContent = 'Generate ' + name + '’s section before publishing it.'; return; }
+    // Freshness warning (non-blocking) for this fund's balance data.
+    try { await _qlFreshnessWarn([fid]); } catch (e) {}
+    if (!confirm('Publish the ' + name + ' section to its LP(s) and email them?')) return;
+    if (btn) { btn.disabled = true; btn.textContent = '📢 …'; }
+    try {
+      const id = await _qlPersist();
+      if (!id) throw new Error('nothing to publish');
+      const r = await (await window.dgaFetch('/api/quarterly-letter/' + encodeURIComponent(id) + '/publish-fund', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ fund_id: fid }) })).json();
+      if (!r.ok) throw new Error(r.detail || 'publish failed');
+      if (status) status.textContent = '📢 Published ' + name + '.' + _qlEmailMsg(r.email);
+      _qlMarkPublished(r.published_fund_ids || []);
+    } catch (e) { if (status) status.textContent = '❌ ' + name + ': ' + (e.message || e); }
+    if (btn) { btn.disabled = false; btn.textContent = '📢 Publish to LP'; }
+  }
+  let _qlPublished = [];
+  function _qlMarkPublished(pubIds) {
+    _qlPublished = pubIds || [];
+    _qlSyncPublishedBadges();
+  }
+  function _qlSyncPublishedBadges() {
+    const set = {}; (_qlPublished||[]).forEach(function(f){ set[f] = 1; });
+    _qlFunds.forEach(function(f){
+      const badge = document.getElementById('ql-pubtag-' + f.fund_id);
+      if (badge) badge.style.display = set[f.fund_id] ? 'inline' : 'none';
+    });
+  }
+  async function _qlRenderSaved() {
+    const el = document.getElementById('ql-saved');
+    if (!el) return;
+    try {
+      const d = await (await window.dgaFetch('/api/quarterly-letter/list')).json();
+      const ls = d.letters || [];
+      if (!ls.length) { el.innerHTML = '<span style="color:#94a3b8;">No saved drafts yet.</span>'; return; }
+      el.innerHTML = ls.map(function(l){
+        return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #f1f5f9;">'
+          + '<span style="flex:1;cursor:pointer;color:#0A1628;" data-ql-open="'+_gfEsc(l.id)+'">'+_gfEsc(l.title||l.period||l.id)
+          + ' <span style="color:#94a3b8;font-weight:400;">· '+_gfEsc(l.status||'')+' · '+_gfEsc((l.updated_at||'').slice(0,16).replace('T',' '))+'</span></span></div>';
+      }).join('');
+      el.querySelectorAll('[data-ql-open]').forEach(function(s){ s.addEventListener('click', function(){ _qlOpen(s.getAttribute('data-ql-open')); }); });
+    } catch (e) { el.innerHTML = '<span style="color:#94a3b8;">Could not load drafts.</span>'; }
+  }
+  async function _qlOpen(id) {
+    try {
+      const d = await (await window.dgaFetch('/api/quarterly-letter/' + encodeURIComponent(id))).json();
+      const l = d.letter; if (!l) return;
+      _qlCurrentId = l.id;
+      const yr = document.getElementById('ql-year'); if (yr && l.year) yr.value = l.year;
+      const note = document.getElementById('ql-note'); if (note) note.value = l.manual_note || '';
+      const intro = document.getElementById('ql-intro'); if (intro) intro.value = l.shared_intro_md || l.body_md || '';
+      const secs = l.fund_sections || {};
+      Object.keys(secs).forEach(function(fid){
+        const ta = document.getElementById('ql-fund-' + fid);
+        if (ta) ta.value = (secs[fid] && secs[fid].md) || '';
+      });
+      _qlMarkPublished(l.published_fund_ids || []);
+      const status = document.getElementById('ql-status'); if (status) status.textContent = 'Loaded "' + (l.title||l.id) + '".';
+    } catch (e) {}
+  }
+
+  async function _memoSelfTest() {
+    const btn = document.getElementById('memos-selftest-btn');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Testing…'; }
+    try {
+      // 1) JSON diagnostics — logo file present? Pillow installed? render ok?
+      const d = await (await window.dgaFetch('/api/memos/selftest')).json();
+      const pillowOk = d.pillow && !String(d.pillow).startsWith('MISSING');
+      const msg = 'Logo file: ' + (d.logo_exists ? '✓ found' : '✗ MISSING') +
+                  '\nPillow (needed to embed logo): ' + (pillowOk ? '✓ ' + d.pillow : '✗ ' + d.pillow) +
+                  '\nPDF render: ' + (d.render_ok ? '✓ ok (' + d.pdf_bytes + ' bytes)' : '✗ ' + (d.render_error || 'failed'));
+      window.toast((d.logo_exists && pillowOk && d.render_ok) ? '✓ Memo pipeline healthy — opening sample PDF' : '⚠ Issue detected — see sample PDF / details',
+                   { type: (d.logo_exists && pillowOk && d.render_ok) ? 'success' : 'warn', ttl: 6000 });
+      console.log('[memo selftest]', d);
+      // 2) Open the sample PDF (carries the auth header via blob, then a new tab)
+      const pr = await window.dgaFetch('/api/memos/selftest?download=1');
+      if (pr.ok) {
+        const blob = await pr.blob();
+        window.open(URL.createObjectURL(blob), '_blank');
+      } else {
+        alert('Self-test details:\n\n' + msg);
+      }
+    } catch (e) {
+      window.toast('Self-test failed: ' + e.message, { type: 'error' });
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '🔍 Logo self-test'; }
+    }
+  }
+  async function _renderMemosList() {
+    const list = document.getElementById('memos-list');
+    if (!list) return;
+    list.innerHTML = '<div style="padding:24px;text-align:center;font-size:12px;color:var(--dim);">Loading…</div>';
+    const fundId = (document.getElementById('memos-fund-filter') || {}).value || '';
+    try {
+      const url = '/api/memos' + (fundId ? '?fund_id=' + encodeURIComponent(fundId) : '');
+      const r = await window.dgaFetch(url);
+      const status = r.status;
+      let j = null;
+      try { j = await r.json(); } catch(_) { j = null; }
+      // Surface HTTP errors loudly instead of silently rendering "empty"
+      if (!r.ok) {
+        const detail = (j && (j.detail || j.error)) || ('HTTP ' + status);
+        list.innerHTML = '<div style="padding:24px;color:#dc2626;font-size:12px;">'
+          + 'Failed to load memos: <strong>' + detail + '</strong>'
+          + '<div style="margin-top:8px;font-size:10.5px;color:#64748b;">Status ' + status
+          + ' · check Railway logs for [memo] errors</div></div>';
+        return;
+      }
+      const memos = (j && j.memos) || [];
+      console.log('[memos] GET /api/memos →', { status, ok: r.ok, count: memos.length, raw: j });
+      if (!memos.length) {
+        list.innerHTML = '<div style="padding:32px;text-align:center;font-size:12px;color:var(--dim);">'
+          + 'No memos yet. Generate a podcast in the LLM Lab and click <strong>📄 Export as DGA Memo</strong>.'
+          + '<div style="margin-top:14px;">'
+          + '<button id="memos-run-diag" type="button" style="background:#fef3c7;border:1px solid #fde68a;color:#92400e;padding:5px 12px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">🔍 Run server diagnostic</button>'
+          + '</div></div>';
+        document.getElementById('memos-run-diag')?.addEventListener('click', async function() {
+          this.disabled = true; this.textContent = '⏳ Checking…';
+          try {
+            const dr = await window.dgaFetch('/api/memos/_diag');
+            const dj = await dr.json();
+            const lines = [
+              'row_count: ' + (dj.row_count != null ? dj.row_count : '(error)'),
+              'columns:',
+              ...(dj.columns || []).map(c => '  • ' + c.column_name + ' → ' + c.data_type),
+              '',
+              'recent: ' + ((dj.recent || []).length || '(none)'),
+              ...(dj.recent || []).map(r => '  • ' + r.id + ' · ' + r.episode_title + ' · ' + r.bytes + 'B · ' + (r.generated_at||'').slice(0,16)),
+              '',
+              dj.error ? '❌ error: ' + dj.error : '✓ ok',
+            ].join('\n');
+            list.innerHTML = '<pre style="padding:18px;font-family:\'SF Mono\',monospace;font-size:11px;color:#1e293b;white-space:pre-wrap;background:#f8fafc;border-radius:6px;margin:12px;">'
+              + lines.replace(/[<>&]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]) + '</pre>';
+          } catch (e) {
+            list.innerHTML = '<div style="padding:24px;color:#dc2626;font-size:12px;">Diag failed: ' + e.message + '</div>';
+          }
+        });
+        return;
+      }
+      const rows = memos.map(m => {
+        const memoSnip = (m.gp_memo || '').slice(0, 90);
+        const sentBadge = m.last_sent_at
+          ? `<span style="font-size:9.5px;color:#22c55e;font-weight:700;">📨 sent ${(m.last_sent_at||'').slice(0,10)}</span>`
+          : `<span style="font-size:9.5px;color:#94a3b8;">not sent</span>`;
+        return `
+          <div style="display:grid;grid-template-columns:1fr auto;gap:14px;padding:14px 18px;border-bottom:1px solid var(--panel-edge);">
+            <div>
+              <div style="font-weight:800;font-size:13px;color:var(--text-primary);">${(m.episode_title||'Memo').replace(/[<>&]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[c])}</div>
+              <div style="font-size:10.5px;color:#64748b;margin-top:3px;">
+                ${(m.generated_at||'').slice(0,10)} · ${m.source_format||'memo'}
+                ${m.fund_name ? ' · <strong style="color:var(--text-primary);">'+m.fund_name+'</strong>' : '<span style="color:#94a3b8;"> · unassigned</span>'}
+                · ${sentBadge}
+              </div>
+              ${memoSnip ? `<div style="font-size:10.5px;color:#92400e;font-style:italic;margin-top:5px;background:#fff8e1;padding:6px 10px;border-left:2px solid #f59e0b;border-radius:3px;">${memoSnip.replace(/[<>&]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[c])}${m.gp_memo.length>90?'…':''}</div>` : ''}
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <button data-memo-view="${m.id}" data-title="${(m.episode_title||'').replace(/"/g,'&quot;')}"
+                 style="background:#fff;border:1px solid #cbd5e1;color:#0A1628;padding:5px 10px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">📄 View PDF</button>
+              <button data-memo-email="${m.id}" data-fund="${m.assigned_fund_id||''}" data-title="${(m.episode_title||'').replace(/"/g,'&quot;')}"
+                 style="background:#5BB8D4;border:1px solid #4A9BB8;color:#fff;padding:5px 10px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">📨 Email</button>
+              <button data-memo-delete="${m.id}"
+                 style="background:#fff;border:1px solid #fca5a5;color:#b91c1c;padding:5px 10px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">🗑</button>
+            </div>
+          </div>`;
+      }).join('');
+      list.innerHTML = rows;
+      list.querySelectorAll('[data-memo-view]').forEach(b => b.onclick = async () => {
+        // Fetch via dgaFetch so the v2 auth token is attached, then open
+        // the returned PDF as a blob URL in a new tab. A plain <a href>
+        // wouldn't carry the header and would 401.
+        const orig = b.textContent;
+        b.disabled = true; b.textContent = '⏳ Loading…';
+        try {
+          const r = await window.dgaFetch('/api/memos/' + b.dataset.memoView + '/pdf');
+          if (!r.ok) {
+            const j = await r.json().catch(() => ({}));
+            throw new Error(j.detail || j.error || ('HTTP ' + r.status));
+          }
+          const blob = await r.blob();
+          const url  = URL.createObjectURL(blob);
+          window.open(url, '_blank', 'noopener');
+          // Best-effort cleanup after the new tab has had a moment to load it
+          setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        } catch (e) {
+          alert('Could not open PDF: ' + e.message);
+        } finally {
+          b.disabled = false; b.textContent = orig;
+        }
+      });
+      list.querySelectorAll('[data-memo-email]').forEach(b => b.onclick = () =>
+        _openMemoEmailModal(b.dataset.memoEmail, b.dataset.fund, b.dataset.title));
+      list.querySelectorAll('[data-memo-delete]').forEach(b => b.onclick = async () => {
+        if (!(await dgaConfirm({ title: 'Delete memo', message: 'Delete this memo permanently?', confirmLabel: 'Delete memo' }))) return;
+        const r = await window.dgaFetch('/api/memos/' + b.dataset.memoDelete, { method:'DELETE' });
+        if (r.ok) _renderMemosList(); else alert('Delete failed');
+      });
+    } catch (e) {
+      list.innerHTML = '<div style="padding:24px;color:#dc2626;font-size:12px;">Failed: ' + e.message + '</div>';
+    }
+  }
+
+  // ── EXPORT-from-podcast modal wiring ───────────────────────────
+  // ── Share-link modal: shows the minted public URL with Copy / Email /
+  //    SMS quick actions. Plain prompt() truncates long URLs and doesn't
+  //    let the user copy cleanly on every browser, so we render a small
+  //    modal with a read-only input + buttons.
+  function _showShareLinkModal(url, epTitle, ttlHours) {
+    const days = Math.round((ttlHours || 720) / 24);
+    let modal = document.getElementById('podcast-share-modal');
+    if (modal) modal.remove();
+    modal = document.createElement('div');
+    modal.id = 'podcast-share-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(10,22,40,0.65);z-index:9999;display:flex;align-items:center;justify-content:center;';
+    const esc = function(s){ return (s||'').replace(/[<>&"']/g, function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];}); };
+    const mailSubj = encodeURIComponent('DGA Capital · ' + (epTitle || 'Podcast Episode'));
+    const mailBody = encodeURIComponent(
+      'Sharing this episode with you:\n\n' + (epTitle || '') + '\n\n' + url +
+      '\n\nLink expires in ' + days + ' days.\n\n' +
+      'For informational purposes only. Not investment advice.'
+    );
+    const smsBody = encodeURIComponent('DGA HiTech Podcast: ' + (epTitle || '') + ' — ' + url);
+    modal.innerHTML =
+      '<div style="background:#fff;border-radius:10px;max-width:560px;width:92%;padding:24px;box-shadow:0 18px 48px rgba(0,0,0,0.3);">' +
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">' +
+          '<span style="font-size:18px;">🔗</span>' +
+          '<h3 style="margin:0;font-size:15px;color:var(--text-primary);">Public share link</h3>' +
+          '<span style="flex:1;"></span>' +
+          '<button id="share-modal-close" type="button" style="background:none;border:0;font-size:18px;color:#94a3b8;cursor:pointer;">✕</button>' +
+        '</div>' +
+        '<div style="font-size:11.5px;color:#64748b;margin-bottom:10px;line-height:1.55;">' +
+          'Anyone with this link can stream <strong>' + esc(epTitle || 'this episode') + '</strong> ' +
+          'for the next <strong>' + days + ' days</strong>. The compliance disclaimer is in the audio itself.' +
+        '</div>' +
+        '<input id="share-modal-url" readonly value="' + esc(url) + '" ' +
+          'style="width:100%;height:34px;border:1px solid #cbd5e1;border-radius:6px;padding:0 11px;font-size:11.5px;font-family:\'SF Mono\',monospace;color:#1e293b;background:#f8fafc;margin-bottom:14px;">' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+          '<button id="share-modal-copy" type="button" style="background:#0A1628;border:1px solid #0A1628;color:#fff;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">📋 Copy link</button>' +
+          '<a href="mailto:?subject=' + mailSubj + '&body=' + mailBody + '" style="background:#fff;border:1px solid #cbd5e1;color:#0A1628;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;text-decoration:none;">📧 Email…</a>' +
+          '<a href="sms:?&body=' + smsBody + '" style="background:#fff;border:1px solid #cbd5e1;color:#0A1628;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;text-decoration:none;">💬 SMS…</a>' +
+          '<a href="' + url + '" target="_blank" rel="noopener" style="background:#fff;border:1px solid #cbd5e1;color:#475569;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;text-decoration:none;margin-left:auto;">▶ Test link</a>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    const close = function(){ modal.remove(); };
+    modal.addEventListener('click', function(e){ if (e.target === modal) close(); });
+    document.getElementById('share-modal-close').addEventListener('click', close);
+    document.getElementById('share-modal-copy').addEventListener('click', async function() {
+      const btn = this;
+      try {
+        await navigator.clipboard.writeText(url);
+        btn.textContent = '✓ Copied!';
+        setTimeout(function(){ btn.textContent = '📋 Copy link'; }, 1500);
+      } catch (e) {
+        // Fallback: select the input
+        const inp = document.getElementById('share-modal-url');
+        if (inp) { inp.select(); document.execCommand('copy'); }
+      }
+    });
+    // Auto-select the URL for easy manual copy
+    setTimeout(function(){ document.getElementById('share-modal-url')?.select(); }, 50);
+  }
+
+  window._openMemoExportModal = async function(jobKey, episodeTitle) {
+    window._currentExportJobKey = jobKey;
+    await _loadFundsForMemoModal();
+    _populateFundSelect(document.getElementById('memo-export-fund'), false);
+    document.getElementById('memo-export-memo').value = '';
+    document.getElementById('memo-export-source').textContent = 'Source: ' + (episodeTitle || jobKey);
+    document.getElementById('memo-export-modal').style.display = 'flex';
+  };
+  function _closeMemoExportModal() {
+    document.getElementById('memo-export-modal').style.display = 'none';
+    window._currentExportJobKey = null;
+  }
+  document.getElementById('memo-export-close')?.addEventListener('click', _closeMemoExportModal);
+  document.getElementById('memo-export-cancel')?.addEventListener('click', _closeMemoExportModal);
+  async function _doMemoExport(thenEmail) {
+    const jobKey = window._currentExportJobKey;
+    if (!jobKey) return;
+    const fundId = document.getElementById('memo-export-fund').value || null;
+    const memo   = document.getElementById('memo-export-memo').value || '';
+    const saveBtn  = document.getElementById('memo-export-save');
+    const emailBtn = document.getElementById('memo-export-save-email');
+    saveBtn.disabled = emailBtn.disabled = true;
+    saveBtn.textContent = '⏳ Rendering PDF…';
+    try {
+      const r = await window.dgaFetch('/api/memos/from-podcast/' + encodeURIComponent(jobKey), {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ assigned_fund_id: fundId, gp_memo: memo }),
+      });
+      let j = null; try { j = await r.json(); } catch(_) { j = null; }
+      console.log('[memos] POST from-podcast →', { status: r.status, ok: r.ok, body: j });
+      if (!r.ok || !j || !j.ok) {
+        const msg = (j && (j.detail || j.error)) || ('HTTP ' + r.status);
+        throw new Error(msg);
+      }
+      _closeMemoExportModal();
+      if (thenEmail) {
+        _openMemoEmailModal(j.memo_id, fundId, j.episode_title);
+      } else {
+        alert('✓ Memo saved. Find it under the 📄 Memos tab.');
+      }
+    } catch (e) {
+      alert('Export failed: ' + e.message);
+    } finally {
+      saveBtn.disabled = emailBtn.disabled = false;
+      saveBtn.textContent = '💾 Save to Memos';
+    }
+  }
+  document.getElementById('memo-export-save')?.addEventListener('click', () => _doMemoExport(false));
+  document.getElementById('memo-export-save-email')?.addEventListener('click', () => _doMemoExport(true));
+
+  // ── EMAIL modal wiring ─────────────────────────────────────────
+  function _openMemoEmailModal(memoId, fundId, title) {
+    window._currentEmailMemo = { id: memoId, fund_id: fundId, title: title };
+    document.getElementById('memo-email-title').textContent = title || 'Memo';
+    document.getElementById('memo-email-subject').value = 'DGA Capital · ' + (title || 'Memo');
+    document.getElementById('memo-email-to').value = '';
+    document.querySelector('input[name="memo-email-mode"][value="ad_hoc"]').checked = true;
+    document.getElementById('memo-email-ad-hoc-row').style.display = '';
+    document.getElementById('memo-email-lp-row').style.display = 'none';
+    // Populate fund name display + lock out LP mode if no fund assigned
+    const fundObj = (window._memoFunds || []).find(f => f.id === fundId);
+    document.getElementById('memo-email-fund-name').textContent =
+      fundObj ? (fundObj.legal_name || fundObj.name || fundId) : '(no fund assigned)';
+    const lpLbl = document.getElementById('memo-email-mode-lp-list-lbl');
+    const lpRadio = lpLbl.querySelector('input');
+    if (!fundId) {
+      lpRadio.disabled = true; lpLbl.style.opacity = '0.4';
+      lpLbl.title = 'Assign this memo to a fund first to use this mode.';
+    } else {
+      lpRadio.disabled = false; lpLbl.style.opacity = '1';
+      lpLbl.title = '';
+    }
+    document.getElementById('memo-email-modal').style.display = 'flex';
+  }
+  function _closeMemoEmailModal() {
+    document.getElementById('memo-email-modal').style.display = 'none';
+    window._currentEmailMemo = null;
+  }
+  document.getElementById('memo-email-close')?.addEventListener('click', _closeMemoEmailModal);
+  document.getElementById('memo-email-cancel')?.addEventListener('click', _closeMemoEmailModal);
+  document.querySelectorAll('input[name="memo-email-mode"]').forEach(r => {
+    r.addEventListener('change', () => {
+      const isLp = r.checked && r.value === 'lp_list';
+      document.getElementById('memo-email-ad-hoc-row').style.display = isLp ? 'none' : '';
+      document.getElementById('memo-email-lp-row').style.display = isLp ? '' : 'none';
+    });
+  });
+  document.getElementById('memo-email-send')?.addEventListener('click', async () => {
+    const m = window._currentEmailMemo;
+    if (!m) return;
+    const mode    = document.querySelector('input[name="memo-email-mode"]:checked').value;
+    const toAddr  = document.getElementById('memo-email-to').value.trim();
+    const subject = document.getElementById('memo-email-subject').value.trim();
+    if (mode === 'ad_hoc' && !toAddr) { alert('Enter a recipient email.'); return; }
+    const sendBtn = document.getElementById('memo-email-send');
+    sendBtn.disabled = true; sendBtn.textContent = '⏳ Sending…';
+    try {
+      const r = await window.dgaFetch('/api/memos/' + m.id + '/email', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ mode, to_addr: toAddr, subject }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error((j.results||[]).map(x=>x.error).filter(Boolean).join('; ') || j.detail || 'Send failed');
+      alert(`✓ Sent to ${j.sent}/${j.attempted} recipient${j.attempted===1?'':'s'}.`);
+      _closeMemoEmailModal();
+      _renderMemosList();
+    } catch (e) {
+      alert('Email failed: ' + e.message);
+    } finally {
+      sendBtn.disabled = false; sendBtn.textContent = '📨 Send';
+    }
+  });
+
+  // ── 🩺 Data Health card (home tab) ───────────────────────────
+  // One unauthenticated /api/health/data fetch: SnapTrade + market-quote
+  // freshness and the three scheduler last-runs. Green <24h & ok, amber
+  // stale, red failed. Refreshes every 10 min (visibility-gated).
+  function _dhAgo(sec) {
+    if (sec == null || isNaN(sec)) return 'never';
+    const s = Math.max(0, Math.round(sec));
+    if (s < 3600) return Math.max(1, Math.round(s / 60)) + 'm ago';
+    if (s < 172800) return (s / 3600).toFixed(s < 36000 ? 1 : 0).replace(/\.0$/, '') + 'h ago';
+    return Math.round(s / 86400) + 'd ago';
+  }
+  function _dhRow(label, state, text, detail) {
+    const col = state === 'ok' ? 'var(--green,#16a34a)'
+              : state === 'bad' ? 'var(--red,#dc2626)'
+              : state === 'off' ? 'var(--dim,#94a3b8)'
+              : 'var(--amber,#d97706)';
+    return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--panel-edge,#f1f5f9);"'
+      + (detail ? ' title="' + _cfEsc(detail) + '"' : '') + '>'
+      + '<span style="width:8px;height:8px;border-radius:50%;background:' + col + ';flex-shrink:0;display:inline-block;"></span>'
+      + '<span style="flex:1;color:var(--text-primary);font-weight:600;">' + _cfEsc(label) + '</span>'
+      + '<span style="color:var(--text-secondary);font-variant-numeric:tabular-nums;">' + _cfEsc(text) + '</span>'
+      + '</div>';
+  }
+  async function loadDataHealth() {
+    const body = document.getElementById('dh-body');
+    const badge = document.getElementById('dh-badge');
+    if (!body) return;
+    try {
+      const r = await window.dgaFetch('/api/health/data');
+      if (!r.ok) throw new Error('health ' + r.status);
+      const d = await r.json();
+      const DAY = 24 * 3600;
+      const rows = [];
+      const ageState = (s) => (s == null ? 'warn' : (s < DAY ? 'ok' : 'warn'));
+      rows.push(_dhRow('SnapTrade holdings', ageState(d.snaptrade_age_s), _dhAgo(d.snaptrade_age_s)));
+      rows.push(_dhRow('Market quotes', ageState(d.market_quotes_age_s), _dhAgo(d.market_quotes_age_s)));
+      const schedLabels = { daily_brief: 'Daily Pulse', market_pulse: 'Market Pulse scan', snaptrade_sync: 'SnapTrade sync' };
+      const scheds = d.schedulers || {};
+      Object.keys(schedLabels).forEach(function (job) {
+        const s = scheds[job] || {};
+        const ts = s.last_ts ? _parseServerDate(s.last_ts) : null;
+        const ageS = (ts && !isNaN(ts)) ? (Date.now() - ts.getTime()) / 1000 : null;
+        let state, text;
+        if (s.enabled === false) {
+          state = 'off';
+          text = 'off' + (ageS != null ? ' · last ' + _dhAgo(ageS) : '');
+        } else if (s.ok === false) {
+          state = 'bad';
+          text = 'failed · ' + _dhAgo(ageS);
+        } else if (s.ok === null && ageS != null && ageS < 1800) {
+          state = 'warn';
+          text = 'running · started ' + _dhAgo(ageS);
+        } else {
+          state = (s.ok && ageS != null && ageS < DAY) ? 'ok' : 'warn';
+          text = _dhAgo(ageS);
+        }
+        rows.push(_dhRow(schedLabels[job], state, text, s.detail || ''));
+      });
+      body.innerHTML = rows.join('');
+      if (badge) {
+        const degraded = d.status !== 'ok';
+        badge.textContent = degraded ? 'DEGRADED' : 'OK';
+        badge.style.background = degraded ? '#fef3c7' : '#dcfce7';
+        badge.style.color = degraded ? '#92400e' : '#166534';
+        badge.title = (d.issues || []).join(' · ');
+      }
+    } catch (e) {
+      if (badge) { badge.textContent = '?'; badge.style.background = '#fee2e2'; badge.style.color = '#b91c1c'; }
+      body.innerHTML = '<span style="color:var(--text-tertiary);">Could not reach /api/health/data.</span>';
+    }
+  }
+  loadDataHealth();
+  setInterval(function () { if (document.hidden) return; loadDataHealth(); }, 10 * 60 * 1000);
+
+  // ── Debug-only tooling: hidden unless ?debug=1 ────────────────
+  if (!DEBUG_UI) {
+    ['snaptrade-ytdtest', 'snaptrade-debug', 'model-check-row'].forEach(function (id) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+  }
+
+  // ── Init ─────────────────────────────────────────────────────
+  loadIndices();
+  loadWatchlist();
+  loadReports();
+  loadTrendingTickers();
+  // Desk (research shell) is the default landing tab
+  initLiveMarkets();
+  showTab('research');
+
+  // ── Archived Reports (Settings tab) ───────────────────────────────────────
+  async function loadArchivedReports() {
+    const list  = document.getElementById('archived-list');
+    const badge = document.getElementById('archived-count');
+    if (!list) return;
+    try {
+      const r = await window.dgaFetch('/api/reports/archived');
+      if (!r.ok) throw new Error(r.status);
+      const rows = await r.json();
+      if (badge) badge.textContent = rows.length || '0';
+      if (!rows.length) {
+        list.innerHTML = '<span style="color:var(--dim);">No archived reports. Tickers you remove from Saved Reports appear here.</span>';
+        return;
+      }
+      list.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:8px;">' +
+        rows.map(r => `
+          <span style="display:inline-flex;align-items:center;gap:5px;background:var(--navy-mid);
+            border-radius:5px;padding:4px 10px;font-size:11px;font-weight:700;color:var(--mid);">
+            ${r.ticker}
+            ${r.rating ? `<span style="font-size:9px;color:var(--blue);">${r.rating}</span>` : ''}
+            <button data-restore="${r.ticker}" title="Restore ${r.ticker}"
+              style="background:none;border:none;cursor:pointer;color:var(--blue);font-size:11px;padding:0 2px;">↩</button>
+          </span>`).join('') +
+        '</div>';
+      list.querySelectorAll('[data-restore]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const tk = btn.getAttribute('data-restore');
+          await window.dgaFetch('/api/reports/' + encodeURIComponent(tk) + '/restore', { method: 'POST' });
+          loadArchivedReports();
+          loadReports();
+        });
+      });
+    } catch(e) {
+      if (list) list.textContent = 'Could not load archived reports.';
+    }
+  }
+
+  document.getElementById('restore-all-btn')?.addEventListener('click', async () => {
+    if (!(await dgaConfirm({ title: 'Restore all archived reports', message: 'Restore all archived reports to Saved Reports?', confirmLabel: 'Restore all', danger: false }))) return;
+    await window.dgaFetch('/api/reports/restore-all', { method: 'POST' });
+    loadArchivedReports();
+    loadReports();
+  });
+
+  // ── Railway cost & memory tracker (Settings) ──────────────────────────────
+  function _rwDur(s){
+    if(!s&&s!==0) return '—';
+    const d=Math.floor(s/86400), h=Math.floor((s%86400)/3600), m=Math.floor((s%3600)/60);
+    return d?`${d}d ${h}h`:(h?`${h}h ${m}m`:`${m}m`);
+  }
+  async function loadRailwayUsage(){
+    const body = document.getElementById('rw-body');
+    const badge= document.getElementById('rw-badge');
+    if(!body) return;
+    try{
+      const r = await window.dgaFetch('/api/admin/railway-usage');
+      if(!r.ok) throw new Error(r.status);
+      const d = await r.json();
+      const c=d.cost||{}, m=d.metrics||{}, mh=d.memory_hygiene||{}, env=d.env||{}, mem=d.memory||{}, act=d.activity||{};
+      if(badge){ badge.textContent = d.on_railway?'LIVE':'LOCAL';
+        badge.style.background = d.on_railway?'#dcfce7':'#f1f5f9';
+        badge.style.color = d.on_railway?'#166534':'#64748b'; }
+      const memPct = m.mem_pct!=null ? Math.min(100, m.mem_pct) : null;
+      const barColor = memPct==null?'#cbd5e1':(memPct>85?'#dc2626':memPct>65?'#d97706':'#2563eb');
+      const card=(label,val,sub)=>`<div style="flex:1;min-width:120px;background:var(--bg-subtle,#f8fafc);border:1px solid var(--panel-edge,#e2e8f0);border-radius:8px;padding:11px 13px;">
+          <div style="font-size:9.5px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;color:var(--text-tertiary);">${label}</div>
+          <div style="font-size:21px;font-weight:800;color:var(--text-primary);margin-top:3px;line-height:1;">${val}</div>
+          ${sub?`<div style="font-size:10px;color:var(--text-secondary);margin-top:4px;">${sub}</div>`:''}
+        </div>`;
+      const row=(k,v,strong)=>`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--panel-edge,#f1f5f9);${strong?'font-weight:800;color:var(--text-primary);':'color:var(--text-secondary);'}">
+          <span>${k}</span><span style="font-variant-numeric:tabular-nums;">${v}</span></div>`;
+      body.innerHTML = `
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+          ${card('Projected this month', fmtUSDFull(c.projected_month), `≈ ${fmtUSDFull(c.per_day)}/day`)}
+          ${card('Month-to-date', fmtUSDFull(c.month_to_date), `${c.pct_elapsed!=null?c.pct_elapsed+'% of month · day '+c.day_of_month+'/'+c.days_in_month:''}`)}
+          ${card('Remaining', fmtUSDFull(c.remaining_month), `${c.days_in_month&&c.day_of_month?(c.days_in_month-c.day_of_month)+' days left':''}`)}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;">
+          <div>
+            <div style="font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--text-tertiary);margin-bottom:7px;">Cost breakdown · est.</div>
+            ${row('Memory · '+(mem.billed_gb!=null?mem.billed_gb.toFixed(2)+' GB avg × $'+(d.prices?.mem_gb_month||10):'—'), fmtUSDFull(c.memory_month))}
+            ${row('CPU · '+(m.avg_vcpu!=null?m.avg_vcpu.toFixed(3)+' vCPU × $'+(d.prices?.vcpu_month||20):'—'), fmtUSDFull(c.cpu_month))}
+            ${(c.base_month? row('Base plan', fmtUSDFull(c.base_month)) : '')}
+            ${(c.included_credit? row('Included credit', '−'+fmtUSDFull(c.included_credit)) : '')}
+            ${row('Projected total / month', fmtUSDFull(c.projected_month), true)}
+          </div>
+          <div>
+            <div style="font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--text-tertiary);margin-bottom:7px;">Live container</div>
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary);margin-bottom:3px;">
+              <span>Memory (now)</span><span style="font-variant-numeric:tabular-nums;">${m.mem_current_gb!=null?m.mem_current_gb.toFixed(2)+' GB':'—'}${m.mem_limit_gb?' / '+m.mem_limit_gb+' GB':''}${memPct!=null?'  ('+memPct+'%)':''}</span>
+            </div>
+            <div style="height:8px;background:#eef2f7;border-radius:5px;overflow:hidden;margin-bottom:6px;">
+              <div style="height:100%;width:${memPct||0}%;background:${barColor};border-radius:5px;transition:width .4s;"></div>
+            </div>
+            ${row('Memory · avg / peak', (mem.avg_gb!=null?mem.avg_gb.toFixed(2):'—')+' / '+(mem.peak_gb!=null?mem.peak_gb.toFixed(2):'—')+' GB')}
+            ${row('Avg vCPU (since boot)', m.avg_vcpu!=null?m.avg_vcpu.toFixed(3):'—')}
+            ${row('Process RSS', m.rss_gb!=null?m.rss_gb.toFixed(2)+' GB':'—')}
+            ${row('Uptime', _rwDur(m.uptime_seconds))}
+            ${env.service?row('Service / region', (env.service||'—')+(env.region?' · '+env.region:'')):''}
+          </div>
+        </div>
+        <div style="margin-top:14px;padding:10px 12px;background:#f0f9ff;border:1px solid #e0f2fe;border-radius:7px;font-size:10.5px;color:var(--text-secondary);line-height:1.55;">
+          <strong style="color:#0369a1;">Memory hygiene:</strong>
+          ${mh.job_entries||0} active job entries + ${mh.cache_entries||0} cache entries in RAM.
+          Janitor caps job stores to ${mh.job_cap} most-recent + reclaims heap to the OS every ${Math.round((mh.sweep_interval_s||600)/60)} min
+          ${mh.janitor&&mh.janitor.runs?`· ${mh.janitor.runs} sweeps, ${mh.janitor.evicted} entries trimmed${mh.janitor.freed_mb_last!=null?', '+mh.janitor.freed_mb_last+' MB reclaimed last sweep':''}`:'· first sweep pending'}.
+          <br><strong style="color:${act.active?'#166534':'#92400e'};">${act.active?'● Active':'○ Idle'}</strong> —
+          ${act.active
+            ? 'background market sync running while in use.'
+            : 'background market sync paused (near-zero idle); resumes within ~1 min of use.'}
+          ${act.last_activity_ago_s!=null?`Last request ${act.last_activity_ago_s<90?act.last_activity_ago_s+'s':Math.round(act.last_activity_ago_s/60)+'m'} ago.`:''}
+        </div>`;
+    }catch(e){
+      body.innerHTML = '<span style="color:var(--text-tertiary);">Could not load Railway usage'+(e&&e.message?' ('+e.message+')':'')+'.</span>';
+    }
+  }
+  document.getElementById('rw-refresh')?.addEventListener('click', loadRailwayUsage);
+
+  // ── Linked Accounts · Plaid (Fidelity auto-import) ────────────────────────
+  const _PLAID_LT_KEY = 'dga_plaid_link_token';
+  function _loadPlaidScript(){
+    return new Promise((resolve, reject) => {
+      if (window.Plaid) return resolve();
+      const s = document.createElement('script');
+      s.src = 'https://cdn.plaid.com/link/v2/stable/link-initialize.js';
+      s.onload = () => resolve(); s.onerror = () => reject(new Error('Plaid Link failed to load'));
+      document.head.appendChild(s);
+    });
+  }
+  async function _plaidExchange(public_token){
+    const ed = await (await window.dgaFetch('/api/plaid/exchange', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ public_token }) })).json();
+    if (!ed.ok) alert(ed.detail || 'Link exchange failed.');
+    localStorage.removeItem(_PLAID_LT_KEY);
+    loadPlaid();
+  }
+  // OAuth institutions (e.g. Fidelity) redirect back here with ?oauth_state_id=…
+  // We stored the link_token before opening Link; resume it to finish.
+  async function _plaidOAuthResume(){
+    if (!/oauth_state_id=/.test(window.location.search)) return;
+    const lt = localStorage.getItem(_PLAID_LT_KEY);
+    if (!lt) return;
+    try {
+      await _loadPlaidScript();
+      window.Plaid.create({
+        token: lt,
+        receivedRedirectUri: window.location.href,
+        onSuccess: async (public_token) => { await _plaidExchange(public_token); cleanUrl(); },
+        onExit: () => { localStorage.removeItem(_PLAID_LT_KEY); cleanUrl(); },
+      }).open();
+    } catch (e) { /* leave the user on the page */ }
+    function cleanUrl(){ try { window.history.replaceState({}, '', window.location.pathname); } catch (_) {} }
+  }
+  async function loadPlaid(){
+    const body = document.getElementById('plaid-body');
+    const badge = document.getElementById('plaid-badge');
+    const connectBtn = document.getElementById('plaid-connect');
+    if (!body) return;
+    try {
+      const st = await (await window.dgaFetch('/api/plaid/status')).json();
+      if (badge) {
+        const ok = st.configured && st.encryption_ready;
+        badge.textContent = !st.configured ? 'NOT CONFIGURED' : (st.env || 'sandbox').toUpperCase();
+        badge.style.background = ok ? '#dcfce7' : '#fef3c7';
+        badge.style.color = ok ? '#166534' : '#92400e';
+      }
+      if (connectBtn) connectBtn.disabled = !(st.configured && st.encryption_ready);
+      if (!st.configured) { body.innerHTML = '<span style="color:#92400e;">Plaid isn’t configured. Set PLAID_CLIENT_ID / PLAID_SECRET / PLAID_ENV on Railway.</span>'; return; }
+      if (!st.encryption_ready) { body.innerHTML = '<span style="color:#92400e;">DATA_ENCRYPTION_KEY not set — linking disabled until at-rest encryption is on.</span>'; return; }
+      const id = await (await window.dgaFetch('/api/plaid/items')).json();
+      const items = id.items || [];
+      const mAccts = id.managed_accounts || [];
+      if (!items.length) {
+        body.innerHTML = '<span style="color:var(--text-secondary);">No accounts linked yet. Click <strong>+ Connect Fidelity</strong> to link your brokerage.</span>';
+        return;
+      }
+      // Normalized positions (read-only; never touches the manual CSV path).
+      let posByItem = {};
+      try {
+        const hd = await (await window.dgaFetch('/api/plaid/holdings')).json();
+        (hd.items || []).forEach(h => { posByItem[h.item_id] = h; });
+      } catch (e) {}
+      const acctOptions = (sel) => ['<option value="">— Not assigned —</option>']
+        .concat(mAccts.map(m => `<option value="${_gfEsc(m.fund_id)}"${m.fund_id === sel ? ' selected' : ''}>${_gfEsc((m.short_name || m.name) + (m.fund_type === 'lp_fund' ? ' (Fund)' : ''))}</option>`)).join('');
+      body.innerHTML = items.map(it => {
+        const accts = (it.accounts || []).map(a =>
+          `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:11.5px;">
+             <span style="color:var(--text-secondary);">${_gfEsc(a.name || 'Account')} <span style="color:var(--text-tertiary);">••${_gfEsc(a.mask || '')}</span></span>
+             <span style="font-weight:700;color:var(--text-primary);">${fmtUSDFull(a.value, 0)}</span></div>`).join('');
+        const h = posByItem[it.item_id];
+        const positions = (h && h.positions || []);
+        const posRows = positions.map(p =>
+          `<tr style="font-size:11px;">
+             <td style="padding:2px 6px 2px 0;font-weight:700;color:var(--text-primary);">${_gfEsc(p.symbol || '—')}</td>
+             <td style="padding:2px 6px;color:var(--text-tertiary);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_gfEsc(p.name || '')}</td>
+             <td style="padding:2px 6px;text-align:right;color:var(--text-secondary);">${p.quantity != null ? Number(p.quantity).toLocaleString(undefined,{maximumFractionDigits:4}) : '—'}</td>
+             <td style="padding:2px 0 2px 6px;text-align:right;font-weight:700;color:var(--text-primary);">${fmtUSDFull(p.market_value, 0)}</td>
+           </tr>`).join('');
+        const posBlock = positions.length
+          ? `<div style="margin-top:8px;border-top:1px solid var(--panel-edge,#f1f5f9);padding-top:8px;">
+               <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--text-secondary);margin-bottom:4px;">
+                 <span style="font-weight:700;text-transform:uppercase;letter-spacing:.5px;">${positions.length} Holding${positions.length===1?'':'s'}</span>
+                 <span>Total <strong style="color:var(--text-primary);">${fmtUSDFull(h.total_value, 0)}</strong></span>
+               </div>
+               <div style="max-height:220px;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;">${posRows}</table></div>
+             </div>`
+          : '';
+        return `<div style="border:1px solid var(--panel-edge,#e2e8f0);border-radius:8px;padding:12px;margin-bottom:10px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <span style="font-weight:800;color:var(--text-primary);font-size:13px;">${_gfEsc(it.institution || 'Fidelity')}</span>
+            <span style="flex:1;"></span>
+            <button class="tab-btn" data-plaid-sync="${_gfEsc(it.item_id)}">↻ Sync</button>
+            <button class="tab-btn" data-plaid-remove="${_gfEsc(it.item_id)}" style="color:#dc2626;">Remove</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:var(--text-secondary);">
+            <span>Assign to:</span>
+            <select data-plaid-assign="${_gfEsc(it.item_id)}" style="font-size:11px;padding:3px 6px;border:1px solid var(--panel-edge,#e2e8f0);border-radius:6px;background:var(--surface,#fff);">${acctOptions(it.fund_id)}</select>
+          </div>
+          ${accts}${posBlock}
+          <div style="font-size:10px;color:var(--text-tertiary);margin-top:6px;">Last synced ${it.last_synced_at ? _gfEsc(String(it.last_synced_at).slice(0,16).replace('T',' ')) : '—'} · holdings shown read-only; manual CSV uploads unaffected</div>
+        </div>`;
+      }).join('');
+      body.querySelectorAll('[data-plaid-sync]').forEach(b => b.addEventListener('click', () => dgaPlaidSync(b.getAttribute('data-plaid-sync'))));
+      body.querySelectorAll('[data-plaid-remove]').forEach(b => b.addEventListener('click', () => dgaPlaidRemove(b.getAttribute('data-plaid-remove'))));
+      body.querySelectorAll('[data-plaid-assign]').forEach(s => s.addEventListener('change', () => dgaPlaidAssign(s.getAttribute('data-plaid-assign'), s.value)));
+    } catch (e) { body.innerHTML = '<span style="color:var(--text-tertiary);">Could not load linked accounts.</span>'; }
+  }
+  async function dgaPlaidAssign(itemId, fundId){
+    try {
+      const r = await window.dgaFetch('/api/plaid/assign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id: itemId, fund_id: fundId || null }) });
+      const d = await r.json();
+      if (!r.ok || !d.ok) alert('Assign failed: ' + (d.detail || r.status));
+    } catch (e) { alert('Assign failed: ' + (e.message || e)); }
+  }
+
+  // ── Linked Accounts · SnapTrade (Fidelity holdings) ───────────────────────
+  async function loadSnapTrade(){
+    const body = document.getElementById('snaptrade-body');
+    const badge = document.getElementById('snaptrade-badge');
+    const connectBtn = document.getElementById('snaptrade-connect');
+    const syncBtn = document.getElementById('snaptrade-sync');
+    if (!body) return;
+    try {
+      const st = await (await window.dgaFetch('/api/snaptrade/status')).json();
+      const ok = st.configured && st.encryption_ready;
+      if (badge) {
+        badge.textContent = !st.configured ? 'NOT CONFIGURED' : (st.connected_accounts ? 'CONNECTED' : 'READY');
+        badge.style.background = ok ? '#dcfce7' : '#fef3c7';
+        badge.style.color = ok ? '#166534' : '#92400e';
+      }
+      if (connectBtn) connectBtn.disabled = !ok;
+      if (syncBtn) syncBtn.disabled = !ok;
+      if (!st.configured) { body.innerHTML = '<span style="color:#92400e;">SnapTrade isn’t configured. Set SNAPTRADE_CLIENT_ID / SNAPTRADE_CONSUMER_KEY on Railway.</span>'; return; }
+      if (!st.encryption_ready) { body.innerHTML = '<span style="color:#92400e;">DATA_ENCRYPTION_KEY not set — linking disabled until at-rest encryption is on.</span>'; return; }
+      const ad = await (await window.dgaFetch('/api/snaptrade/accounts')).json();
+      const accounts = ad.accounts || [];
+      const mAccts = ad.managed_accounts || [];
+      if (!accounts.length) { body.innerHTML = '<span style="color:var(--text-secondary);">No accounts linked yet. Click <strong>+ Connect Fidelity</strong>, finish in the new tab, then <strong>↻ Sync</strong>.</span>'; return; }
+      const acctOptions = (sel) => ['<option value="">— Not assigned —</option>']
+        .concat(mAccts.map(m => `<option value="${_gfEsc(m.fund_id)}"${m.fund_id===sel?' selected':''}>${_gfEsc((m.short_name||m.name)+(m.fund_type==='lp_fund'?' (Fund)':''))}</option>`)).join('');
+      const visibleAccts = accounts.filter(a => !a.hidden);
+      const hiddenAccts  = accounts.filter(a => a.hidden);
+      // Freshness banner — most recent sync across accounts.
+      let _maxSync = null;
+      accounts.forEach(a => { if (a.last_synced_at) { const t = Date.parse(a.last_synced_at); if (!isNaN(t) && (_maxSync === null || t > _maxSync)) _maxSync = t; } });
+      let freshHtml = '';
+      if (_maxSync !== null) {
+        const mins = Math.max(0, Math.round((Date.now() - _maxSync) / 60000));
+        const ago = mins < 60 ? (mins + 'm ago') : (mins < 1440 ? (Math.floor(mins/60) + 'h ' + (mins%60) + 'm ago') : (Math.floor(mins/1440) + 'd ago'));
+        const col = mins < 120 ? '#16a34a' : (mins < 1440 ? '#d97706' : '#dc2626');
+        const when = new Date(_maxSync).toLocaleString(undefined, {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+        freshHtml = '<div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-secondary);margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--panel-edge,#f1f5f9);">'
+          + '<span style="width:8px;height:8px;border-radius:50%;background:' + col + ';display:inline-block;"></span>'
+          + '<span>Holdings last synced <strong style="color:' + col + ';">' + ago + '</strong> <span style="color:var(--text-tertiary);">(' + _gfEsc(when) + ')</span></span>'
+          + (mins >= 1440 ? '<span style="color:#dc2626;">· stale — click ↻ Sync</span>' : '') + '</div>';
+      }
+      body.innerHTML = freshHtml + visibleAccts.map(a => {
+        const positions = a.positions || [];
+        const posRows = positions.map(p =>
+          `<tr style="font-size:11px;">
+             <td style="padding:2px 6px 2px 0;font-weight:700;color:var(--text-primary);">${_gfEsc(p.symbol||'—')}</td>
+             <td style="padding:2px 6px;color:var(--text-tertiary);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_gfEsc(p.name||'')}</td>
+             <td style="padding:2px 6px;text-align:right;color:var(--text-secondary);">${p.quantity!=null?Number(p.quantity).toLocaleString(undefined,{maximumFractionDigits:4}):'—'}</td>
+             <td style="padding:2px 0 2px 6px;text-align:right;font-weight:700;color:var(--text-primary);">${fmtUSDFull(p.market_value, 0)}</td>
+           </tr>`).join('');
+        const posBlock = positions.length
+          ? `<div style="margin-top:8px;border-top:1px solid var(--panel-edge,#f1f5f9);padding-top:8px;">
+               <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--text-secondary);margin-bottom:4px;">
+                 <span style="font-weight:700;text-transform:uppercase;letter-spacing:.5px;">${positions.length} Holding${positions.length===1?'':'s'}</span>
+                 <span>Total <strong style="color:var(--text-primary);">${fmtUSDFull(a.total_value, 0)}</strong></span>
+               </div>
+               <div style="max-height:220px;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;">${posRows}</table></div>
+             </div>`
+          : '<div style="font-size:11px;color:var(--text-tertiary);margin-top:6px;">No positions returned yet — click ↻ Sync once the connection finishes.</div>';
+        return `<div style="border:1px solid var(--panel-edge,#e2e8f0);border-radius:8px;padding:12px;margin-bottom:10px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <span style="font-weight:800;color:var(--text-primary);font-size:13px;">${_gfEsc(a.account_name||a.brokerage||'Account')} <span style="color:var(--text-tertiary);font-weight:600;">••${_gfEsc(a.account_mask||'')}</span></span>
+            <span style="flex:1;"></span>
+            <button class="tab-btn" data-snap-hide="${_gfEsc(a.account_id)}" style="color:var(--text-secondary);">Ignore</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:var(--text-secondary);">
+            <span>Assign to:</span>
+            <select data-snap-assign="${_gfEsc(a.account_id)}" style="font-size:11px;padding:3px 6px;border:1px solid var(--panel-edge,#e2e8f0);border-radius:6px;background:var(--surface,#fff);">${acctOptions(a.fund_id)}</select>
+          </div>
+          ${posBlock}
+          <div style="font-size:10px;color:var(--text-tertiary);margin-top:6px;">${_gfEsc(a.brokerage||'')} · Last synced ${a.last_synced_at?_gfEsc(String(a.last_synced_at).slice(0,16).replace('T',' ')):'—'} · read-only auto-import (positions + activity + balances); manual CSV uploads stay as backup</div>
+        </div>`;
+      }).join('');
+      if (!visibleAccts.length) body.innerHTML = freshHtml + '<div style="font-size:11px;color:var(--text-tertiary);">All linked accounts are ignored. Restore one below.</div>';
+      if (hiddenAccts.length) {
+        body.innerHTML += `<div style="margin-top:6px;font-size:11px;color:var(--text-tertiary);">
+          <div style="font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">${hiddenAccts.length} Ignored</div>
+          ${hiddenAccts.map(a => `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;">
+             <span style="flex:1;">${_gfEsc(a.account_name||a.brokerage||'Account')} <span style="color:var(--text-quaternary,#cbd5e1);">••${_gfEsc(a.account_mask||'')}</span></span>
+             <button class="tab-btn" data-snap-unhide="${_gfEsc(a.account_id)}" style="color:var(--text-primary);">Restore</button>
+           </div>`).join('')}
+        </div>`;
+      }
+      // One "Remove connection" button per distinct brokerage connection.
+      // (A SnapTrade connection holds MANY accounts; removing it drops them ALL.)
+      const conns = {};
+      accounts.forEach(a => { if (a.connection_id) { (conns[a.connection_id] = conns[a.connection_id] || {brokerage:a.brokerage, n:0}).n++; } });
+      const connIds = Object.keys(conns);
+      if (connIds.length) {
+        body.innerHTML += `<div style="margin-top:10px;border-top:1px solid var(--panel-edge,#f1f5f9);padding-top:8px;">
+          ${connIds.map(cid => `<button class="tab-btn" data-snap-remove="${_gfEsc(cid)}" data-snap-remove-brk="${_gfEsc(conns[cid].brokerage||'this brokerage')}" data-snap-remove-n="${conns[cid].n}" style="color:#dc2626;font-size:11px;">Remove ${_gfEsc(conns[cid].brokerage||'connection')} connection (${conns[cid].n} account${conns[cid].n===1?'':'s'})</button>`).join(' ')}
+        </div>`;
+      }
+      body.querySelectorAll('[data-snap-remove]').forEach(b => b.addEventListener('click', () => dgaSnapRemove(b.getAttribute('data-snap-remove'), b.getAttribute('data-snap-remove-brk'), parseInt(b.getAttribute('data-snap-remove-n'),10)||0)));
+      body.querySelectorAll('[data-snap-assign]').forEach(s => s.addEventListener('change', () => dgaSnapAssign(s.getAttribute('data-snap-assign'), s.value)));
+      body.querySelectorAll('[data-snap-hide]').forEach(b => b.addEventListener('click', () => dgaSnapHide(b.getAttribute('data-snap-hide'), true)));
+      body.querySelectorAll('[data-snap-unhide]').forEach(b => b.addEventListener('click', () => dgaSnapHide(b.getAttribute('data-snap-unhide'), false)));
+    } catch (e) { body.innerHTML = '<span style="color:var(--text-tertiary);">Could not load SnapTrade accounts.</span>'; }
+  }
+  // Tolerant parse: Railway's edge can answer long requests with PLAIN TEXT
+  // ("upstream error") — never let JSON.parse turn that into a cryptic toast.
+  async function _snapJson(r) {
+    const txt = await r.text();
+    try { return JSON.parse(txt); }
+    catch (_) { return { ok: false, detail: (txt || '').slice(0, 160) || ('HTTP ' + r.status) }; }
+  }
+  // Start (or join) the background sync job and poll until it finishes.
+  // The sync itself can take minutes — it no longer rides one HTTP request.
+  // onTick receives {stage, my_elapsed_s, joined}: my_elapsed_s counts from
+  // THIS click (the job's own elapsed confused users who joined an in-flight
+  // sync and saw a timer starting at 80+ seconds).
+  async function dgaSnapRunSync(onTick) {
+    const s = await _snapJson(await window.dgaFetch('/api/snaptrade/sync',
+      { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' }));
+    if (!s.ok) throw new Error(s.detail || 'Sync failed to start');
+    if (!s.async) return s;   // safety: pre-job server still returns the result inline
+    const t0 = Date.now();
+    let joined = null;
+    while (Date.now() - t0 < 600000) {
+      await new Promise(res => setTimeout(res, 3000));
+      let st;
+      try { st = await _snapJson(await window.dgaFetch('/api/snaptrade/sync-status')); }
+      catch (_) { continue; }   // transient network blip — keep polling
+      if (st.status === 'done')  return st.result || { ok: true };
+      if (st.status === 'error') throw new Error(st.error || 'Sync failed');
+      if (joined === null) joined = (st.elapsed_s || 0) > ((Date.now() - t0) / 1000) + 5;
+      if (onTick) onTick({ stage: st.stage, joined,
+                           my_elapsed_s: Math.round((Date.now() - t0) / 1000) });
+    }
+    throw new Error('Sync exceeded 10 minutes — it was likely stuck; it will be cleaned up automatically. Try again, and if this repeats use 🔍 Diagnose.');
+  }
+  function _snapTickLabel(st) {
+    return '↻ ' + (st.stage || 'Syncing…') + ' ' + (st.my_elapsed_s || 0) + 's'
+         + (st.joined ? ' (joined running sync)' : '');
+  }
+  async function dgaSnapConnect(){
+    const btn = document.getElementById('snaptrade-connect');
+    if (btn) { btn.disabled = true; btn.textContent = 'Opening…'; }
+    try {
+      const d = await _snapJson(await window.dgaFetch('/api/snaptrade/connect', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }));
+      if (!d.ok || !d.redirect_uri) { alert(d.detail || 'Could not start SnapTrade connection.'); return; }
+      window.open(d.redirect_uri, '_blank');
+      const body = document.getElementById('snaptrade-body');
+      if (body) body.innerHTML = '<span style="color:var(--text-secondary);">Finish linking Fidelity in the new tab, then click <strong>↻ Sync</strong> to pull holdings.</span>';
+      // After linking, run up to 3 background syncs until accounts appear.
+      (async () => {
+        for (let round = 0; round < 3; round++) {
+          try {
+            const r = await dgaSnapRunSync();
+            if ((r.synced || []).length) { loadSnapTrade(); return; }
+          } catch (_) {}
+          await new Promise(res => setTimeout(res, 10000));
+        }
+      })();
+    } catch (e) { alert('SnapTrade connect failed: ' + (e.message||e)); }
+    finally { if (btn) { btn.disabled = false; btn.textContent = '+ Connect Fidelity'; } }
+  }
+  async function dgaSnapSync(){
+    const btn = document.getElementById('snaptrade-sync');
+    if (btn) { btn.disabled = true; btn.textContent = '↻ Syncing…'; }
+    try {
+      const r = await dgaSnapRunSync(st => {
+        if (btn) btn.textContent = _snapTickLabel(st);
+      });
+      if (!r.ok) alert('Sync failed: ' + (r.detail||''));
+      else {
+        const fundsPushed = (r.lots_written||[]).length;
+        const actsPulled  = (r.activities||[]).reduce(function(s,a){ return s + (a.activities||0); }, 0);
+        const histMonths  = (r.balance_history||[]).reduce(function(s,h){ return s + (h.months_added||0); }, 0);
+        if ((r.errors||[]).length) {
+          alert('Synced ' + (r.synced||[]).length + ' account(s); pushed live positions to ' + fundsPushed + ' assigned fund(s); ' +
+                actsPulled + ' activities; ' + histMonths + ' live balance month(s).\n\n' + r.errors.length + ' issue(s):\n' +
+                r.errors.map(function(e){ return '• ' + (e.account_id||e.fund_id||e.stage||'?') + ': ' + e.error; }).join('\n'));
+        }
+      }
+    } catch (e) { alert('Sync failed: ' + (e.message||e)); }
+    if (btn) { btn.disabled = false; btn.textContent = '↻ Sync'; }
+    loadSnapTrade();
+  }
+  async function dgaSnapAssign(accountId, fundId){
+    try {
+      const r = await window.dgaFetch('/api/snaptrade/assign', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ account_id: accountId, fund_id: fundId||null }) });
+      const d = await r.json();
+      if (!r.ok || !d.ok) alert('Assign failed: ' + (d.detail||r.status));
+    } catch (e) { alert('Assign failed: ' + (e.message||e)); }
+  }
+  async function dgaSnapHide(accountId, hidden){
+    try {
+      const r = await window.dgaFetch('/api/snaptrade/hide', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ account_id: accountId, hidden: hidden }) });
+      const d = await r.json();
+      if (!r.ok || !d.ok) { alert((hidden?'Ignore':'Restore')+' failed: ' + (d.detail||r.status)); return; }
+    } catch (e) { alert((hidden?'Ignore':'Restore')+' failed: ' + (e.message||e)); return; }
+    loadSnapTrade();
+  }
+  async function dgaSnapRemove(connectionId, brokerage, n){
+    const brk = brokerage || 'this brokerage';
+    const cnt = n || 0;
+    if (!(await dgaConfirm({ title: 'Remove ' + brk + ' connection', message: 'Remove the entire ' + brk + ' connection?\n\nThis disconnects the brokerage and deletes ALL ' + (cnt? cnt+' ' : '') + 'account' + (cnt===1?'':'s') + ' under it (plus their fund assignments). To hide just one account, use “Ignore” instead.\n\nThis cannot be undone — you would have to reconnect and re-assign every account.', confirmLabel: 'Remove connection' }))) return;
+    try { await window.dgaFetch('/api/snaptrade/remove', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ connection_id: connectionId }) }); } catch (e) {}
+    loadSnapTrade();
+  }
+  async function dgaSnapDebug(){
+    const body = document.getElementById('snaptrade-body');
+    if (body) body.innerHTML = '<span style="color:var(--text-secondary);">Reading raw SnapTrade response…</span>';
+    try {
+      const d = await (await window.dgaFetch('/api/snaptrade/debug')).json();
+      if (body) body.innerHTML = '<pre style="font-size:10.5px;white-space:pre-wrap;word-break:break-word;background:var(--bg-subtle,#f8fafc);border:1px solid var(--panel-edge,#e2e8f0);border-radius:6px;padding:10px;max-height:380px;overflow:auto;">'+_gfEsc(JSON.stringify(d,null,2))+'</pre><button class="tab-btn" id="snaptrade-back" style="margin-top:8px;">← Back</button>';
+      document.getElementById('snaptrade-back')?.addEventListener('click', loadSnapTrade);
+    } catch (e) { if (body) body.innerHTML = '<span style="color:#dc2626;">Diagnose failed: '+_gfEsc(e.message||String(e))+'</span>'; }
+  }
+  async function dgaSnapActivity(){
+    const body = document.getElementById('snaptrade-body');
+    const btn = document.getElementById('snaptrade-activity');
+    if (btn) { btn.disabled = true; btn.textContent = '📊 Syncing…'; }
+    if (body) body.innerHTML = '<span style="color:var(--text-secondary);">Pulling YTD transaction history from SnapTrade…</span>';
+    try {
+      const s = await (await window.dgaFetch('/api/snaptrade/activities/sync', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json();
+      if (!s.ok) throw new Error(s.detail || 'sync failed');
+      const d = await (await window.dgaFetch('/api/snaptrade/activities')).json();
+      const sum = d.summary || {};
+      const acts = d.activities || [];
+      const synced = s.synced || [];
+      const errs = s.errors || [];
+      const totalPulled = synced.reduce(function(t,x){ return t + (x.activities||0); }, 0);
+      let h = '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px;font-size:12px;">'
+        + '<span><strong>'+(sum.buy_count||0)+'</strong> buys · <span style="color:#16a34a;">'+fmtUSDFull(sum.buy_value, 0)+'</span></span>'
+        + '<span><strong>'+(sum.sell_count||0)+'</strong> sells · <span style="color:#dc2626;">'+fmtUSDFull(sum.sell_value, 0)+'</span></span>'
+        + '<span>Net external flow: <strong>'+fmtUSDFull(sum.net_external_flow, 0)+'</strong></span>'
+        + '<span style="color:var(--text-tertiary);">'+(d.count||0)+' in '+(d.year||'')+' · '+totalPulled+' pulled ('+(s.start_date||'')+'→'+(s.end_date||'')+')</span></div>';
+      const gated = errs.some(function(e){ return /no longer available/i.test(e.error||''); });
+      if (errs.length) {
+        h += '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:8px;margin-bottom:10px;font-size:11px;color:#b91c1c;">'
+          + '<strong>'+errs.length+' account(s) errored:</strong> '+_gfEsc(errs[0].error||'')
+          + (gated ? '<br><span style="color:#92400e;">↳ This is SnapTrade access-gating (same as the old holdings endpoint). Probing for an alternative method…</span>' : '') + '</div>';
+      }
+      if (gated) {
+        try {
+          const pr = await (await window.dgaFetch('/api/snaptrade/activities-probe')).json();
+          h += '<div style="background:var(--bg-subtle,#f8fafc);border:1px solid var(--panel-edge,#e2e8f0);border-radius:6px;padding:10px;margin-bottom:10px;font-size:10.5px;">'
+            + '<strong>Transaction methods in SDK:</strong> '+_gfEsc((pr.methods_found||[]).join(', ')||'none')+'<br><br>'
+            + (pr.results||[]).map(function(r){
+                return '<div style="margin-bottom:5px;">'+(r.ok?'✅':'❌')+' <strong>'+_gfEsc(r.method)+'</strong> (shape '+r.shape+'): '
+                  + (r.ok ? ('count='+r.count+' · '+_gfEsc(String(r.sample||'').slice(0,300))) : _gfEsc(r.error||'')) + '</div>';
+              }).join('')
+            + '</div>';
+        } catch(e) {}
+      }
+      if (!acts.length) {
+        h += '<div style="color:var(--text-tertiary);font-size:12px;">No activity in '+(d.year||'this year')+'. Pulled '+totalPulled+' total rows across the requested window. '
+          + 'If 0 pulled and no errors above, SnapTrade returned nothing for this window (may still be backfilling, or the trades predate '+(s.start_date||'Jan 1')+').</div>';
+      } else {
+        h += '<div style="max-height:360px;overflow:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">'
+          + '<thead><tr style="text-align:left;color:var(--text-secondary);border-bottom:1px solid var(--panel-edge,#e2e8f0);">'
+          + '<th style="padding:4px 6px;">Date</th><th>Type</th><th>Symbol</th><th class="num">Units</th><th class="num">Price</th><th class="num">Amount</th><th>Account</th></tr></thead><tbody>';
+        acts.slice(0,300).forEach(function(a){
+          const c = a.type==='BUY'?'#16a34a':(a.type==='SELL'?'#dc2626':'#475569');
+          h += '<tr style="border-bottom:1px solid var(--panel-edge,#f1f5f9);">'
+            + '<td style="padding:3px 6px;color:var(--text-tertiary);">'+_gfEsc(a.trade_date||'')+'</td>'
+            + '<td style="font-weight:700;color:'+c+';">'+_gfEsc(a.type||'')+'</td>'
+            + '<td style="font-weight:700;">'+_gfEsc(a.symbol||'—')+'</td>'
+            + '<td class="num">'+(a.units!=null?Number(a.units).toLocaleString(undefined,{maximumFractionDigits:4}):'')+'</td>'
+            + '<td class="num">'+(a.price!=null?'$'+Number(a.price).toFixed(2):'')+'</td>'
+            + '<td class="num">'+(a.amount!=null?fmtUSDFull(a.amount, 0):'')+'</td>'
+            + '<td style="color:var(--text-tertiary);">'+_gfEsc(a.account_name||'')+'</td></tr>';
+        });
+        h += '</tbody></table></div>';
+      }
+      h += '<button class="tab-btn" id="snaptrade-back" style="margin-top:10px;">← Back</button>';
+      if (body) body.innerHTML = h;
+      document.getElementById('snaptrade-back')?.addEventListener('click', loadSnapTrade);
+    } catch (e) { if (body) body.innerHTML = '<span style="color:#dc2626;">Activity sync failed: '+_gfEsc(e.message||String(e))+'</span>'; }
+    if (btn) { btn.disabled = false; btn.textContent = '📊 YTD Activity'; }
+  }
+  async function dgaSnapYtdTest(){
+    const body = document.getElementById('snaptrade-body');
+    if (body) body.innerHTML = '<span style="color:var(--text-secondary);">Reconstructing Jan-1 values from trades + price history…</span>';
+    try {
+      const ad = await (await window.dgaFetch('/api/snaptrade/accounts')).json();
+      const accts = ad.accounts || [];
+      const mAccts = ad.managed_accounts || [];
+      const nameByFund = {}; mAccts.forEach(function(m){ nameByFund[m.fund_id] = m.short_name||m.name; });
+      const fundIds = Array.from(new Set(accts.filter(function(a){return a.fund_id;}).map(function(a){return a.fund_id;})));
+      if (!fundIds.length) { if (body) body.innerHTML = '<span style="color:var(--text-tertiary);">No accounts assigned to a fund yet — assign one, then run the test.</span>'; return; }
+      let h = '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px;">Equity-only reconstructed YTD vs. the CSV’s official figure. A few-point gap is expected (cash/dividends/timing).</div>';
+      h += '<table style="width:100%;border-collapse:collapse;font-size:11px;"><thead><tr style="text-align:left;color:var(--text-secondary);border-bottom:1px solid var(--panel-edge,#e2e8f0);">'
+        + '<th style="padding:4px 6px;">Fund</th><th style="text-align:right;">Jan-1 equity</th><th style="text-align:right;">Now equity</th><th style="text-align:right;">Recon YTD %</th><th style="text-align:right;">CSV YTD %</th><th style="text-align:right;">Diff</th><th>Priced?</th></tr></thead><tbody>';
+      for (const fid of fundIds) {
+        const r = await (await window.dgaFetch('/api/snaptrade/ytd-reconstruct?fund_id='+encodeURIComponent(fid))).json();
+        const diff = r.diff_vs_csv;
+        const dColor = diff==null?'#94a3b8':(Math.abs(diff)<=3?'#16a34a':(Math.abs(diff)<=8?'#d97706':'#dc2626'));
+        h += '<tr style="border-bottom:1px solid var(--panel-edge,#f1f5f9);">'
+          + '<td style="padding:3px 6px;font-weight:700;">'+_gfEsc(nameByFund[fid]||fid)+'</td>'
+          + '<td style="text-align:right;">'+(r.jan1_equity!=null?fmtUSDFull(r.jan1_equity, 0):'—')+'</td>'
+          + '<td style="text-align:right;">'+(r.now_equity!=null?fmtUSDFull(r.now_equity, 0):'—')+'</td>'
+          + '<td style="text-align:right;font-weight:700;">'+(r.reconstructed_ytd_price_pct!=null?r.reconstructed_ytd_price_pct.toFixed(2)+'%':'—')+'</td>'
+          + '<td style="text-align:right;">'+(r.csv_ytd_pct!=null?r.csv_ytd_pct.toFixed(2)+'%':'—')+'</td>'
+          + '<td style="text-align:right;font-weight:700;color:'+dColor+';">'+(diff!=null?(diff>=0?'+':'')+diff.toFixed(2):'—')+'</td>'
+          + '<td>'+(r.fully_priced?'✓':'<span style="color:#d97706;">partial</span>')+'</td></tr>';
+      }
+      h += '</tbody></table><button class="tab-btn" id="snaptrade-back" style="margin-top:10px;">← Back</button>';
+      if (body) body.innerHTML = h;
+      document.getElementById('snaptrade-back')?.addEventListener('click', loadSnapTrade);
+    } catch (e) { if (body) body.innerHTML = '<span style="color:#dc2626;">YTD test failed: '+_gfEsc(e.message||String(e))+'</span>'; }
+  }
+  async function dgaSnapForceRefresh(){
+    const btn = document.getElementById('snaptrade-refresh');
+    const body = document.getElementById('snaptrade-body');
+    if (btn) { btn.disabled = true; btn.textContent = '⟳ Refreshing…'; }
+    if (body) body.innerHTML = '<span style="color:var(--text-secondary);">Asking SnapTrade to re-pull Fidelity…</span>';
+    try {
+      const r = await _snapJson(await window.dgaFetch('/api/snaptrade/refresh', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }));
+      if (!r.ok) throw new Error(r.detail || 'refresh failed');
+      if ((r.errors||[]).length) {
+        const emsg = (r.errors[0].error||'');
+        const realtime = /1141|real-time|already return|not enabled/i.test(emsg);
+        if (realtime) {
+          // SnapTrade says the data is already real-time — no manual refresh exists.
+          // Best we can do is re-read the live endpoint (normal sync).
+          if (body) body.innerHTML = '<span style="color:var(--text-secondary);">SnapTrade reports your holdings endpoint is already real-time (no manual refresh available). Re-reading it now…<br><span style="color:var(--text-tertiary);font-size:11px;">If a position is still missing, it’s Fidelity not yet propagating the trade to SnapTrade — that resolves on Fidelity’s cycle; production would not change it.</span></span>';
+          setTimeout(dgaSnapSync, 1200);
+        } else {
+          if (body) body.innerHTML = '<div style="color:#dc2626;font-size:12px;">SnapTrade refused the refresh: ' + _gfEsc(emsg) + '</div><button class="tab-btn" id="snaptrade-back" style="margin-top:10px;">← Back</button>';
+          document.getElementById('snaptrade-back')?.addEventListener('click', loadSnapTrade);
+        }
+        if (btn) { btn.disabled = false; btn.textContent = '⟳ Force refresh'; }
+        return;
+      }
+      // Refresh is async on SnapTrade's side — poll-sync a few times.
+      let secs = 50;
+      const tick = setInterval(function(){
+        secs -= 5;
+        if (body) body.innerHTML = '<span style="color:var(--text-secondary);">SnapTrade is re-pulling Fidelity (refreshed ' + r.refreshed + ' connection). Auto-syncing in ' + Math.max(secs,0) + 's…</span>';
+        if (secs <= 0) { clearInterval(tick); if (btn) { btn.disabled = false; btn.textContent = '⟳ Force refresh'; } dgaSnapSync(); }
+      }, 5000);
+    } catch (e) {
+      if (body) body.innerHTML = '<span style="color:#dc2626;">Force refresh failed: ' + _gfEsc(e.message||String(e)) + '</span>';
+      if (btn) { btn.disabled = false; btn.textContent = '⟳ Force refresh'; }
+    }
+  }
+  document.getElementById('snaptrade-connect')?.addEventListener('click', dgaSnapConnect);
+  document.getElementById('snaptrade-sync')?.addEventListener('click', dgaSnapSync);
+  document.getElementById('snaptrade-refresh')?.addEventListener('click', dgaSnapForceRefresh);
+  document.getElementById('snaptrade-debug')?.addEventListener('click', dgaSnapDebug);
+  document.getElementById('snaptrade-activity')?.addEventListener('click', dgaSnapActivity);
+  document.getElementById('snaptrade-ytdtest')?.addEventListener('click', dgaSnapYtdTest);
+
+  async function dgaPlaidConnect(){
+    const body = document.getElementById('plaid-body');
+    try {
+      await _loadPlaidScript();
+      const d = await (await window.dgaFetch('/api/plaid/link-token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+      if (!d.ok || !d.link_token) { alert(d.detail || 'Could not start Plaid Link.'); return; }
+      // Persist the link_token so an OAuth redirect (Fidelity) can resume after return.
+      localStorage.setItem(_PLAID_LT_KEY, d.link_token);
+      window.Plaid.create({
+        token: d.link_token,
+        onSuccess: async (public_token) => {
+          if (body) body.innerHTML = '<span style="color:var(--text-secondary);">Linking… pulling first holdings snapshot.</span>';
+          await _plaidExchange(public_token);
+        },
+        onExit: (err) => { localStorage.removeItem(_PLAID_LT_KEY); if (err) loadPlaid(); },
+      }).open();
+    } catch (e) { alert('Plaid Link could not load: ' + (e.message || e)); }
+  }
+  async function dgaPlaidSync(itemId){
+    const b = document.getElementById('plaid-body'); if (b) b.style.opacity = '0.5';
+    try { await window.dgaFetch('/api/plaid/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id: itemId }) }); } catch (e) {}
+    if (b) b.style.opacity = '1'; loadPlaid();
+  }
+  async function dgaPlaidRemove(itemId){
+    if (!(await dgaConfirm({ title: 'Disconnect institution', message: 'Disconnect this institution and delete its stored data?', confirmLabel: 'Disconnect' }))) return;
+    try { await window.dgaFetch('/api/plaid/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id: itemId }) }); } catch (e) {}
+    loadPlaid();
+  }
+  // ── Two-Factor Authentication (TOTP) ──────────────────────────────────────
+  async function loadMfa(){
+    const body = document.getElementById('mfa-body');
+    const badge = document.getElementById('mfa-badge');
+    const tbtn = document.getElementById('mfa-toggle-btn');
+    if (!body) return;
+    try {
+      const st = await (await window.dgaFetch('/api/auth/v2/mfa/status')).json();
+      if (!st.encryption_ready) {
+        if (badge) { badge.textContent = 'UNAVAILABLE'; badge.style.background = '#fef3c7'; badge.style.color = '#92400e'; }
+        if (tbtn) tbtn.style.display = 'none';
+        body.innerHTML = '<span style="color:#92400e;">DATA_ENCRYPTION_KEY not set — 2FA can’t be enabled until at-rest encryption is on.</span>';
+        return;
+      }
+      if (badge) {
+        badge.textContent = st.enabled ? 'ON' : 'OFF';
+        badge.style.background = st.enabled ? '#dcfce7' : '#f1f5f9';
+        badge.style.color = st.enabled ? '#166534' : '#64748b';
+      }
+      if (tbtn) {
+        tbtn.style.display = 'inline-block';
+        tbtn.textContent = st.enabled ? 'Disable' : 'Enable 2FA';
+        tbtn.onclick = st.enabled ? dgaMfaDisable : dgaMfaSetup;
+      }
+      body.innerHTML = st.enabled
+        ? `<span style="color:#166534;font-weight:700;">✓ Two-factor authentication is on.</span> You’ll enter a 6-digit code at login.
+           <span style="color:var(--text-tertiary);">${st.recovery_remaining} recovery code(s) remaining.</span>`
+        : 'Protect your login with an authenticator app (Google Authenticator, Authy, 1Password). Required by Plaid before linking accounts. Click <strong>Enable 2FA</strong> to set it up.';
+    } catch (e) { body.innerHTML = '<span style="color:var(--text-tertiary);">Could not load 2FA status.</span>'; }
+  }
+  async function dgaMfaSetup(){
+    const body = document.getElementById('mfa-body');
+    body.innerHTML = '<span style="color:var(--text-secondary);">Generating secret…</span>';
+    let d;
+    try { d = await (await window.dgaFetch('/api/auth/v2/mfa/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json(); }
+    catch (e) { body.innerHTML = '<span style="color:#dc2626;">Setup failed.</span>'; return; }
+    if (!d.ok) { body.innerHTML = '<span style="color:#dc2626;">' + (d.detail || 'Setup failed.') + '</span>'; return; }
+    body.innerHTML = `
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;">
+        ${d.qr ? `<img src="${d.qr}" alt="QR" style="width:150px;height:150px;border:1px solid var(--panel-edge,#e2e8f0);border-radius:8px;">` : ''}
+        <div style="flex:1;min-width:200px;">
+          <div style="margin-bottom:8px;">1. Scan the QR with your authenticator app, or enter this key manually:</div>
+          <code style="display:inline-block;background:var(--bg-subtle,#f1f5f9);padding:6px 10px;border-radius:6px;font-size:12px;word-break:break-all;">${_gfEsc(d.secret)}</code>
+          <div style="margin:12px 0 6px;">2. Enter the 6-digit code it shows:</div>
+          <div style="display:flex;gap:8px;">
+            <input id="mfa-verify-code" type="text" inputmode="numeric" maxlength="6" placeholder="123456"
+              style="width:120px;height:34px;border:1px solid var(--panel-edge,#cbd5e1);border-radius:6px;text-align:center;letter-spacing:3px;font-size:15px;">
+            <button id="mfa-verify-btn" class="btn-primary" style="height:34px;padding:0 14px;">Verify &amp; Enable</button>
+          </div>
+          <div id="mfa-verify-msg" style="font-size:11.5px;margin-top:6px;min-height:14px;"></div>
+        </div>
+      </div>`;
+    document.getElementById('mfa-verify-btn').onclick = dgaMfaVerify;
+    document.getElementById('mfa-verify-code').addEventListener('keypress', e => { if (e.key === 'Enter') dgaMfaVerify(); });
+  }
+  async function dgaMfaVerify(){
+    const code = (document.getElementById('mfa-verify-code')?.value || '').trim();
+    const msg = document.getElementById('mfa-verify-msg');
+    if (code.length < 6) { msg.style.color = '#dc2626'; msg.textContent = 'Enter the 6-digit code.'; return; }
+    let d;
+    try { d = await (await window.dgaFetch('/api/auth/v2/mfa/enable', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) })).json(); }
+    catch (e) { msg.style.color = '#dc2626'; msg.textContent = 'Verification failed.'; return; }
+    if (!d.ok || !d.recovery_codes) { msg.style.color = '#dc2626'; msg.textContent = d.detail || 'That code didn’t match.'; return; }
+    const body = document.getElementById('mfa-body');
+    body.innerHTML = `
+      <div style="color:#166534;font-weight:700;margin-bottom:8px;">✓ Two-factor authentication is now ON.</div>
+      <div style="margin-bottom:6px;">Save these <strong>recovery codes</strong> somewhere safe — each works once if you lose your authenticator. They won’t be shown again:</div>
+      <div style="font-family:'SF Mono',monospace;font-size:13px;background:#0A1628;color:#e8eef7;border-radius:8px;padding:12px 14px;line-height:1.9;letter-spacing:1px;">
+        ${d.recovery_codes.map(c => _gfEsc(c)).join('<br>')}
+      </div>
+      <button id="mfa-copy-codes" class="tab-btn" style="margin-top:10px;">📋 Copy codes</button>
+      <button id="mfa-done" class="tab-btn" style="margin-top:10px;">Done</button>`;
+    document.getElementById('mfa-copy-codes').onclick = () => { navigator.clipboard?.writeText(d.recovery_codes.join('\n')); };
+    document.getElementById('mfa-done').onclick = loadMfa;
+    // Do NOT call loadMfa() here — it rewrites #mfa-body and would hide the
+    // recovery codes the moment they render (they're shown exactly once).
+    // The badge flips to ON when the user clicks Done.
+    const _mfaBadge = document.getElementById('mfa-badge');
+    if (_mfaBadge) { _mfaBadge.textContent = 'ON'; _mfaBadge.style.background = '#dcfce7'; _mfaBadge.style.color = '#166534'; }
+  }
+  // Collects the password via an inline masked <input> in the MFA panel —
+  // never a plain-text prompt() (which echoes the password on screen).
+  function dgaMfaDisable(){
+    const body = document.getElementById('mfa-body');
+    if (!body) return;
+    body.innerHTML = `
+      <div style="margin-bottom:8px;color:var(--text-secondary);">Enter your account password to turn <strong>OFF</strong> two-factor authentication:</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <input id="mfa-disable-pw" type="password" autocomplete="current-password" placeholder="Account password"
+          style="width:200px;height:34px;border:1px solid var(--panel-edge,#cbd5e1);border-radius:6px;padding:0 11px;font-size:12.5px;color:var(--text-primary);background:var(--surface,#fff);">
+        <button id="mfa-disable-go" class="tab-btn" style="height:34px;color:#dc2626;">Turn off 2FA</button>
+        <button id="mfa-disable-cancel" class="tab-btn" style="height:34px;">Cancel</button>
+      </div>
+      <div id="mfa-disable-msg" style="font-size:11.5px;margin-top:6px;min-height:14px;color:#dc2626;"></div>`;
+    const pwEl = document.getElementById('mfa-disable-pw');
+    const msg = document.getElementById('mfa-disable-msg');
+    async function go(){
+      const pw = (pwEl.value || '');
+      if (!pw) { msg.textContent = 'Enter your password.'; return; }
+      let d;
+      try { d = await (await window.dgaFetch('/api/auth/v2/mfa/disable', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }) })).json(); }
+      catch (e) { msg.textContent = 'Could not disable 2FA.'; return; }
+      if (!d.ok) { msg.textContent = d.detail || 'Password incorrect.'; return; }
+      loadMfa();
+    }
+    document.getElementById('mfa-disable-go').onclick = go;
+    document.getElementById('mfa-disable-cancel').onclick = loadMfa;
+    pwEl.addEventListener('keypress', e => { if (e.key === 'Enter') go(); });
+    pwEl.focus();
+  }
+
+  document.getElementById('plaid-connect')?.addEventListener('click', dgaPlaidConnect);
+
+  // Refresh Settings panels when the Settings link is clicked. loadSettingsTab
+  // runs ALL panel loaders, each guarded by a 60s per-panel timestamp cache,
+  // so rapid re-clicks don't refetch anything.
+  document.querySelectorAll('[data-tab="settings"]').forEach(el => {
+    el.addEventListener('click', () => loadSettingsTab());
+  });
+
+  // If we returned from an OAuth institution (Fidelity), resume Plaid Link now.
+  _plaidOAuthResume();
+
+  // All background polling is visibility-gated: a hidden tab makes ZERO
+  // requests (was ~4,300/day). On return to the foreground we kick one
+  // immediate refresh of the ribbon + watchlist so stale data clears fast.
+  const _visGated = (fn) => () => { if (document.hidden) return; fn(); };
+  setInterval(_visGated(loadIndices),          60_000);   // ribbon: every 60s
+  setInterval(_visGated(loadWatchlist),        60_000);   // watchlist: every 60s
+  setInterval(_visGated(loadTrendingTickers),  60_000);   // trending: every 60s
+  // Market Pulse polling removed — see init block above.
+  setInterval(_visGated(loadNewsForReports),  900_000);   // saved-report headlines: every 15 min
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    loadIndices();
+    loadWatchlist();
+  });
+
+  // ── Dashboard drag-and-drop ──────────────────────────────────────
+  (function _initDashboard() {
+    var RESEARCH = document.getElementById('tab-research');
+    if (!RESEARCH) return;
+    var COL_SELECTORS = ['.col-left', '.col-center', 'aside.col-right'];
+
+    var dragging    = null;   // the panel being dragged
+    var placeholder = null;  // blue-dashed drop target div
+
+    function _makePlaceholder(h) {
+      var el = document.createElement('div');
+      el.className = 'dash-placeholder';
+      el.style.height = (h || 60) + 'px';
+      return el;
+    }
+
+    function _clearOverCls() {
+      COL_SELECTORS.forEach(function(s) {
+        var c = RESEARCH.querySelector(s);
+        if (c) c.classList.remove('dash-over');
+      });
+    }
+
+    // Returns the panel that clientY is closest to inside col, plus 'before'/'after'
+    function _getInsertTarget(e, col) {
+      var panels = Array.from(col.querySelectorAll(':scope > section.panel[data-wid]'));
+      for (var i = 0; i < panels.length; i++) {
+        var p = panels[i];
+        if (p === dragging || p === placeholder) continue;
+        var rect = p.getBoundingClientRect();
+        if (e.clientY <= rect.top + rect.height / 2) {
+          return { ref: p, where: 'before' };
+        }
+        if (e.clientY <= rect.bottom) {
+          return { ref: p, where: 'after' };
+        }
+      }
+      return { ref: null, where: 'end' };
+    }
+
+    function _placeholderTo(col, target) {
+      if (!placeholder) return;
+      if (target.ref) {
+        if (target.where === 'before') {
+          col.insertBefore(placeholder, target.ref);
+        } else {
+          col.insertBefore(placeholder, target.ref.nextSibling);
+        }
+      } else {
+        col.appendChild(placeholder);
+      }
+    }
+
+    function _saveDashLayout() {
+      var layout = {};
+      COL_SELECTORS.forEach(function(s) {
+        var col = RESEARCH.querySelector(s);
+        if (!col) return;
+        layout[s] = Array.from(col.querySelectorAll(':scope > section.panel[data-wid]'))
+                         .map(function(p) { return p.dataset.wid; });
+      });
+      try { localStorage.setItem('dgaDashLayout_v2', JSON.stringify(layout)); } catch(e) {}
+    }
+
+    function _restoreDashLayout() {
+      var saved;
+      try { saved = JSON.parse(localStorage.getItem('dgaDashLayout_v2') || 'null'); } catch(e) {}
+      if (!saved) return;
+      COL_SELECTORS.forEach(function(s) {
+        var col = RESEARCH.querySelector(s);
+        if (!col) return;
+        var wids = saved[s];
+        if (!Array.isArray(wids)) return;
+        // Append every saved panel in order — appending a node already in this
+        // column re-positions it, so this restores WITHIN-column order too
+        // (not just cross-column moves).
+        wids.forEach(function(wid) {
+          var panel = RESEARCH.querySelector('section.panel[data-wid="' + wid + '"]');
+          if (panel) col.appendChild(panel);
+        });
+      });
+      // A widget added AFTER the layout was saved isn't in `saved`, so the
+      // append-reorder above shoves it to the top of its column. Pin Market
+      // Pulse below Saved Reports until the user drags it (which persists it).
+      var _mpKnown = COL_SELECTORS.some(function(s) {
+        return Array.isArray(saved[s]) && saved[s].indexOf('market-pulse') >= 0;
+      });
+      if (!_mpKnown) {
+        var _mp = RESEARCH.querySelector('section.panel[data-wid="market-pulse"]');
+        var _sr = RESEARCH.querySelector('section.panel[data-wid="saved-reports"]');
+        if (_mp && _sr && _sr.parentElement) _sr.parentElement.insertBefore(_mp, _sr.nextSibling);
+      }
+    }
+
+    function _initPanel(panel) {
+      if (panel.dataset.dashInit) return;
+      panel.dataset.dashInit = '1';
+      panel.setAttribute('draggable', 'true');
+
+      panel.addEventListener('dragstart', function(e) {
+        dragging = panel;
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', panel.dataset.wid || '');
+        placeholder = _makePlaceholder(panel.offsetHeight);
+        setTimeout(function() { panel.classList.add('dash-dragging'); }, 0);
+      });
+
+      panel.addEventListener('dragend', function() {
+        panel.classList.remove('dash-dragging');
+        _clearOverCls();
+        if (placeholder && placeholder.parentNode) {
+          placeholder.parentNode.insertBefore(dragging, placeholder);
+          placeholder.remove();
+        }
+        placeholder = null;
+        dragging = null;
+        _saveDashLayout();
+      });
+    }
+
+    // Wire each column to accept drops
+    COL_SELECTORS.forEach(function(s) {
+      var col = RESEARCH.querySelector(s);
+      if (!col) return;
+
+      col.addEventListener('dragover', function(e) {
+        if (!dragging) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        _clearOverCls();
+        col.classList.add('dash-over');
+        var target = _getInsertTarget(e, col);
+        _placeholderTo(col, target);
+      });
+
+      col.addEventListener('dragleave', function(e) {
+        // Only clear if leaving the column entirely (not entering a child)
+        if (!col.contains(e.relatedTarget)) {
+          col.classList.remove('dash-over');
+        }
+      });
+
+      col.addEventListener('drop', function(e) {
+        e.preventDefault();
+        // dragend handles the actual DOM move
+      });
+    });
+
+    // Init all panels that currently exist
+    RESEARCH.querySelectorAll('section.panel[data-wid]').forEach(_initPanel);
+
+    // Restore saved layout, then init any newly placed panels
+    _restoreDashLayout();
+
+    // Expose for external callers
+    window._dashInitPanel   = _initPanel;
+    window._saveDashLayout  = _saveDashLayout;
+  })();
+})();

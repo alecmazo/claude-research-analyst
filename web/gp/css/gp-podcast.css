@@ -1,0 +1,33 @@
+/* Podcast card styles (was inline in portfolio-gp.html) */
+      .pc-card { margin-bottom: 16px; border: 1px solid #c7e8f3; background: #fafdff; border-radius: 10px; overflow: hidden; }
+      .pc-card-head { background: #e0f4fc; color: var(--text-primary); font-weight: 800; font-size: 13px;
+                       letter-spacing: 0.3px; padding: 12px 18px; border-bottom: 1px solid #c7e8f3; }
+      .pc-section { padding: 16px 18px; border-bottom: 1px solid #e0f0f7; }
+      .pc-section:last-child { border-bottom: none; background: #f4fafd; }
+      .pc-section-title { font-size: 11px; font-weight: 800; letter-spacing: 1.5px;
+                          color: var(--text-primary); text-transform: uppercase; margin-bottom: 4px; }
+      .pc-section-desc { font-size: 11.5px; color: #64748b; line-height: 1.55; margin-bottom: 14px; }
+      .pc-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end;
+                margin-bottom: 10px; }
+      .pc-row-controls { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; min-width: 0; }
+      .pc-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+      .pc-field-label { font-size: 9.5px; font-weight: 700; color: #475569;
+                        letter-spacing: 0.8px; text-transform: uppercase; }
+      .pc-select { font-size: 13px; padding: 8px 10px; border: 1px solid #c7e8f3;
+                   border-radius: 5px; background: #fff; min-width: 180px; }
+      .pc-select-fmt { background: #fffbeb; font-weight: 700; }
+      .pc-cta { padding: 9px 18px; font-size: 13px; font-weight: 800; border-radius: 5px;
+                cursor: pointer; white-space: nowrap; border: none; line-height: 1; }
+      .pc-cta-primary { background: #5BB8D4; color: #0A1628; }
+      .pc-cta-primary:hover { background: #4AA5C0; }
+      .pc-cta-primary:disabled { background: #b9d6e0; cursor: not-allowed; color: #5a6f7a; }
+      .pc-or-row { display: flex; align-items: center; gap: 10px; padding-top: 6px;
+                   margin-top: 10px; border-top: 1px dashed #d6e8ef; }
+      .pc-or-label { font-size: 10.5px; font-weight: 700; color: #94a3b8;
+                     letter-spacing: 1px; text-transform: uppercase; }
+      .pc-or-saved { flex: 1; font-size: 12.5px; padding: 7px 10px; border: 1px solid #c7e8f3;
+                     border-radius: 5px; background: #fff; }
+      .pc-stats { font-size: 11px; color: #64748b; font-family: 'SF Mono', monospace;
+                  margin-top: 8px; padding: 0 2px; min-height: 14px; }
+      .pc-player-btn { font-size: 11px; font-weight: 700; padding: 5px 10px; border-radius: 4px;
+                       cursor: pointer; white-space: nowrap; }
