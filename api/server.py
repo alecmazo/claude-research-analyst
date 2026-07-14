@@ -25530,6 +25530,65 @@ def _db_quotes(symbols, max_age_s=None) -> dict:
         return {}
 
 
+def _warm_quotes_for_comps(symbols: list, cap: int = 16) -> dict:
+    """Return quotes for comps, filling missing prices via free batch_quotes.
+
+    Peer comps were blank for MSFT-class names because company_financials had
+    SEC rows but market_quotes only held the subject ticker. This warms up to
+    ``cap`` missing symbols, persists them, and returns the merged map.
+    No LLM. Network only when the store is missing prices.
+    """
+    syms = []
+    seen = set()
+    for s in (symbols or []):
+        t = (s or "").strip().upper()
+        if t and t not in seen:
+            seen.add(t)
+            syms.append(t)
+    if not syms:
+        return {}
+    have = _db_quotes(syms)
+    miss = [t for t in syms if t not in have or have[t].get("price") is None][: max(1, min(int(cap), 24))]
+    if not miss:
+        return have
+    try:
+        raw = batch_quotes(",".join(miss)) or {}
+    except Exception as e:
+        print(f"[fin-comps] quote warm failed: {e!s:.140}", flush=True)
+        return have
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            for sym in miss:
+                q = raw.get(sym) or raw.get(sym.upper()) or {}
+                px = q.get("price")
+                if px is None:
+                    continue
+                _store_quote(cur, sym, {
+                    "price": float(px),
+                    "prev_close": q.get("prev_close") or q.get("previous_close"),
+                    "pct_change": q.get("pct_change"),
+                    "source": "yfinance-comps",
+                })
+                have[sym] = {
+                    "price": float(px),
+                    "pct_change": q.get("pct_change"),
+                    "as_of": None,
+                }
+            conn.commit()
+    except Exception as e:
+        print(f"[fin-comps] quote persist failed: {e!s:.140}", flush=True)
+        # Still use live results even if DB write fails
+        for sym in miss:
+            q = raw.get(sym) or {}
+            if q.get("price") is not None:
+                have[sym] = {
+                    "price": float(q["price"]),
+                    "pct_change": q.get("pct_change"),
+                    "as_of": None,
+                }
+    return have
+
+
 def _db_meta(symbols) -> dict:
     """{SYM: {sector, industry, name, analyst_target}} from security_meta."""
     syms = [s.strip().upper() for s in (symbols or []) if s and str(s).strip()]
@@ -26187,7 +26246,7 @@ def _industry_peer_snapshots(tk: str, limit: int = 40) -> tuple[list, str | None
             """, (cand_syms,))
             fins = {r["ticker"].upper(): r for r in (cur.fetchall() or [])}
 
-        quotes = _db_quotes(list(fins.keys()) + [tk])
+        quotes = _warm_quotes_for_comps(list(fins.keys()) + [tk], cap=24)
         # Build candidate_meta with mcaps for scoring
         cand_meta = []
         for r in cand_rows:
@@ -26603,7 +26662,10 @@ def _build_peer_comps(tk: str, subject_metrics: dict, limit: int = 8) -> dict:
                     if seen_n[t] == 2:
                         prior_map[t] = _dash_f(r.get("revenue"))
 
-        quotes = _db_quotes(list(fin_map.keys()) + [tk]) if fin_map else _db_quotes([tk])
+        # Warm free prices for peers that have SEC financials but no market_quotes
+        # row — otherwise PE / EV / mkt cap render blank (MSFT ticket).
+        quote_syms = list({*(fin_map.keys()), tk, *cand[:16]})
+        quotes = _warm_quotes_for_comps(quote_syms, cap=16)
         name_by = {(p.get("symbol") or "").upper(): (p.get("name") or p.get("industry"))
                    for p in peers_meta}
 

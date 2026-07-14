@@ -8526,11 +8526,15 @@ End with the sleeve block at this account's real market value so I can push it t
         }).join('');
         const scope = [pc.industry || pc.group_id, pc.sector].filter(Boolean).join(' · ') || 'covered names';
         const methodNote = pc.note || 'Sell-side style: same industry / business model + similar market-cap band (not whole-sector mega-caps).';
+        const nWithPx = peers.filter(p => p.price != null).length;
+        const priceHint = nWithPx < peers.length
+          ? ' · prices filled free for comps when missing from store'
+          : '';
         peersHost.innerHTML =
           `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;background:var(--bg-elevated);">` +
           `<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px;flex-wrap:wrap;">` +
             `<span style="font-size:13px;font-weight:800;color:var(--text-primary);">Comparable companies</span>` +
-            `<span style="font-size:11px;color:var(--text-tertiary);">${_gfEsc(scope)} · free store · no tokens</span>` +
+            `<span style="font-size:11px;color:var(--text-tertiary);">${_gfEsc(scope)} · free store${priceHint}</span>` +
           `</div>` +
           `<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;">${headRow}${body}</table></div>` +
           `<div style="font-size:10px;color:var(--text-tertiary);margin-top:8px;">${_gfEsc(methodNote)} Click a ticker to load its dashboard. Pull SEC data for more names to fill multiples.</div>` +
