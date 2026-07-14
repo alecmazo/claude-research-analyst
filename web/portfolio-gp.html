@@ -6392,8 +6392,12 @@ End with the sleeve block at this account's real market value so I can push it t
   function _parseServerDate(iso) {
     if (iso == null) return null;
     if (typeof iso !== 'string') return new Date(iso);
-    const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)$/.exec(iso.trim());
-    return m ? new Date(m[1] + 'T' + m[2] + 'Z') : new Date(iso);
+    let s = iso.trim();
+    // Repair "...+00:00Z" double suffix from some API serializers
+    if (/\+00:00Z$/.test(s)) s = s.replace(/\+00:00Z$/, 'Z');
+    if (/\+00:00$/.test(s)) s = s.replace(/\+00:00$/, 'Z');
+    const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)$/.exec(s);
+    return m ? new Date(m[1] + 'T' + m[2] + 'Z') : new Date(s);
   }
   window._parseServerDate = _parseServerDate;
   const fmtDate  = (iso) => {
@@ -6402,6 +6406,20 @@ End with the sleeve block at this account's real market value so I can push it t
     return (d && !isNaN(d)) ? d.toLocaleString('en-US',
       { ..._PT, month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
   };
+  /** Support tickets / trails: always Bay Area (America/Los_Angeles) with PT label. */
+  const fmtDatePT = (iso) => {
+    if (!iso) return '—';
+    // Tolerate API quirk like "...+00:00Z"
+    const cleaned = String(iso).replace(/\+00:00Z$/, 'Z').replace(/\+00:00$/, 'Z');
+    const d = _parseServerDate(cleaned);
+    if (!d || isNaN(d)) return '—';
+    return d.toLocaleString('en-US', {
+      ..._PT,
+      month: 'short', day: 'numeric', year: 'numeric',
+      hour: 'numeric', minute: '2-digit',
+    }) + ' PT';
+  };
+  window.fmtDatePT = fmtDatePT;
 
   // ── Debug-only UI gating (?debug=1 shows diagnostic buttons) ───
   const DEBUG_UI = new URLSearchParams(location.search).has('debug');
@@ -24362,11 +24380,26 @@ End with the sleeve block at this account's real market value so I can push it t
         box.innerHTML = '<div style="color:#94a3b8;">No tickets yet. Use the 🛟 Support button (bottom-right) when something breaks.</div>';
         return;
       }
+      const _fmtPT = (typeof window.fmtDatePT === 'function') ? window.fmtDatePT
+        : (typeof window.fmtDate === 'function' ? window.fmtDate
+          : (s => {
+              try {
+                const d = new Date(String(s || '').replace(/\+00:00Z$/, 'Z'));
+                if (isNaN(d)) return String(s || '—').slice(0, 16).replace('T', ' ');
+                return d.toLocaleString('en-US', {
+                  timeZone: 'America/Los_Angeles',
+                  month: 'short', day: 'numeric', year: 'numeric',
+                  hour: 'numeric', minute: '2-digit',
+                }) + ' PT';
+              } catch (_) {
+                return String(s || '—').slice(0, 16).replace('T', ' ');
+              }
+            }));
       box.innerHTML = tickets.map(t => {
         const trail = (t.fix_trail || []).slice(-6).reverse();
         const trailHtml = trail.length
           ? trail.map(ev => '<div class="sup-trail-line"><strong>'
-            + _esc((ev.ts || '').slice(0, 16).replace('T', ' ')) + '</strong> · '
+            + _esc(_fmtPT(ev.ts)) + '</strong> · '
             + _esc(ev.actor) + ' · <em>' + _esc(ev.action) + '</em>'
             + (ev.detail ? ' — ' + _esc(String(ev.detail).slice(0, 180)) : '')
             + '</div>').join('')
@@ -24393,12 +24426,13 @@ End with the sleeve block at this account's real market value so I can push it t
           + '<div style="margin-top:6px;color:#0f172a;font-weight:600;line-height:1.4;">'
           + _esc((t.description || '').slice(0, 240)) + '</div>'
           + '<div style="margin-top:4px;font-size:11px;color:#94a3b8;">'
-          + _esc((t.created_at || '').slice(0, 16).replace('T', ' '))
+          + _esc(_fmtPT(t.created_at))
+          + (t.fixed_at ? ' · fixed ' + _esc(_fmtPT(t.fixed_at)) : '')
           + (t.active_tab ? ' · ' + _esc(t.active_tab) : '')
           + (t.page_path ? ' · ' + _esc(t.page_path) : '')
           + '</div>'
           + diag
-          + '<div style="margin-top:8px;"><div style="font-size:10.5px;font-weight:800;letter-spacing:0.6px;text-transform:uppercase;color:#94a3b8;margin-bottom:2px;">Fix trail</div>'
+          + '<div style="margin-top:8px;"><div style="font-size:10.5px;font-weight:800;letter-spacing:0.6px;text-transform:uppercase;color:#94a3b8;margin-bottom:2px;">Fix trail (Pacific)</div>'
           + trailHtml + '</div>'
           + actions
           + '</div>';

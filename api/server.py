@@ -34120,9 +34120,34 @@ def _support_gp_only(request: Request) -> dict:
     return claims
 
 
+def _support_iso_utc(v) -> str | None:
+    """Serialize datetimes as clean UTC ISO ending in Z (never '+00:00Z')."""
+    if v is None:
+        return None
+    if hasattr(v, "isoformat"):
+        try:
+            if getattr(v, "tzinfo", None) is not None:
+                v = v.astimezone(timezone.utc).replace(tzinfo=None)
+            # Drop microseconds noise beyond ms for display stability
+            s = v.strftime("%Y-%m-%dT%H:%M:%S")
+            if getattr(v, "microsecond", 0):
+                s += f".{v.microsecond // 1000:03d}"
+            return s + "Z"
+        except Exception:
+            return str(v)
+    s = str(v).strip()
+    # Repair common double-suffix from earlier builds
+    if s.endswith("+00:00Z"):
+        s = s[:-1]
+    if s.endswith("+00:00"):
+        s = s[:-6] + "Z"
+    return s
+
+
 def _support_trail_event(actor: str, action: str, detail: str = "") -> dict:
+    # Stored as UTC; UI converts to America/Los_Angeles (Bay Area) for display.
     return {
-        "ts": datetime.utcnow().isoformat() + "Z",
+        "ts": _support_iso_utc(datetime.utcnow()),
         "actor": (actor or "system")[:80],
         "action": (action or "note")[:80],
         "detail": (detail or "")[:4000],
@@ -34134,10 +34159,8 @@ def _support_row_public(row: dict, *, include_screenshot: bool = False) -> dict:
         return {}
     out = {
         "id": row.get("id"),
-        "created_at": row.get("created_at").isoformat() + "Z"
-            if hasattr(row.get("created_at"), "isoformat") else row.get("created_at"),
-        "updated_at": row.get("updated_at").isoformat() + "Z"
-            if hasattr(row.get("updated_at"), "isoformat") else row.get("updated_at"),
+        "created_at": _support_iso_utc(row.get("created_at")),
+        "updated_at": _support_iso_utc(row.get("updated_at")),
         "created_by": row.get("created_by"),
         "created_by_email": row.get("created_by_email"),
         "status": row.get("status"),
@@ -34155,10 +34178,9 @@ def _support_row_public(row: dict, *, include_screenshot: bool = False) -> dict:
         "diagnosis": row.get("diagnosis"),
         "agent_brief": row.get("agent_brief"),
         "fix_trail": row.get("fix_trail") or [],
-        "fixed_at": row.get("fixed_at").isoformat() + "Z"
-            if hasattr(row.get("fixed_at"), "isoformat") and row.get("fixed_at")
-            else row.get("fixed_at"),
+        "fixed_at": _support_iso_utc(row.get("fixed_at")),
         "fixed_summary": row.get("fixed_summary"),
+        "timezone_display": "America/Los_Angeles",
     }
     if include_screenshot and row.get("screenshot_b64"):
         out["screenshot_b64"] = row["screenshot_b64"]
