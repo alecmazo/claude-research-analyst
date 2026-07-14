@@ -23988,6 +23988,7 @@ def _run_financials_sync(job_id: str, tickers: list, years_back: int,
                        f"+{names_ok} new names this chunk…",
                  done=i, current=tk, names_ok=names_ok,
                  names_fail=names_fail, names_skip=names_skip)
+            advance_cursor = True  # set False only if we want to hard-retry same tk
             try:
                 r = _sync_one_ticker_financials(tk, years_back=years_back,
                                                 skip_if_stored=skip_if_stored)
@@ -23998,6 +23999,7 @@ def _run_financials_sync(job_id: str, tickers: list, years_back: int,
                          names_skip=names_skip, names_fail=names_fail,
                          label=f"↷ Skip {tk} (already stored) ({i+1}/{len(tickers)}) "
                                f"· +{names_ok} new")
+                    _fin_advance_cursor(tk)
                     continue
                 periods = int(r.get("stored") or 0)
                 total_stored += periods
@@ -24007,18 +24009,16 @@ def _run_financials_sync(job_id: str, tickers: list, years_back: int,
                     if periods > 0:
                         names_ok += 1
                     elif r.get("periods"):
-                        # Had data but all rows already existed — treat as present
                         names_ok += 1
                     consecutive_rl = 0
                 elif r.get("rate_limited"):
                     names_fail += 1
-                    # Don't permanent-skip on rate limit — try again next chunk
+                    # Still advance cursor so a deploy doesn't replay the same
+                    # rate-limited head forever; supervisor will come back around.
                 elif r.get("timed_out"):
                     names_fail += 1
-                    # Transient — do not permanent-skip
                 elif r.get("errors"):
                     names_fail += 1
-                    # Permanent skip for clear "no filing" style failures only
                     err0 = " ".join(r.get("errors") or [])
                     if any(x in err0.lower() for x in (
                             "no xbrl", "no periods", "not found", "no companyfacts",
@@ -24027,7 +24027,6 @@ def _run_financials_sync(job_id: str, tickers: list, years_back: int,
                     elif not r.get("periods"):
                         _fin_mark_no_data(tk, err0[:180] or "empty SEC result")
                 else:
-                    # Empty XBRL / no usable periods — no store growth; don't retry forever
                     names_fail += 1
                     _fin_mark_no_data(tk, "no usable periods in SEC extract")
                 for e in (r.get("errors") or [])[:1]:
@@ -24050,6 +24049,8 @@ def _run_financials_sync(job_id: str, tickers: list, years_back: int,
                 all_errors.append(f"{tk}: {e!s:.100}")
                 print(f"⚠️ [fin sync {tk}] {e!s:.150}", flush=True)
                 time.sleep(0.5)
+            if advance_cursor:
+                _fin_advance_cursor(tk)
             _set(stored=total_stored, done=i + 1, names_ok=names_ok,
                  names_fail=names_fail, names_skip=names_skip,
                  label=f"📊 {tk} done ({i+1}/{len(tickers)}) · "
@@ -24085,6 +24086,60 @@ def _fin_missing_tickers() -> tuple[list[str], int, int]:
     skip = _fin_skip_set()
     missing = [t for t in universe if t not in have and t not in skip]
     return missing, len(have), len(universe)
+
+
+def _fin_get_cursor() -> str | None:
+    """Durable resume cursor: last ticker we finished processing (any outcome
+    except mid-rate-limit). Survives Railway deploys so we don't re-start the
+    same head-of-queue chunk after every push."""
+    try:
+        rec = _kv_get("fin_full_pull.cursor") or {}
+        t = (rec.get("after_ticker") or "").strip().upper()
+        return t or None
+    except Exception:
+        return None
+
+
+def _fin_advance_cursor(ticker: str) -> None:
+    if not ticker:
+        return
+    try:
+        _kv_put("fin_full_pull.cursor", {
+            "after_ticker": ticker.upper(),
+            "ts": datetime.utcnow().isoformat() + "Z",
+        })
+    except Exception:
+        pass
+
+
+def _fin_chunk_from_missing(missing: list[str], max_names: int) -> list[str]:
+    """Take the next `max_names` from missing, starting AFTER the durable cursor.
+    Wraps to the start of the list when the cursor is past the end — so deploys
+    continue forward instead of replaying the same first 150 forever."""
+    if not missing or max_names <= 0:
+        return []
+    n = len(missing)
+    cap = min(int(max_names), n)
+    cursor = _fin_get_cursor()
+    start = 0
+    if cursor:
+        # Prefer exact position; else first ticker strictly after cursor in list order
+        try:
+            start = missing.index(cursor) + 1
+        except ValueError:
+            start = 0
+            for i, t in enumerate(missing):
+                if t > cursor:
+                    start = i
+                    break
+            else:
+                start = 0  # wrap
+    if start >= n:
+        start = 0
+    chunk = missing[start: start + cap]
+    if len(chunk) < cap and start > 0:
+        chunk = chunk + missing[: cap - len(chunk)]
+    return chunk
 
 
 def _fin_pull_seems_stalled(max_idle_min: float = 5.0) -> bool:
@@ -24137,38 +24192,45 @@ def _run_fin_full_pull(job_id: str | None = None, years_back: int | None = None,
                  started_at=time.time(), total=0, done=0, stored=0,
                  universe="us_listed_full")
     tickers: list[str] = []
-    have_n = uni_n = 0
+    have_n = uni_n = total_missing = 0
     try:
-        _fin_job_set(jid, label="📋 Resolving missing list…")
-        tickers, have_n, uni_n = _fin_missing_tickers()
-        total_missing = len(tickers)
+        _fin_job_set(jid, label="📋 Resolving missing list (cursor-aware)…")
+        missing_all, have_n, uni_n = _fin_missing_tickers()
+        total_missing = len(missing_all)
         if chunk_cap is not None and chunk_cap > 0:
-            tickers = tickers[: int(chunk_cap)]
+            # CRITICAL: do NOT always take missing[:150] — that restarts the
+            # same head after every Railway deploy. Advance via durable cursor.
+            tickers = _fin_chunk_from_missing(missing_all, int(chunk_cap))
+        else:
+            tickers = missing_all
+        cur = _fin_get_cursor() or "—"
         _fin_job_set(
             jid,
-            label=f"📋 Store has {have_n:,} · this chunk {len(tickers):,} "
-                  f"of {total_missing:,} missing (universe {uni_n:,})")
+            label=f"📋 Store {have_n:,} · chunk {len(tickers):,} of "
+                  f"{total_missing:,} missing · after {cur}")
     except Exception as e:
         print(f"[fin-full] missing-list failed: {e!s:.160}", flush=True)
         tickers, have_n, uni_n = [], 0, 0
         try:
-            tickers, have_n, uni_n = _fin_missing_tickers()
-            if chunk_cap:
-                tickers = tickers[: int(chunk_cap)]
+            missing_all, have_n, uni_n = _fin_missing_tickers()
+            total_missing = len(missing_all)
+            tickers = (_fin_chunk_from_missing(missing_all, int(chunk_cap))
+                       if chunk_cap else missing_all)
         except Exception:
             pass
 
     _fin_job_set(jid, total=len(tickers), done=0,
                  label=f"🚀 Chunk — {len(tickers):,} missing "
-                       f"(keeping {have_n:,} already stored)…")
+                       f"(keeping {have_n:,} stored · cursor {_fin_get_cursor() or 'start'})…")
     if not tickers:
         _fin_job_set(jid, stage="done", status="done",
                      label=f"✓ Store complete ({have_n:,} names) — nothing missing",
                      result={"periods_stored": 0, "names": 0, "have": have_n})
         return _fin_sync_jobs[jid]
 
-    print(f"[fin-full] RESUME missing-only chunk: have={have_n} "
-          f"chunk={len(tickers)} years={years} job={jid}", flush=True)
+    print(f"[fin-full] RESUME chunk: have={have_n} missing_total={total_missing} "
+          f"chunk={len(tickers)} first={tickers[0]} last={tickers[-1]} "
+          f"cursor={_fin_get_cursor()} years={years} job={jid}", flush=True)
     try:
         _run_financials_sync(jid, tickers, years)
     except Exception as e:
@@ -24216,22 +24278,52 @@ def _run_fin_full_pull(job_id: str | None = None, years_back: int | None = None,
     return _fin_sync_jobs[jid]
 
 
+def _fin_recent_checkpoint_active(min_age_s: float = 0,
+                                  max_age_s: float = 600) -> bool:
+    """True if durable checkpoint shows a run that was still alive recently.
+    Used after deploys so we don't immediately spawn a duplicate chunk while
+    the previous process is still draining (or so we wait out a short blip)."""
+    try:
+        cp = _kv_get("fin_full_pull.checkpoint") or {}
+        ts = cp.get("ts")
+        if not ts:
+            return False
+        from datetime import datetime as _dt
+        age = (_dt.utcnow() - _dt.fromisoformat(
+            str(ts).replace("Z", "")).replace(tzinfo=None)).total_seconds()
+        status = (cp.get("status") or "").lower()
+        if status not in ("running", "syncing", "preparing", "queued", "backup"):
+            return False
+        return min_age_s <= age <= max_age_s
+    except Exception:
+        return False
+
+
 def _fin_start_chunk_async(years: int | None = None, max_names: int | None = None,
                            reason: str = "manual") -> str | None:
     """Start one missing-only chunk in a daemon thread if none is active.
-    Returns job_id or None if a worker is already running."""
+    Returns job_id or None if a worker is already running.
+
+    Uses a durable cursor so each chunk advances past the last finished ticker
+    — deploys/pushes no longer restart the same head-of-queue 150 forever."""
     global _FIN_WORKER_ACTIVE
     if not _FIN_WORKER_LOCK.acquire(blocking=False):
         return None
     try:
         if _FIN_WORKER_ACTIVE:
             return None
-        # Also respect live job heartbeat
         now = time.time()
         for jid, j in list(_fin_sync_jobs.items()):
             if (str(jid).startswith(("FINFULL", "FINCHUNK"))
                     and j.get("status") == "running"
                     and now - float(j.get("updated_at") or 0) < 180):
+                return None
+        # After a push/deploy the old process is dead, but avoid double-firing
+        # if a checkpoint was written in the last 90s (overlapping deploys).
+        if reason != "manual" and reason != "manual-resume":
+            if _fin_recent_checkpoint_active(min_age_s=0, max_age_s=90):
+                print(f"[fin-supervisor] skip launch ({reason}) — checkpoint fresh <90s",
+                      flush=True)
                 return None
         _FIN_WORKER_ACTIVE = True
     finally:
@@ -24246,7 +24338,7 @@ def _fin_start_chunk_async(years: int | None = None, max_names: int | None = Non
         global _FIN_WORKER_ACTIVE
         try:
             print(f"[fin-supervisor] starting chunk job={job_id} cap={cap} "
-                  f"reason={reason}", flush=True)
+                  f"reason={reason} cursor={_fin_get_cursor()}", flush=True)
             _run_fin_full_pull(job_id, yrs, max_names=cap)
         except Exception as e:
             print(f"[fin-supervisor] chunk failed: {e!s:.200}", flush=True)
@@ -24254,8 +24346,9 @@ def _fin_start_chunk_async(years: int | None = None, max_names: int | None = Non
             with _FIN_WORKER_LOCK:
                 _FIN_WORKER_ACTIVE = False
 
+    cur = _fin_get_cursor() or "start"
     _fin_job_set(job_id, stage="queued", status="running",
-                 label=f"Queued chunk ({cap} missing max) · {reason}…",
+                 label=f"Queued chunk ({cap}) after {cur} · {reason}…",
                  started_at=time.time(), total=0, done=0, stored=0,
                  universe="us_listed_full")
     threading.Thread(target=_runner, daemon=True,
@@ -24264,14 +24357,15 @@ def _fin_start_chunk_async(years: int | None = None, max_names: int | None = Non
 
 
 def _auto_fin_supervisor_worker() -> None:
-    """Always-on loop: every few minutes, if names are still missing and no
-    worker is healthy, start another missing-only chunk. Survives stalls from
-    hung SEC calls / deploys better than one giant multi-hour thread.
+    """Always-on loop: if names are still missing and no worker is healthy,
+    start the next cursor-advanced missing-only chunk.
 
-    Never overwrites stored tickers. Safe to leave on 24/7."""
+    Never overwrites stored tickers. Does not restart the same chunk on every
+    deploy — cursor advances after each ticker finishes."""
     import time as _time
-    _time.sleep(75)   # let DB hydrate finish
-    print("[fin-supervisor] online — will chain missing-only chunks until full",
+    # Longer boot delay so a rolling deploy doesn't race two supervisors
+    _time.sleep(120)
+    print("[fin-supervisor] online — cursor-advanced chunks until full",
           flush=True)
     while True:
         try:
@@ -24297,25 +24391,51 @@ def _auto_fin_supervisor_worker() -> None:
                 continue
 
             if not missing:
-                # All universe names are either stored OR marked no-data.
-                # Idle hard: sleep 12h — no SEC traffic, negligible Railway cost
-                # (just a sleeping thread on the already-running web process).
-                print(f"[fin-supervisor] IDLE — have={have_n}/{uni_n} missing=0 "
-                      f"(including no-data skips). Next check in 12h.", flush=True)
+                print(f"[fin-supervisor] IDLE — have={have_n}/{uni_n} missing=0. "
+                      f"Next check in 12h.", flush=True)
                 _time.sleep(12 * 3600)
                 continue
 
-            stalled = _fin_pull_seems_stalled(max_idle_min=4.0)
-            # Keep filling only while true gaps remain
+            # Only launch if truly stalled (no healthy heartbeat) OR no recent work
+            stalled = _fin_pull_seems_stalled(max_idle_min=5.0)
+            live = False
+            now = time.time()
+            for jid, j in list(_fin_sync_jobs.items()):
+                if (str(jid).startswith(("FINFULL", "FINCHUNK"))
+                        and j.get("status") == "running"
+                        and now - float(j.get("updated_at") or 0) < 300):
+                    live = True
+                    break
+            if live:
+                _time.sleep(90)
+                continue
+
+            if not stalled:
+                # Work finished a chunk recently; brief pause then next chunk
+                # (cursor already advanced — this is the NEXT 150, not a replay)
+                last = _kv_get("fin_full_pull.last") or {}
+                last_ts = last.get("ts")
+                if last_ts:
+                    try:
+                        from datetime import datetime as _dt
+                        age = (_dt.utcnow() - _dt.fromisoformat(
+                            str(last_ts).replace("Z", "")).replace(
+                            tzinfo=None)).total_seconds()
+                        if age < 45:
+                            _time.sleep(45 - age)
+                    except Exception:
+                        pass
+
             jid = _fin_start_chunk_async(
                 max_names=_FIN_CHUNK_SIZE,
                 reason=("stall-resume" if stalled else "continue"))
             if jid:
                 print(f"[fin-supervisor] launched {jid} have={have_n} "
-                      f"missing={len(missing)} stalled={stalled}", flush=True)
-                _time.sleep(90)
+                      f"missing={len(missing)} cursor={_fin_get_cursor()} "
+                      f"stalled={stalled}", flush=True)
+                _time.sleep(120)
             else:
-                _time.sleep(60)
+                _time.sleep(90)
         except Exception as e:
             print(f"[fin-supervisor] loop error: {e!s:.200}", flush=True)
             _time.sleep(120)

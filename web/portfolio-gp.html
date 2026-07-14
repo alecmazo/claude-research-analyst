@@ -8675,9 +8675,11 @@ End with the sleeve block at this account's real market value so I can push it t
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
       box('<div style="font-size:12px;color:var(--text-secondary);">🚀 <strong>Resume missing-only</strong> · keeping <strong>'
-        + (j.have != null ? Number(j.have).toLocaleString() : '?') + '</strong> stored · pulling <strong>'
-        + (j.missing != null ? Number(j.missing).toLocaleString() : '?') + '</strong> gaps · job <code>'
-        + _trEsc(j.job_id) + '</code>. Will not overwrite existing names. SEC 429 → wait then continue.</div>');
+        + (j.have != null ? Number(j.have).toLocaleString() : '?') + '</strong> stored · <strong>'
+        + (j.missing != null ? Number(j.missing).toLocaleString() : '?') + '</strong> gaps · chunks of '
+        + (j.chunk != null ? j.chunk : '~150')
+        + ' advance via durable cursor (deploys won’t restart the same batch) · job <code>'
+        + _trEsc(j.job_id || '') + '</code>. No overwrite.</div>');
       if (j.job_id) _pollFinJob(j.job_id, btn, restore);
       else if (btn) { btn.disabled = false; btn.textContent = restore; }
     } catch (e) {
