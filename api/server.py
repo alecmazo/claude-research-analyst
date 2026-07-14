@@ -23930,7 +23930,7 @@ def _fin_job_set(job_id: str, **kw) -> None:
     # Checkpoint every update for full pulls (cheap kv write) so client timeouts
     # / deploys don't lose the "still running" signal.
     try:
-        if str(job_id).startswith("FINFULL") or rec.get("universe") in (
+        if str(job_id).startswith(("FINFULL", "FINCHUNK")) or rec.get("universe") in (
                 "us_listed_full", "us_listed_overnight"):
             _kv_put("fin_full_pull.checkpoint", {
                 "job_id": job_id,
@@ -23940,8 +23940,16 @@ def _fin_job_set(job_id: str, **kw) -> None:
                 "done": rec.get("done"),
                 "total": rec.get("total"),
                 "stored": rec.get("stored"),
+                "names_ok": rec.get("names_ok"),
                 "ts": datetime.utcnow().isoformat() + "Z",
             })
+            # Keep durable lease alive while running so supervisor doesn't
+            # double-launch — and so a dead process's lease expires in ~3 min.
+            if (rec.get("status") or "").lower() in (
+                    "running", "syncing", "preparing", "queued", "backup"):
+                _fin_lease_heartbeat(job_id)
+            elif (rec.get("status") or "").lower() in ("done", "error"):
+                _fin_lease_clear(job_id)
     except Exception:
         pass
 
@@ -24278,51 +24286,82 @@ def _run_fin_full_pull(job_id: str | None = None, years_back: int | None = None,
     return _fin_sync_jobs[jid]
 
 
-def _fin_recent_checkpoint_active(min_age_s: float = 0,
-                                  max_age_s: float = 600) -> bool:
-    """True if durable checkpoint shows a run that was still alive recently.
-    Used after deploys so we don't immediately spawn a duplicate chunk while
-    the previous process is still draining (or so we wait out a short blip)."""
+def _fin_lease_age_s() -> float | None:
+    """Seconds since durable worker lease was last heartbeated. None if no lease."""
     try:
-        cp = _kv_get("fin_full_pull.checkpoint") or {}
-        ts = cp.get("ts")
+        lease = _kv_get("fin_full_pull.lease") or {}
+        ts = lease.get("ts")
         if not ts:
-            return False
+            return None
         from datetime import datetime as _dt
-        age = (_dt.utcnow() - _dt.fromisoformat(
+        return (_dt.utcnow() - _dt.fromisoformat(
             str(ts).replace("Z", "")).replace(tzinfo=None)).total_seconds()
-        status = (cp.get("status") or "").lower()
-        if status not in ("running", "syncing", "preparing", "queued", "backup"):
-            return False
-        return min_age_s <= age <= max_age_s
     except Exception:
+        return None
+
+
+def _fin_lease_is_live(max_age_s: float = 180.0) -> bool:
+    """True if another worker heartbeated the lease within max_age_s.
+    After a deploy the old process is dead — lease goes stale in ≤3 min and
+    a new chunk is allowed. Prevents stuck _FIN_WORKER_ACTIVE forever."""
+    age = _fin_lease_age_s()
+    if age is None:
         return False
+    return age < max_age_s
+
+
+def _fin_lease_heartbeat(job_id: str) -> None:
+    try:
+        _kv_put("fin_full_pull.lease", {
+            "job_id": job_id,
+            "ts": datetime.utcnow().isoformat() + "Z",
+            "pid": os.getpid(),
+        })
+    except Exception:
+        pass
+
+
+def _fin_lease_clear(job_id: str | None = None) -> None:
+    try:
+        lease = _kv_get("fin_full_pull.lease") or {}
+        if job_id and lease.get("job_id") and lease.get("job_id") != job_id:
+            return
+        _kv_put("fin_full_pull.lease", {"job_id": None, "ts": None})
+    except Exception:
+        pass
 
 
 def _fin_start_chunk_async(years: int | None = None, max_names: int | None = None,
                            reason: str = "manual") -> str | None:
-    """Start one missing-only chunk in a daemon thread if none is active.
-    Returns job_id or None if a worker is already running.
+    """Start one missing-only chunk in a daemon thread if none is live.
 
-    Uses a durable cursor so each chunk advances past the last finished ticker
-    — deploys/pushes no longer restart the same head-of-queue 150 forever."""
+    Durable lease + cursor: survives deploys, never replays the same head
+    forever, and cannot wedge on a dead in-memory lock after a hung SEC call."""
     global _FIN_WORKER_ACTIVE
+    force = reason in ("manual", "manual-resume", "stall-resume", "force")
+
     if not _FIN_WORKER_LOCK.acquire(blocking=False):
         return None
     try:
-        if _FIN_WORKER_ACTIVE:
-            return None
         now = time.time()
+        # In-process live job with recent heartbeat
         for jid, j in list(_fin_sync_jobs.items()):
             if (str(jid).startswith(("FINFULL", "FINCHUNK"))
                     and j.get("status") == "running"
-                    and now - float(j.get("updated_at") or 0) < 180):
-                return None
-        # After a push/deploy the old process is dead, but avoid double-firing
-        # if a checkpoint was written in the last 90s (overlapping deploys).
-        if reason != "manual" and reason != "manual-resume":
-            if _fin_recent_checkpoint_active(min_age_s=0, max_age_s=90):
-                print(f"[fin-supervisor] skip launch ({reason}) — checkpoint fresh <90s",
+                    and now - float(j.get("updated_at") or 0) < 120):
+                if not force:
+                    return None
+        # Durable lease from this or a previous process
+        if _fin_lease_is_live(180) and not force:
+            print(f"[fin-supervisor] skip launch ({reason}) — lease still live",
+                  flush=True)
+            return None
+        # Force path: steal stale lease
+        if force and _fin_lease_is_live(180):
+            # Only steal if lease older than 90s (avoid double manual clicks)
+            age = _fin_lease_age_s() or 999
+            if age < 90:
+                print(f"[fin-supervisor] skip force ({reason}) — lease age {age:.0f}s",
                       flush=True)
                 return None
         _FIN_WORKER_ACTIVE = True
@@ -24333,6 +24372,7 @@ def _fin_start_chunk_async(years: int | None = None, max_names: int | None = Non
     job_id = "FINCHUNK_" + _uuid.uuid4().hex[:10]
     yrs = years if years is not None else _FIN_OVERNIGHT_YEARS
     cap = max_names if max_names is not None else _FIN_CHUNK_SIZE
+    _fin_lease_heartbeat(job_id)
 
     def _runner():
         global _FIN_WORKER_ACTIVE
@@ -24343,6 +24383,7 @@ def _fin_start_chunk_async(years: int | None = None, max_names: int | None = Non
         except Exception as e:
             print(f"[fin-supervisor] chunk failed: {e!s:.200}", flush=True)
         finally:
+            _fin_lease_clear(job_id)
             with _FIN_WORKER_LOCK:
                 _FIN_WORKER_ACTIVE = False
 
@@ -24357,16 +24398,24 @@ def _fin_start_chunk_async(years: int | None = None, max_names: int | None = Non
 
 
 def _auto_fin_supervisor_worker() -> None:
-    """Always-on loop: if names are still missing and no worker is healthy,
-    start the next cursor-advanced missing-only chunk.
-
-    Never overwrites stored tickers. Does not restart the same chunk on every
-    deploy — cursor advances after each ticker finishes."""
+    """Always-on loop: if names are still missing and no live lease, start the
+    next cursor-advanced missing-only chunk. Recovers from total stalls within
+    ~3 minutes (stale lease). Never overwrites stored tickers."""
     import time as _time
-    # Longer boot delay so a rolling deploy doesn't race two supervisors
-    _time.sleep(120)
-    print("[fin-supervisor] online — cursor-advanced chunks until full",
+    _time.sleep(45)   # short boot delay — then immediately try to resume
+    print("[fin-supervisor] online — will resume missing-only if lease stale",
           flush=True)
+    # Immediate kick after boot if gaps remain (deploy recovery)
+    try:
+        miss, have_n, _ = _fin_missing_tickers()
+        if miss and not _fin_lease_is_live(120):
+            jid = _fin_start_chunk_async(max_names=_FIN_CHUNK_SIZE,
+                                         reason="boot-resume")
+            print(f"[fin-supervisor] boot-resume job={jid} have={have_n} "
+                  f"missing={len(miss)} cursor={_fin_get_cursor()}", flush=True)
+    except Exception as e:
+        print(f"[fin-supervisor] boot-resume error: {e!s:.160}", flush=True)
+
     while True:
         try:
             if not _fin_overnight_enabled():
@@ -24387,7 +24436,7 @@ def _auto_fin_supervisor_worker() -> None:
                 missing, have_n, uni_n = _fin_missing_tickers()
             except Exception as e:
                 print(f"[fin-supervisor] missing list error: {e!s:.120}", flush=True)
-                _time.sleep(180)
+                _time.sleep(120)
                 continue
 
             if not missing:
@@ -24396,49 +24445,31 @@ def _auto_fin_supervisor_worker() -> None:
                 _time.sleep(12 * 3600)
                 continue
 
-            # Only launch if truly stalled (no healthy heartbeat) OR no recent work
-            stalled = _fin_pull_seems_stalled(max_idle_min=5.0)
-            live = False
-            now = time.time()
-            for jid, j in list(_fin_sync_jobs.items()):
-                if (str(jid).startswith(("FINFULL", "FINCHUNK"))
-                        and j.get("status") == "running"
-                        and now - float(j.get("updated_at") or 0) < 300):
-                    live = True
-                    break
-            if live:
-                _time.sleep(90)
+            # Live lease → worker healthy; wait and recheck
+            if _fin_lease_is_live(150):
+                _time.sleep(45)
                 continue
 
-            if not stalled:
-                # Work finished a chunk recently; brief pause then next chunk
-                # (cursor already advanced — this is the NEXT 150, not a replay)
-                last = _kv_get("fin_full_pull.last") or {}
-                last_ts = last.get("ts")
-                if last_ts:
-                    try:
-                        from datetime import datetime as _dt
-                        age = (_dt.utcnow() - _dt.fromisoformat(
-                            str(last_ts).replace("Z", "")).replace(
-                            tzinfo=None)).total_seconds()
-                        if age < 45:
-                            _time.sleep(45 - age)
-                    except Exception:
-                        pass
-
+            # No live lease but gaps remain → start next chunk (cursor-advanced)
             jid = _fin_start_chunk_async(
                 max_names=_FIN_CHUNK_SIZE,
-                reason=("stall-resume" if stalled else "continue"))
+                reason="continue")
             if jid:
                 print(f"[fin-supervisor] launched {jid} have={have_n} "
-                      f"missing={len(missing)} cursor={_fin_get_cursor()} "
-                      f"stalled={stalled}", flush=True)
-                _time.sleep(120)
+                      f"missing={len(missing)} cursor={_fin_get_cursor()}",
+                      flush=True)
+                _time.sleep(60)
             else:
-                _time.sleep(90)
+                # Could not start — clear wedged in-memory flag if lease is dead
+                age = _fin_lease_age_s()
+                if age is None or age > 180:
+                    with _FIN_WORKER_LOCK:
+                        _FIN_WORKER_ACTIVE = False
+                    print("[fin-supervisor] cleared wedged worker flag", flush=True)
+                _time.sleep(45)
         except Exception as e:
             print(f"[fin-supervisor] loop error: {e!s:.200}", flush=True)
-            _time.sleep(120)
+            _time.sleep(60)
 
 
 # Start continuous missing-only supervisor (alongside overnight scheduler)
@@ -24651,22 +24682,22 @@ def financials_overnight_now(request: Request, background_tasks: BackgroundTasks
             pass
         # Chunked resume — supervisor keeps chaining until missing is empty.
         # One giant multi-hour thread was stalling around ~1–2k names on Railway.
+        # Force steal lease if stale so a wedged worker can't block Resume forever
         job_id = _fin_start_chunk_async(years=years, max_names=_FIN_CHUNK_SIZE,
-                                        reason="manual-resume")
+                                        reason="force")
         if not job_id:
-            # Worker already running — surface its job if possible
             live = None
             now = time.time()
             for jid, j in list(_fin_sync_jobs.items()):
                 if (str(jid).startswith(("FINFULL", "FINCHUNK"))
                         and j.get("status") == "running"
-                        and now - float(j.get("updated_at") or 0) < 300):
+                        and now - float(j.get("updated_at") or 0) < 180):
                     live = jid
                     break
             return {"ok": True, "job_id": live, "mode": "full",
                     "have": have_n, "missing": miss_n, "universe": uni_n,
                     "note": f"Worker already running (missing-only). Keeping {have_n:,} "
-                            f"stored; {miss_n:,} gaps left. Poll existing job or wait."}
+                            f"stored; {miss_n:,} gaps left. Wait ~3 min if stuck, then click again."}
         return {"ok": True, "job_id": job_id, "mode": "full",
                 "years_back": years, "chunk": _FIN_CHUNK_SIZE,
                 "have": have_n, "missing": miss_n, "universe": uni_n,
