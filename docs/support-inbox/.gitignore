@@ -1,0 +1,5 @@
+# Local agent packets (may contain user descriptions / PII). Keep README only.
+OPEN.md
+SUP_*.md
+*.png
+*.jpg
