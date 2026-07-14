@@ -6204,7 +6204,8 @@ End with the sleeve block at this account's real market value so I can push it t
     <!-- ── System ── -->
     <h3 class="settings-group-head" id="set-system">System</h3>
     <div class="settings-grid">
-      <section class="panel settings-span-2" data-collapsible="1" data-expanded="1">
+      <!-- Automation + Railway side by side (equal grid columns) -->
+      <section class="panel" data-collapsible="1" data-expanded="1">
         <header class="panel-head">
           <span class="panel-title">Automation Schedule</span>
           <span class="panel-badge">Pacific</span>
@@ -6213,7 +6214,7 @@ End with the sleeve block at this account's real market value so I can push it t
           <div class="auto-row">
             <div class="auto-label">
               <strong>🌐 Daily Pulse</strong>
-              <span>Live X market pulse — your book + the tape</span>
+              <span>Live X market pulse — book + tape</span>
             </div>
             <label class="auto-toggle" title="Enable / disable">
               <input type="checkbox" id="auto-brief-enabled" checked>
@@ -6225,7 +6226,7 @@ End with the sleeve block at this account's real market value so I can push it t
           <div class="auto-row">
             <div class="auto-label">
               <strong>⚡ Market Pulse Scan</strong>
-              <span>All saved-report tickers → Market Pulse</span>
+              <span>Saved-report tickers → Pulse</span>
             </div>
             <label class="auto-toggle" title="Enable / disable">
               <input type="checkbox" id="auto-pulse-enabled" checked>
@@ -6237,7 +6238,7 @@ End with the sleeve block at this account's real market value so I can push it t
           <div class="auto-row">
             <div class="auto-label">
               <strong>🔗 SnapTrade Sync</strong>
-              <span>Fidelity holdings → Positions &amp; NAV (pre-market)</span>
+              <span>Fidelity → Positions &amp; NAV</span>
             </div>
             <label class="auto-toggle" title="Enable / disable">
               <input type="checkbox" id="auto-snap-enabled">
