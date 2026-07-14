@@ -25530,13 +25530,85 @@ def _db_quotes(symbols, max_age_s=None) -> dict:
         return {}
 
 
-def _warm_quotes_for_comps(symbols: list, cap: int = 16) -> dict:
-    """Return quotes for comps, filling missing prices via free batch_quotes.
+def _quote_one_yahoo_chart(sym: str) -> dict | None:
+    """Direct Yahoo chart API (no yfinance). Free, last-resort live price."""
+    try:
+        import urllib.request
+        ysym = _resolve_ticker_alias(sym)
+        url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{ysym}"
+               f"?range=5d&interval=1d")
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "Mozilla/5.0 DGACapital/1.0"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+        result = ((data.get("chart") or {}).get("result") or [None])[0]
+        if not result:
+            return None
+        meta = result.get("meta") or {}
+        px = meta.get("regularMarketPrice") or meta.get("previousClose")
+        prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+        if px is None:
+            closes = ((result.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
+            closes = [c for c in closes if c is not None]
+            if closes:
+                px = closes[-1]
+                prev = closes[-2] if len(closes) >= 2 else None
+        if px is None:
+            return None
+        pct = None
+        if prev not in (None, 0):
+            pct = (float(px) - float(prev)) / float(prev) * 100.0
+        return {"price": float(px), "pct_change": pct, "source": "yahoo-chart"}
+    except Exception as e:
+        print(f"[fin-comps] yahoo-chart {sym}: {e!s:.100}", flush=True)
+        return None
 
-    Peer comps were blank for MSFT-class names because company_financials had
-    SEC rows but market_quotes only held the subject ticker. This warms up to
-    ``cap`` missing symbols, persists them, and returns the merged map.
-    No LLM. Network only when the store is missing prices.
+
+def _quote_one_yfinance_fast(sym: str) -> dict | None:
+    """Per-ticker yfinance fast_info / info — when batch download misses."""
+    if not _YFINANCE_OK:
+        return None
+    try:
+        import yfinance as yf
+        ysym = _resolve_ticker_alias(sym)
+        t = yf.Ticker(ysym)
+        px = prev = None
+        try:
+            fi = t.fast_info
+            px = getattr(fi, "last_price", None) or getattr(fi, "regular_market_price", None)
+            prev = getattr(fi, "previous_close", None)
+        except Exception:
+            pass
+        if px is None:
+            try:
+                info = t.info or {}
+                px = info.get("regularMarketPrice") or info.get("currentPrice") or info.get("previousClose")
+                prev = info.get("previousClose") or prev
+            except Exception:
+                pass
+        if px is None:
+            return None
+        pct = None
+        if prev not in (None, 0):
+            pct = (float(px) - float(prev)) / float(prev) * 100.0
+        return {"price": float(px), "pct_change": pct, "source": "yfinance-fast"}
+    except Exception as e:
+        print(f"[fin-comps] yf-fast {sym}: {e!s:.100}", flush=True)
+        return None
+
+
+def _warm_quotes_for_comps(symbols: list, cap: int = 16) -> dict:
+    """Fill missing prices for comps using multiple free sources.
+
+    Cascade (stop on first hit per ticker):
+      1. market_quotes store (any age)
+      2. batch_quotes (Yahoo download + Tiingo + store)
+      3. market_data.get_quotes (Tradier → yfinance)
+      4. yfinance Ticker.fast_info / .info per symbol
+      5. Yahoo chart HTTP API
+
+    Never treat a miss as success — keep trying sources. Persist hits so the
+    next dashboard load is free. No LLM.
     """
     syms = []
     seen = set()
@@ -25548,44 +25620,88 @@ def _warm_quotes_for_comps(symbols: list, cap: int = 16) -> dict:
     if not syms:
         return {}
     have = _db_quotes(syms)
-    miss = [t for t in syms if t not in have or have[t].get("price") is None][: max(1, min(int(cap), 24))]
+    miss = [t for t in syms if t not in have or have[t].get("price") is None]
+    miss = miss[: max(1, min(int(cap), 24))]
     if not miss:
         return have
+
+    # 1) batch_quotes — Yahoo batch + Tiingo + any-age store (existing cascade)
     try:
         raw = batch_quotes(",".join(miss)) or {}
-    except Exception as e:
-        print(f"[fin-comps] quote warm failed: {e!s:.140}", flush=True)
-        return have
-    try:
-        with _fund_conn() as conn, conn.cursor() as cur:
-            for sym in miss:
-                q = raw.get(sym) or raw.get(sym.upper()) or {}
-                px = q.get("price")
-                if px is None:
-                    continue
-                _store_quote(cur, sym, {
-                    "price": float(px),
-                    "prev_close": q.get("prev_close") or q.get("previous_close"),
-                    "pct_change": q.get("pct_change"),
-                    "source": "yfinance-comps",
-                })
-                have[sym] = {
-                    "price": float(px),
-                    "pct_change": q.get("pct_change"),
-                    "as_of": None,
-                }
-            conn.commit()
-    except Exception as e:
-        print(f"[fin-comps] quote persist failed: {e!s:.140}", flush=True)
-        # Still use live results even if DB write fails
-        for sym in miss:
+        for sym in list(miss):
             q = raw.get(sym) or {}
             if q.get("price") is not None:
                 have[sym] = {
                     "price": float(q["price"]),
                     "pct_change": q.get("pct_change"),
-                    "as_of": None,
+                    "source": q.get("source") or "batch_quotes",
                 }
+        miss = [t for t in miss if t not in have or have[t].get("price") is None]
+    except Exception as e:
+        print(f"[fin-comps] batch_quotes warm failed: {e!s:.140}", flush=True)
+
+    # 2) market_data (Tradier first, then yfinance fill)
+    if miss:
+        try:
+            import market_data as _md
+            mdq = _md.get_quotes(miss) or {}
+            for sym in list(miss):
+                q = mdq.get(sym) or {}
+                px = q.get("price") or q.get("last") or q.get("close")
+                if px is None:
+                    continue
+                prev = q.get("prev_close") or q.get("previous_close")
+                pct = q.get("pct_change")
+                if pct is None and prev not in (None, 0):
+                    pct = (float(px) - float(prev)) / float(prev) * 100.0
+                have[sym] = {
+                    "price": float(px),
+                    "pct_change": pct,
+                    "source": q.get("source") or "market_data",
+                }
+            miss = [t for t in miss if t not in have or have[t].get("price") is None]
+            if have:
+                print(f"[fin-comps] market_data filled {[s for s in have if s in mdq]}", flush=True)
+        except Exception as e:
+            print(f"[fin-comps] market_data warm failed: {e!s:.140}", flush=True)
+
+    # 3) Per-ticker yfinance fast_info
+    if miss:
+        for sym in list(miss):
+            q = _quote_one_yfinance_fast(sym)
+            if q and q.get("price") is not None:
+                have[sym] = q
+        miss = [t for t in miss if t not in have or have[t].get("price") is None]
+
+    # 4) Yahoo chart HTTP API (works when yfinance packaging fails)
+    if miss:
+        for sym in list(miss):
+            q = _quote_one_yahoo_chart(sym)
+            if q and q.get("price") is not None:
+                have[sym] = q
+        miss = [t for t in miss if t not in have or have[t].get("price") is None]
+
+    if miss:
+        print(f"[fin-comps] still no price after all sources: {miss}", flush=True)
+
+    # Persist successful warms for next free load
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            for sym, q in have.items():
+                if q.get("price") is None:
+                    continue
+                if q.get("source") in (None, "store"):
+                    continue  # already from DB
+                _store_quote(cur, sym, {
+                    "price": float(q["price"]),
+                    "prev_close": None,
+                    "pct_change": q.get("pct_change"),
+                    "source": (q.get("source") or "comps-warm")[:40],
+                })
+            conn.commit()
+    except Exception as e:
+        print(f"[fin-comps] quote persist failed: {e!s:.140}", flush=True)
+
     return have
 
 
@@ -26684,6 +26800,8 @@ def _build_peer_comps(tk: str, subject_metrics: dict, limit: int = 8) -> dict:
             mkt = (price * shares) if (price and shares) else None
             ev = (mkt + (debt or 0.0) - cash) if mkt is not None else None
             pe = (price / eps) if (price and eps and eps > 0) else None
+            # Negative / zero EPS → PE not meaningful (e.g. SNOW) — not a quote failure
+            pe_nm = bool(eps is not None and eps <= 0 and price is not None)
             ev_eb = (ev / ebitda) if (ev is not None and ebitda and ebitda > 0) else None
             nm = _dash_f((fin or {}).get("net_margin"))
             if nm is not None and abs(nm) <= 2:
@@ -26703,6 +26821,7 @@ def _build_peer_comps(tk: str, subject_metrics: dict, limit: int = 8) -> dict:
                 "price": round(price, 2) if price is not None else None,
                 "market_cap": round(mkt) if mkt is not None else None,
                 "pe": round(pe, 2) if pe is not None else None,
+                "pe_nm": pe_nm,  # True → show n/m (loss-making), not blank failure
                 "ev_ebitda": round(ev_eb, 2) if ev_eb is not None else None,
                 "net_margin_pct": round(nm_pct, 2) if nm_pct is not None else None,
                 "rev_yoy_pct": round(yoy, 2) if yoy is not None else None,
@@ -27359,8 +27478,13 @@ def _build_fin_sheet(ticker: str) -> dict:
         return {"ok": False, "error": f"No financials stored for {tk}. Pull SEC data first."}
 
     meta = _db_meta([tk]).get(tk) or {}
+    # Prefer store, then multi-source warm (same cascade as comps)
     q = _db_quotes([tk]).get(tk) or {}
     price = _vl_f(q.get("price"))
+    if price is None:
+        warmed = _warm_quotes_for_comps([tk], cap=1)
+        q = warmed.get(tk) or q
+        price = _vl_f(q.get("price"))
     entity = None
     if annuals:
         entity = annuals[-1].get("entity_name")

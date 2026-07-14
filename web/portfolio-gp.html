@@ -8498,6 +8498,11 @@ End with the sleeve block at this account's real market value so I can push it t
       const peers = pc.peers || [];
       if (peers.length) {
         const fmtX = v => v == null ? '—' : Number(v).toFixed(1) + '×';
+        const fmtPE = p => {
+          if (p.pe != null) return Number(p.pe).toFixed(1) + '×';
+          if (p.pe_nm) return '<span title="Not meaningful — negative or zero EPS">n/m</span>';
+          return '—';
+        };
         const fmtP = v => v == null ? '—' : ((v >= 0 ? '+' : '') + Number(v).toFixed(1) + '%');
         const fmtM = v => v == null ? '—' : _gfCap(v);
         const headRow = `<tr style="font-size:9px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;color:var(--text-tertiary);">` +
@@ -8519,7 +8524,7 @@ End with the sleeve block at this account's real market value so I can push it t
             `</td>` +
             `<td style="text-align:right;padding:6px;font-variant-numeric:tabular-nums;font-size:12px;">${p.price != null ? '$' + Number(p.price).toLocaleString('en-US',{maximumFractionDigits:2}) : '—'}</td>` +
             `<td style="text-align:right;padding:6px;font-variant-numeric:tabular-nums;font-size:12px;">${fmtM(p.market_cap)}</td>` +
-            `<td style="text-align:right;padding:6px;font-variant-numeric:tabular-nums;font-size:12px;">${fmtX(p.pe)}</td>` +
+            `<td style="text-align:right;padding:6px;font-variant-numeric:tabular-nums;font-size:12px;color:${p.pe_nm ? 'var(--text-tertiary)' : 'inherit'};">${fmtPE(p)}</td>` +
             `<td style="text-align:right;padding:6px;font-variant-numeric:tabular-nums;font-size:12px;">${fmtX(p.ev_ebitda)}</td>` +
             `<td style="text-align:right;padding:6px;font-variant-numeric:tabular-nums;font-size:12px;">${p.net_margin_pct != null ? Number(p.net_margin_pct).toFixed(1) + '%' : '—'}</td>` +
             `<td style="text-align:right;padding:6px 0;font-variant-numeric:tabular-nums;font-size:12px;color:${_sgn(p.rev_yoy_pct)};">${fmtP(p.rev_yoy_pct)}</td></tr>`;
