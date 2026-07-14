@@ -4916,11 +4916,15 @@ End with the sleeve block at this account's real market value so I can push it t
       </div>
     </section>
 
-    <!-- ── Sync / build ── -->
-    <section class="panel">
+    <!-- ── Sync / build ──
+         Coverage chips collapse by default when the store is large (thousands of
+         names after a full pull). Expand via the summary row; code is live now
+         so after the pull finishes a refresh already stays compact. -->
+    <section class="panel" id="fin-store-panel">
       <header class="panel-head">
         <span class="panel-title">📊 Financials store</span>
         <span class="panel-badge" id="fin-coverage-badge" style="background:#e0f2fe;color:#075985;">—</span>
+        <span id="fin-store-compact-hint" style="font-size:10.5px;color:var(--text-tertiary);margin-left:4px;"></span>
       </header>
       <div class="panel-body" style="padding:14px 16px;">
         <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.5;margin-bottom:10px;">
@@ -4953,7 +4957,15 @@ End with the sleeve block at this account's real market value so I can push it t
         </div>
         <div id="fin-sync-status" style="margin-top:10px;"></div>
         <div id="fin-universe-meta" style="margin-top:6px;font-size:11px;color:var(--text-tertiary);"></div>
-        <div id="fin-coverage" style="margin-top:10px;font-size:11px;color:var(--text-tertiary);"></div>
+
+        <!-- Coverage chips: collapsed by default when store is large -->
+        <details id="fin-coverage-details" style="margin-top:10px;" open>
+          <summary id="fin-coverage-summary" style="cursor:pointer;font-size:11.5px;font-weight:600;color:var(--text-secondary);user-select:none;list-style:none;display:flex;align-items:center;gap:8px;">
+            <span class="ac-chevron" id="fin-coverage-chevron" style="font-size:10px;transition:transform .15s;">▸</span>
+            <span id="fin-coverage-summary-text">Covered names</span>
+          </summary>
+          <div id="fin-coverage" style="margin-top:8px;font-size:11px;color:var(--text-tertiary);max-height:220px;overflow:auto;"></div>
+        </details>
       </div>
     </section>
 
@@ -8553,16 +8565,78 @@ End with the sleeve block at this account's real market value so I can push it t
       svg + '</div>';
   }
 
+  // Collapse ticker-chip list when the store is large so the page stays usable
+  // after a full US pull (thousands of names). Threshold + helpers ready now;
+  // after the pull finishes, a refresh (or sync-complete) keeps the card compact.
+  const FIN_COVERAGE_COLLAPSE_AT = 40;   // auto-collapse chip list at/above this
+  const FIN_COVERAGE_CHIP_CAP = 120;     // max chips rendered when expanded (perf)
+
+  function _finCoverageCollapse(force) {
+    const det = document.getElementById('fin-coverage-details');
+    if (!det) return;
+    if (force === true) det.open = false;
+    else if (force === false) det.open = true;
+    _finCoverageSyncChevron();
+  }
+
+  function _finCoverageSyncChevron() {
+    const det = document.getElementById('fin-coverage-details');
+    const ch = document.getElementById('fin-coverage-chevron');
+    if (ch && det) ch.style.transform = det.open ? 'rotate(90deg)' : '';
+  }
+
   async function _loadFinCoverage() {
     try {
       const d = await (await window.dgaFetch('/api/financials/coverage')).json();
       const cov = (d && d.coverage) || [];
       const badge = document.getElementById('fin-coverage-badge');
       const el = document.getElementById('fin-coverage');
-      if (badge) badge.textContent = cov.length ? (cov.length + ' names') : 'empty';
-      if (el) el.innerHTML = cov.length
-        ? cov.map(c => '<span title="'+_trEsc(c.entity_name||'')+' · '+_trEsc(c.earliest||'')+' → '+_trEsc(c.latest||'')+'" style="display:inline-block;margin:0 6px 4px 0;font-family:\'SF Mono\',monospace;font-size:10.5px;background:var(--gray-100);border:1px solid var(--border-subtle);padding:1px 7px;border-radius:9px;">'+_trEsc(c.ticker)+' · '+c.quarters+'q/'+c.annuals+'y</span>').join('')
-        : 'No financials stored yet — pick a universe and click “Sync from SEC”.';
+      const sumTxt = document.getElementById('fin-coverage-summary-text');
+      const hint = document.getElementById('fin-store-compact-hint');
+      const det = document.getElementById('fin-coverage-details');
+      if (badge) badge.textContent = cov.length ? (cov.length.toLocaleString() + ' names') : 'empty';
+      if (sumTxt) {
+        sumTxt.textContent = cov.length
+          ? ('Covered names · ' + cov.length.toLocaleString()
+             + (cov.length >= FIN_COVERAGE_COLLAPSE_AT ? ' (collapsed — expand to browse)' : ''))
+          : 'Covered names';
+      }
+      if (hint) {
+        hint.textContent = cov.length >= FIN_COVERAGE_COLLAPSE_AT
+          ? '· ticker list collapsed to save space'
+          : '';
+      }
+      if (el) {
+        if (!cov.length) {
+          el.innerHTML = 'No financials stored yet — pick a universe and click “Sync from SEC”.';
+        } else {
+          // Cap rendered chips for DOM perf; full count stays on the badge.
+          const show = cov.slice(0, FIN_COVERAGE_CHIP_CAP);
+          const more = cov.length - show.length;
+          el.innerHTML = show.map(c =>
+            '<span title="'+_trEsc(c.entity_name||'')+' · '+_trEsc(c.earliest||'')+' → '+_trEsc(c.latest||'')
+            +'" style="display:inline-block;margin:0 6px 4px 0;font-family:\'SF Mono\',monospace;font-size:10.5px;background:var(--gray-100);border:1px solid var(--border-subtle);padding:1px 7px;border-radius:9px;">'
+            +_trEsc(c.ticker)+' · '+c.quarters+'q/'+c.annuals+'y</span>'
+          ).join('') + (more > 0
+            ? '<span style="display:inline-block;margin:0 0 4px;font-size:10.5px;color:var(--text-tertiary);">+'
+              + more.toLocaleString() + ' more (use Company dashboard search / datalist)</span>'
+            : '');
+        }
+      }
+      // Auto-collapse when large (don't fight the user if they already expanded
+      // this session — only force-collapse when crossing the threshold first time
+      // or after a completed pull via _finCoverageCollapse(true)).
+      if (det && cov.length >= FIN_COVERAGE_COLLAPSE_AT && det.dataset.userToggled !== '1') {
+        det.open = false;
+      }
+      if (det && !det.dataset.wired) {
+        det.dataset.wired = '1';
+        det.addEventListener('toggle', () => {
+          det.dataset.userToggled = '1';
+          _finCoverageSyncChevron();
+        });
+      }
+      _finCoverageSyncChevron();
     } catch(_) {}
     // Universe counts + overnight + storage note
     try {
@@ -8669,7 +8743,12 @@ End with the sleeve block at this account's real market value so I can push it t
           box('<div style="background:var(--success-50);border:1px solid #bbf7d0;color:var(--success-700);border-radius:8px;padding:9px 12px;font-size:12px;">✓ '
             + _trEsc(s.label || 'Done') + (n ? ' · ' + n + ' periods' : '') + '</div>');
           if (btn) { btn.disabled = false; btn.textContent = restoreLabel; }
-          _loadFinCoverage();
+          // After a bulk pull finishes, collapse the huge ticker list so the page stays usable.
+          try {
+            const det = document.getElementById('fin-coverage-details');
+            if (det) det.dataset.userToggled = '';  // allow auto-collapse
+          } catch (_) {}
+          _loadFinCoverage().then(() => _finCoverageCollapse(true));
         } else if (s.status === 'error') {
           // Auto-retry full pull once on hard error (remaining missing only)
           if (resumeAttempts < 2) {
