@@ -4945,7 +4945,7 @@
       <div class="dga-dialog" style="width:min(560px,94vw);height:auto;max-height:88vh;resize:both;">
         <div class="dga-dialog-handle" style="display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--panel-edge);">
           <span style="font-size:16px;font-weight:800;letter-spacing:0.8px;color:var(--text-primary);">${tk}</span>
-          <span style="font-size:9px;font-weight:800;letter-spacing:0.6px;padding:2px 7px;border-radius:4px;background:rgba(34,197,94,0.12);color:#15803d;">FREE · NO AI</span>
+          <span style="font-size:9px;font-weight:800;letter-spacing:0.6px;padding:2px 7px;border-radius:4px;background:rgba(34,197,94,0.12);color:#15803d;">NO AI</span>
           <span id="sp-price" style="font-size:14px;font-weight:800;font-variant-numeric:tabular-nums;margin-left:4px;"></span>
           <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
             <button type="button" id="sp-wl" class="tab-btn" style="font-size:10px;">+ Watchlist</button>
