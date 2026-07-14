@@ -34089,7 +34089,31 @@ def _ensure_support_tickets_table(conn=None) -> None:
                 pass
 
 
+def _support_agent_token_ok(request: Request) -> bool:
+    """Allow coding agents to read/update tickets with SUPPORT_AGENT_TOKEN
+    (Railway env) — no interactive GP login required for headless fix loops."""
+    expected = (os.environ.get("SUPPORT_AGENT_TOKEN") or "").strip()
+    if not expected or len(expected) < 16:
+        return False
+    got = (request.headers.get("x-support-agent-token")
+           or request.headers.get("x-agent-token")
+           or "").strip()
+    if not got:
+        auth = (request.headers.get("authorization") or "").strip()
+        if auth.lower().startswith("bearer "):
+            got = auth[7:].strip()
+    return bool(got) and got == expected
+
+
 def _support_gp_only(request: Request) -> dict:
+    """GP/admin JWT, or SUPPORT_AGENT_TOKEN for headless agent sessions."""
+    if _support_agent_token_ok(request):
+        return {
+            "role": "admin",
+            "email": "agent@support.local",
+            "sub": "support-agent",
+            "agent": True,
+        }
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only — support tickets are not available to LPs")
