@@ -3103,7 +3103,74 @@ def watchlist_get(request: Request):
                 "pct":   q.get("pct_change"),
             }
 
-    return {"tickers": tickers, "quotes": quotes}
+    # Imminent / just-reported earnings (Nasdaq free calendar) + saved-report links
+    earnings: dict[str, dict] = {}
+    report_tickers: set[str] = set()
+    if tickers:
+        try:
+            from market_data import earnings_upcoming
+            # Horizon: next 5 calendar days + yesterday (so "just reported" stays visible)
+            raw_e = earnings_upcoming(tickers, horizon_days=5, include_past_days=1) or {}
+            for tk, ev in raw_e.items():
+                du = int(ev.get("days_until") or 0)
+                tlabel = (ev.get("time") or "").lower()
+                if "pre" in tlabel:
+                    sess = "BMO"
+                elif "after" in tlabel or "post" in tlabel:
+                    sess = "AMC"
+                else:
+                    sess = ""
+                earnings[tk] = {
+                    "date": ev.get("date"),
+                    "days_until": du,
+                    "session": sess,
+                    "time": ev.get("time") or "",
+                    "fiscal_quarter": ev.get("fiscal_quarter") or "",
+                    "eps_forecast": ev.get("eps_forecast") or "",
+                    "label": (
+                        "TODAY" if du == 0 else
+                        ("YDAY" if du == -1 else
+                         (f"{du}d" if du > 0 else f"{abs(du)}d ago"))
+                    ),
+                }
+        except Exception as e:
+            print(f"[watchlist] earnings calendar failed: {e!s:.160}", flush=True)
+        # Which watchlist names have a saved DGA report (clickable)
+        try:
+            if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+                with _fund_conn() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT ticker FROM analyst_reports
+                         WHERE archived IS NOT TRUE
+                           AND ticker = ANY(%s)
+                    """, (list(tickers),))
+                    report_tickers = {(r[0] or "").upper() for r in (cur.fetchall() or []) if r and r[0]}
+        except Exception as e:
+            print(f"[watchlist] report lookup failed: {e!s:.160}", flush=True)
+
+    # Attach has_report onto earnings rows; also surface reports without earnings
+    for tk in list(earnings.keys()):
+        earnings[tk]["has_report"] = tk in report_tickers
+    reports_map = {tk: True for tk in report_tickers}
+
+    # Sort: earnings imminent first (soonest), then alpha
+    def _wl_sort_key(tk: str):
+        ev = earnings.get(tk)
+        if ev is not None:
+            du = int(ev.get("days_until") if ev.get("days_until") is not None else 99)
+            # today/soon first; past (just reported) after upcoming
+            return (0 if du >= 0 else 1, abs(du), tk)
+        return (2, 99, tk)
+
+    tickers_sorted = sorted(tickers, key=_wl_sort_key)
+
+    return {
+        "tickers": tickers_sorted,
+        "quotes": quotes,
+        "earnings": earnings,
+        "reports": reports_map,
+        "earnings_horizon_days": 5,
+    }
 
 
 class WatchlistAddRequest(BaseModel):

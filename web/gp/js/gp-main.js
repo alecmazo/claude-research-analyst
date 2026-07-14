@@ -1007,7 +1007,12 @@
       const r = await window.dgaFetch('/api/watchlist');
       if (!r.ok) throw new Error('watchlist ' + r.status);
       const data = await r.json();
-      renderWatchlist(data.tickers || [], data.quotes || {});
+      renderWatchlist(
+        data.tickers || [],
+        data.quotes || {},
+        data.earnings || {},
+        data.reports || {}
+      );
     } catch (e) {
       console.warn('[watchlist]', e);
       document.getElementById('wl-rows').innerHTML =
@@ -1015,9 +1020,29 @@
     }
   }
 
-  function renderWatchlist(tickers, quotes) {
+  function _wlEarnChip(tk, earn) {
+    if (!earn) return '';
+    const du = earn.days_until;
+    const sess = earn.session ? ' ' + earn.session : '';
+    const label = earn.label || (du === 0 ? 'TODAY' : (du + 'd'));
+    const dateStr = earn.date || '';
+    const fq = earn.fiscal_quarter ? (' · ' + earn.fiscal_quarter) : '';
+    const eps = earn.eps_forecast ? (' · est ' + earn.eps_forecast) : '';
+    let cls = 'wl-earn';
+    if (du === 0) cls += ' wl-earn-today';
+    else if (du < 0) cls += ' wl-earn-past';
+    else if (du <= 2) cls += ' wl-earn-soon';
+    const tip = 'Earnings ' + (du === 0 ? 'TODAY' : (du === -1 ? 'yesterday' : ('in ' + du + 'd')))
+      + (dateStr ? ' (' + dateStr + ')' : '') + sess + fq + eps
+      + (earn.has_report ? ' · click 📄 to open saved report' : ' · no saved report yet');
+    return '<span class="' + cls + '" title="' + _cfEsc(tip) + '">EARN ' + _cfEsc(label) + sess + '</span>';
+  }
+
+  function renderWatchlist(tickers, quotes, earnings, reports) {
     const rows = document.getElementById('wl-rows');
     document.getElementById('wl-count').textContent = String(tickers.length);
+    earnings = earnings || {};
+    reports = reports || {};
     if (!tickers.length) {
       rows.innerHTML = `<div style="padding:14px; font-size:12px; color:var(--dim); text-align:center;">
         No tickers yet. Add one below.
@@ -1026,10 +1051,16 @@
     }
     rows.innerHTML = tickers.map(tk => {
       const q = quotes[tk] || {};
+      const earn = earnings[tk] || null;
+      const hasRep = !!(reports[tk] || (earn && earn.has_report));
+      const repBtn = hasRep
+        ? ('<button type="button" class="wl-report-btn" data-open-report="' + tk + '"'
+          + ' title="Open saved DGA report for ' + tk + '">📄</button>')
+        : '';
       return `
-        <div class="wl-row" data-ticker="${tk}">
-          <div>
-            <div class="wl-tk">${tk}${_quoteStaleChip(q)}</div>
+        <div class="wl-row${earn ? ' wl-row-earn' : ''}" data-ticker="${tk}">
+          <div class="wl-left">
+            <div class="wl-tk">${tk}${_quoteStaleChip(q)}${_wlEarnChip(tk, earn)}${repBtn}</div>
           </div>
           <div class="wl-right">
             <div class="wl-px">${q.price != null ? '$' + fmtPx(q.price) : '—'}</div>
@@ -1048,11 +1079,37 @@
         loadWatchlist();
       });
     });
+    rows.querySelectorAll('[data-open-report]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const tk = btn.getAttribute('data-open-report');
+        if (tk && typeof openReport === 'function') openReport(tk);
+      });
+    });
     rows.querySelectorAll('.wl-row').forEach(row => {
       row.addEventListener('click', (e) => {
-        if (e.target.closest('[data-remove]')) return;
+        if (e.target.closest('[data-remove], [data-open-report], .wl-earn')) return;
         const tk = row.getAttribute('data-ticker');
-        if (tk) openGuruFocus(tk);
+        // Prefer saved report when present; else free snapshot
+        if (tk && reports[tk] && typeof openReport === 'function') {
+          openReport(tk);
+        } else if (tk) {
+          if (typeof openStockPeek === 'function') openStockPeek(tk);
+          else if (typeof openGuruFocus === 'function') openGuruFocus(tk);
+        }
+      });
+    });
+    // Click earnings chip → report if available, else free snapshot
+    rows.querySelectorAll('.wl-earn').forEach(chip => {
+      chip.style.cursor = 'pointer';
+      chip.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const row = chip.closest('.wl-row');
+        const tk = row && row.getAttribute('data-ticker');
+        if (!tk) return;
+        if (reports[tk] && typeof openReport === 'function') openReport(tk);
+        else if (typeof openStockPeek === 'function') openStockPeek(tk);
+        else if (typeof openGuruFocus === 'function') openGuruFocus(tk);
       });
     });
   }

@@ -463,3 +463,101 @@ def yahoo_market_movers(min_price: float = 3.0, min_market_cap: float = 2e9,
         if not got:
             print(f"[market_data] yahoo movers {scr}: no data", flush=True)
     return list(out.values())
+
+
+# ── Nasdaq earnings calendar (free, no key) ──────────────────────────────────
+# Used to flag imminent quarterly results on the GP watchlist.
+_EARNINGS_CACHE: dict = {}   # day_iso -> (epoch, rows)
+_EARNINGS_TTL_S = 4 * 3600
+
+
+def nasdaq_earnings_for_day(day_iso: str) -> list[dict]:
+    """Earnings scheduled for a calendar day (YYYY-MM-DD) from Nasdaq's free API.
+
+    Returns list of {symbol, name, time, fiscal_quarter, eps_forecast, ...}.
+    Empty list on failure — never raises.
+    """
+    import time as _time
+    day_iso = (day_iso or "")[:10]
+    if not day_iso:
+        return []
+    hit = _EARNINGS_CACHE.get(day_iso)
+    if hit and _time.time() - hit[0] < _EARNINGS_TTL_S:
+        return hit[1]
+    rows_out: list[dict] = []
+    try:
+        import requests
+        r = requests.get(
+            "https://api.nasdaq.com/api/calendar/earnings",
+            params={"date": day_iso},
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; DGA-Capital/1.0)",
+                "Accept": "application/json",
+            },
+            timeout=12,
+        )
+        if r.status_code == 200:
+            data = (r.json() or {}).get("data") or {}
+            for row in (data.get("rows") or []):
+                sym = (row.get("symbol") or "").strip().upper()
+                if not sym:
+                    continue
+                rows_out.append({
+                    "symbol": sym,
+                    "name": row.get("name") or "",
+                    "time": row.get("time") or "",  # time-pre-market / time-after-hours / …
+                    "fiscal_quarter": row.get("fiscalQuarterEnding") or "",
+                    "eps_forecast": row.get("epsForecast") or "",
+                    "date": day_iso,
+                })
+        else:
+            print(f"[market_data] nasdaq earnings {day_iso} HTTP {r.status_code}", flush=True)
+    except Exception as e:
+        print(f"[market_data] nasdaq earnings {day_iso} failed: {e!s:.120}", flush=True)
+    _EARNINGS_CACHE[day_iso] = (_time.time(), rows_out)
+    return rows_out
+
+
+def earnings_upcoming(symbols: list[str] | None = None,
+                      horizon_days: int = 5,
+                      include_past_days: int = 1) -> dict[str, dict]:
+    """Map SYMBOL → next earnings event within the horizon window.
+
+    Window: [today - include_past_days, today + horizon_days] (calendar days).
+    When *symbols* is set, only those tickers are returned.
+    """
+    from datetime import date, timedelta
+    want = None
+    if symbols is not None:
+        want = {str(s).strip().upper() for s in symbols if s}
+        if not want:
+            return {}
+    today = date.today()
+    start = today - timedelta(days=max(0, int(include_past_days)))
+    end = today + timedelta(days=max(0, int(horizon_days)))
+    best: dict[str, dict] = {}
+    d = start
+    while d <= end:
+        for row in nasdaq_earnings_for_day(d.isoformat()):
+            sym = row["symbol"]
+            if want is not None and sym not in want:
+                continue
+            days_until = (d - today).days
+            rec = {
+                **row,
+                "days_until": days_until,
+                "imminent": -include_past_days <= days_until <= horizon_days,
+            }
+            prev = best.get(sym)
+            # Prefer the soonest upcoming event; if only past, keep closest past
+            if prev is None:
+                best[sym] = rec
+            else:
+                # Prefer non-negative (upcoming/today) over past; then nearer
+                def _rank(r):
+                    du = r["days_until"]
+                    return (0 if du >= 0 else 1, abs(du))
+                if _rank(rec) < _rank(prev):
+                    best[sym] = rec
+        d += timedelta(days=1)
+    return best
