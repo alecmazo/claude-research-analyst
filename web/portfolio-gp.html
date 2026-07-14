@@ -8674,9 +8674,10 @@ End with the sleeve block at this account's real market value so I can push it t
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
-      box('<div style="font-size:12px;color:var(--text-secondary);">🚀 <strong>Full US-listed pull</strong> queued · job <code>'
-        + _trEsc(j.job_id) + '</code>. SEC 429 → wait 10s–10min then continue. '
-        + 'Can run many hours; leave Railway up. Dropbox backup at end.</div>');
+      box('<div style="font-size:12px;color:var(--text-secondary);">🚀 <strong>Resume missing-only</strong> · keeping <strong>'
+        + (j.have != null ? Number(j.have).toLocaleString() : '?') + '</strong> stored · pulling <strong>'
+        + (j.missing != null ? Number(j.missing).toLocaleString() : '?') + '</strong> gaps · job <code>'
+        + _trEsc(j.job_id) + '</code>. Will not overwrite existing names. SEC 429 → wait then continue.</div>');
       if (j.job_id) _pollFinJob(j.job_id, btn, restore);
       else if (btn) { btn.disabled = false; btn.textContent = restore; }
     } catch (e) {

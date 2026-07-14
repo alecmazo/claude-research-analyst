@@ -23737,8 +23737,13 @@ def _ensure_financials_table() -> None:
         print(f"❌ _ensure_financials_table failed: {e!s:.300}", flush=True)
 
 
-def _store_financials_rows(ticker: str, cik, entity_name, rows: list) -> int:
-    """Upsert extractor history rows into company_financials. Returns count."""
+def _store_financials_rows(ticker: str, cik, entity_name, rows: list,
+                           overwrite: bool = False) -> int:
+    """Insert financials rows for one ticker. Returns count of NEW rows written.
+
+    Default is insert-only (ON CONFLICT DO NOTHING) so a resume/retry never
+    clobbers periods we already stored. Pass overwrite=True only for an
+    explicit re-sync of a single name."""
     if not rows:
         return 0
     meta_cols = ["ticker", "cik", "entity_name", "period_type", "fy", "fp",
@@ -23746,10 +23751,14 @@ def _store_financials_rows(ticker: str, cik, entity_name, rows: list) -> int:
     num_cols = list(_FIN_COLMAP.values())
     all_cols = meta_cols + num_cols + ["metrics_json"]
     ph = ",".join(["%s"] * len(all_cols))
-    upd = [c for c in all_cols if c not in ("ticker", "period_type", "period_end")]
-    set_clause = ",".join(f"{c}=EXCLUDED.{c}" for c in upd) + ", updated_at=now()"
+    if overwrite:
+        upd = [c for c in all_cols if c not in ("ticker", "period_type", "period_end")]
+        set_clause = ",".join(f"{c}=EXCLUDED.{c}" for c in upd) + ", updated_at=now()"
+        conflict = f"ON CONFLICT (ticker, period_type, period_end) DO UPDATE SET {set_clause}"
+    else:
+        conflict = "ON CONFLICT (ticker, period_type, period_end) DO NOTHING"
     sql = (f"INSERT INTO company_financials ({','.join(all_cols)}) VALUES ({ph}) "
-           f"ON CONFLICT (ticker, period_type, period_end) DO UPDATE SET {set_clause}")
+           f"{conflict}")
     def _num(v):
         return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
     n = 0
@@ -23767,9 +23776,21 @@ def _store_financials_rows(ticker: str, cik, entity_name, rows: list) -> int:
             # doubles row size — keep NULL to stay lean at S&P-scale coverage.
             vals.append(None)
             cur.execute(sql, vals)
-            n += 1
+            n += max(0, cur.rowcount or 0)
         conn.commit()
     return n
+
+
+def _fin_ticker_already_stored(ticker: str) -> bool:
+    """True if we already have any company_financials rows for this ticker."""
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM company_financials WHERE ticker=%s LIMIT 1",
+                (ticker.upper(),))
+            return cur.fetchone() is not None
+    except Exception:
+        return False
 
 
 def _fin_is_rate_limit_error(msg: str) -> bool:
@@ -23779,12 +23800,18 @@ def _fin_is_rate_limit_error(msg: str) -> bool:
 
 
 def _sync_one_ticker_financials(ticker: str, years_back: int = 10,
-                                max_rate_retries: int = 4) -> dict:
+                                max_rate_retries: int = 4,
+                                skip_if_stored: bool = True) -> dict:
     """Pull SEC XBRL history for one ticker and persist it. Returns
-    {stored, periods, entity, errors, rate_limited?}.
+    {stored, periods, entity, errors, rate_limited?, skipped?}.
+
+    skip_if_stored=True (default): if any rows already exist for this ticker,
+    do nothing — resume never re-hits or overwrites completed names.
 
     On rate-limit errors, wait and retry the same ticker (outer loop; the
     SEC client also backs off on 429). Wait ladder: 60s → 3m → 10m → 10m."""
+    if skip_if_stored and _fin_ticker_already_stored(ticker):
+        return {"stored": 0, "periods": 0, "skipped": True, "errors": []}
     import sec_edgar_xbrl as _edgar
     try:
         ua = analyst.get_sec_user_agent()
@@ -23798,8 +23825,10 @@ def _sync_one_ticker_financials(ticker: str, years_back: int = 10,
                 ticker, years_back=years_back, user_agent=ua)
             rows = res.get("rows") or []
             try:
+                # Insert-only — never clobber periods already in the store
                 stored = _store_financials_rows(
-                    ticker, res.get("cik"), res.get("entity_name"), rows)
+                    ticker, res.get("cik"), res.get("entity_name"), rows,
+                    overwrite=False)
             except Exception as e:
                 return {"stored": 0, "periods": len(rows),
                         "errors": [f"{ticker} store failed: {e!s:.120}"]}
@@ -23877,7 +23906,14 @@ def _run_financials_sync(job_id: str, tickers: list, years_back: int) -> None:
                  label=f"📊 Pulling {tk} ({i+1}/{len(tickers)})…",
                  done=i, current=tk)
             try:
-                r = _sync_one_ticker_financials(tk, years_back=years_back)
+                r = _sync_one_ticker_financials(tk, years_back=years_back,
+                                                skip_if_stored=True)
+                if r.get("skipped"):
+                    # Already in store — leave data alone, advance cursor
+                    consecutive_rl = 0
+                    _set(stored=total_stored, done=i + 1,
+                         label=f"↷ Skip {tk} (already stored) ({i+1}/{len(tickers)})")
+                    continue
                 total_stored += r.get("stored", 0)
                 if r.get("stored"):
                     names_ok += 1
@@ -23911,50 +23947,88 @@ def _run_financials_sync(job_id: str, tickers: list, years_back: int) -> None:
         _set(stage="error", status="error", label=f"❌ {e!s:.200}", error=str(e))
 
 
+def _fin_missing_tickers() -> tuple[list[str], int, int]:
+    """Return (missing_tickers, have_count, universe_count). Never reorders
+    already-stored names into the work list — resume only fills gaps."""
+    universe = [r["ticker"] for r in _fin_universe_us_listed()]
+    have: set[str] = set()
+    with _fund_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT ticker FROM company_financials")
+        have = {str(r[0]).upper() for r in (cur.fetchall() or []) if r and r[0]}
+    missing = [t for t in universe if t not in have]
+    return missing, len(have), len(universe)
+
+
+def _fin_pull_seems_stalled(max_idle_min: float = 12.0) -> bool:
+    """True if a full-pull checkpoint looks abandoned (no update for max_idle_min)
+    while coverage is still incomplete. Used to auto-resume after Railway
+    restarts or hung workers."""
+    try:
+        missing, have_n, uni_n = _fin_missing_tickers()
+        if not missing:
+            return False
+        cp = _kv_get("fin_full_pull.checkpoint") or {}
+        ts = cp.get("ts")
+        if not ts:
+            # Incomplete coverage and no live checkpoint → stalled / never finished
+            return have_n > 0  # only auto-resume if we already made progress
+        from datetime import datetime as _dt
+        age_min = (_dt.utcnow() - _dt.fromisoformat(
+            str(ts).replace("Z", "")).replace(tzinfo=None)).total_seconds() / 60.0
+        status = (cp.get("status") or "").lower()
+        if status == "done" and missing:
+            return True   # marked done but gaps remain
+        if status in ("running", "syncing", "preparing", "queued", "backup") and age_min >= max_idle_min:
+            return True
+        if age_min >= max_idle_min * 2:
+            return True
+        return False
+    except Exception as e:
+        print(f"[fin] stall check failed: {e!s:.120}", flush=True)
+        return False
+
+
 def _run_fin_full_pull(job_id: str | None = None, years_back: int | None = None) -> dict:
     """Pull ALL never-synced US-listed names (no nightly budget), then backup.
     Continues through rate limits by waiting and resuming. One ticker at a time.
-    Progress is server-side — browser timeout does not stop the job."""
+    Progress is server-side — browser timeout does not stop the job.
+
+    CRITICAL: only processes tickers with ZERO rows in company_financials.
+    Already-stored names are never re-fetched or overwritten."""
     years = years_back if years_back is not None else _FIN_OVERNIGHT_YEARS
     jid = job_id or ("FINFULL_" + datetime.utcnow().strftime("%Y%m%d_%H%M%S"))
     # Mark running IMMEDIATELY so the UI leaves "Queuing…" within one poll.
     _fin_job_set(jid, stage="preparing", status="running",
-                 label="📋 Building US-listed missing list…",
+                 label="📋 Building missing-only list (will not touch stored names)…",
                  started_at=time.time(), total=0, done=0, stored=0,
                  universe="us_listed_full")
     tickers: list[str] = []
+    have_n = uni_n = 0
     try:
         _fin_job_set(jid, label="📋 Downloading free Nasdaq + NYSE symbol directories…")
-        universe = [r["ticker"] for r in _fin_universe_us_listed()]
-        _fin_job_set(jid, label=f"📋 {len(universe)} symbols — checking which are already in DB…")
-        have = set()
-        with _fund_conn() as conn, conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT ticker FROM company_financials")
-            have = {str(r[0]).upper() for r in (cur.fetchall() or []) if r and r[0]}
-        tickers = [t for t in universe if t not in have]
-        if not tickers:
-            # Everything present — optional light refresh of oldest names
-            tickers = _fin_pick_overnight_batch(budget=_FIN_OVERNIGHT_BUDGET)
-            _fin_job_set(jid, label=f"All covered — refreshing {len(tickers)} oldest…")
+        tickers, have_n, uni_n = _fin_missing_tickers()
+        _fin_job_set(jid, label=f"📋 Store has {have_n:,} names · {len(tickers):,} missing of {uni_n:,}")
     except Exception as e:
         print(f"[fin-full] missing-list failed: {e!s:.160}", flush=True)
         try:
-            tickers = _fin_pick_overnight_batch(budget=50_000)
+            tickers, have_n, uni_n = _fin_missing_tickers()
         except Exception:
             tickers = []
 
     _fin_job_set(jid, total=len(tickers), done=0,
-                 label=f"🚀 Full pull starting — {len(tickers)} names to go…")
+                 label=f"🚀 Resume/continue — {len(tickers):,} missing "
+                       f"(keeping {have_n:,} already stored)…")
     if not tickers:
         _fin_job_set(jid, stage="done", status="done",
-                     label="✓ Full pull: already covered (no missing names)",
-                     result={"periods_stored": 0, "names": 0})
+                     label=f"✓ Full pull: store complete ({have_n:,} names) — nothing missing",
+                     result={"periods_stored": 0, "names": 0, "have": have_n})
         return _fin_sync_jobs[jid]
 
     # Skip bulk security_meta seed here — nasdaq/nyse free lists have no GICS,
     # and 6k individual upserts delayed the first SEC pull by minutes. SP500
     # GICS seed is enough for common comps; names fill in as reports land.
-    print(f"[fin-full] starting {len(tickers)} tickers years={years} job={jid}", flush=True)
+    print(f"[fin-full] RESUME missing-only: have={have_n} missing={len(tickers)} "
+          f"years={years} job={jid}", flush=True)
     _run_financials_sync(jid, tickers, years)
     backup_note = ""
     try:
@@ -24180,21 +24254,29 @@ def financials_overnight_now(request: Request, background_tasks: BackgroundTasks
     years = max(3, min(years, 12))
     import uuid as _uuid
     if full:
+        # Report how many we will skip vs pull (never overwrites stored names)
+        have_n = miss_n = uni_n = 0
+        try:
+            miss, have_n, uni_n = _fin_missing_tickers()
+            miss_n = len(miss)
+        except Exception:
+            pass
         job_id = "FINFULL_" + _uuid.uuid4().hex[:10]
         # Daemon thread (not BackgroundTasks): multi-hour pulls must outlive the
         # HTTP request lifecycle cleanly and keep running after the browser leaves.
         _fin_job_set(job_id, stage="queued", status="running",
-                     label="Queued — starting worker thread…",
-                     started_at=time.time(), total=0, done=0, stored=0,
+                     label=f"Queued — resume missing-only ({miss_n:,} to go, "
+                           f"keeping {have_n:,} stored)…",
+                     started_at=time.time(), total=miss_n, done=0, stored=0,
                      universe="us_listed_full")
         threading.Thread(target=_run_fin_full_pull, args=(job_id, years),
                          daemon=True, name=f"fin-full-{job_id[-8:]}").start()
         return {"ok": True, "job_id": job_id, "mode": "full",
                 "years_back": years,
-                "note": "Full US-listed pull started in background thread. "
-                        "On SEC 429: wait 10s→10min then resume. "
-                        "Browser timeout does NOT stop the job. "
-                        "Poll /api/financials/sync/{job_id}."}
+                "have": have_n, "missing": miss_n, "universe": uni_n,
+                "note": f"Resume missing-only: will NOT touch {have_n:,} stored names; "
+                        f"pulling {miss_n:,} gaps. On SEC 429 waits then continues. "
+                        f"Poll /api/financials/sync/{job_id}."}
     job_id = "FINOVER_MANUAL_" + _uuid.uuid4().hex[:10]
     threading.Thread(target=_run_fin_overnight, args=(job_id,),
                      daemon=True, name=f"fin-over-{job_id[-8:]}").start()
@@ -24231,31 +24313,18 @@ def _auto_fin_overnight_worker() -> None:
     import time as _time
     # Let the rest of startup (DB pool, hydrate) finish before first check.
     _time.sleep(60)
-    # ── Bootstrap full pull on boot when coverage is thin ────────────────
-    # Lets a deploy kick off "get everything" without a manual click. Claims
-    # via kv so flapping restarts don't start 5 parallel full pulls.
+    # ── Bootstrap / resume full pull when stalled or coverage incomplete ──
+    # Missing-only resume: never re-touches names already in company_financials.
+    # Claims via kv so flapping restarts don't start parallel full pulls.
     try:
         if (_fin_overnight_enabled() and _PSYCOPG2_OK
                 and os.environ.get("DATABASE_URL")):
-            stored_n = 0
+            miss: list[str] = []
+            have_n = uni_n = 0
             try:
-                with _fund_conn() as conn, conn.cursor() as cur:
-                    cur.execute("SELECT COUNT(DISTINCT ticker) FROM company_financials")
-                    stored_n = int((cur.fetchone() or [0])[0] or 0)
+                miss, have_n, uni_n = _fin_missing_tickers()
             except Exception:
-                stored_n = 0
-            last = _kv_get("fin_full_pull.last") or {}
-            last_ts = last.get("ts") or ""
-            # If < 2500 names stored and we haven't started a full pull in 4h
-            recent = False
-            try:
-                if last_ts:
-                    from datetime import datetime as _dt
-                    age_h = (_dt.utcnow() - _dt.fromisoformat(
-                        last_ts.replace("Z", "")).replace(tzinfo=None)).total_seconds() / 3600
-                    recent = age_h < 4
-            except Exception:
-                recent = False
+                pass
             claim = _kv_get("fin_full_pull.running") or {}
             claim_age_ok = True
             try:
@@ -24263,26 +24332,30 @@ def _auto_fin_overnight_worker() -> None:
                     from datetime import datetime as _dt
                     age_h = (_dt.utcnow() - _dt.fromisoformat(
                         str(claim["ts"]).replace("Z", "")).replace(tzinfo=None)).total_seconds() / 3600
-                    claim_age_ok = age_h > 6   # stale claim → allow restart
+                    claim_age_ok = age_h > 2   # stale claim (>2h) → allow resume
             except Exception:
                 pass
-            if stored_n < 2500 and not recent and claim_age_ok:
-                print(f"[fin-overnight] bootstrap FULL pull — only {stored_n} names in store",
-                      flush=True)
+            stalled = _fin_pull_seems_stalled(max_idle_min=12.0)
+            need = bool(miss) and (stalled or have_n < 2500 or len(miss) > 100)
+            if need and claim_age_ok:
+                print(f"[fin-overnight] RESUME missing-only pull — have={have_n} "
+                      f"missing={len(miss)} stalled={stalled}", flush=True)
                 _kv_put("fin_full_pull.running",
-                        {"ts": datetime.utcnow().isoformat() + "Z", "stored_at_start": stored_n})
+                        {"ts": datetime.utcnow().isoformat() + "Z",
+                         "stored_at_start": have_n, "missing_at_start": len(miss)})
                 try:
                     job = _run_fin_full_pull()
-                    _automation_record_run("fin_overnight", True,
-                                           (job.get("label") or "bootstrap full")[:400])
+                    _automation_record_run(
+                        "fin_overnight", True,
+                        (job.get("label") or "resume missing-only")[:400])
                 finally:
                     try:
                         _kv_put("fin_full_pull.running", {"ts": None})
                     except Exception:
                         pass
             else:
-                print(f"[fin-overnight] bootstrap skip (stored={stored_n}, "
-                      f"recent_full={recent})", flush=True)
+                print(f"[fin-overnight] bootstrap skip (have={have_n} missing={len(miss)} "
+                      f"stalled={stalled} claim_ok={claim_age_ok})", flush=True)
     except Exception as _be:
         print(f"[fin-overnight] bootstrap error: {_be!s:.200}", flush=True)
 
