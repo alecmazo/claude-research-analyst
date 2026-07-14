@@ -1177,10 +1177,16 @@ select:focus, .search:focus, input:focus, textarea:focus {
   color: var(--champagne-light);
 }
 
-.wedding-open {
+.wedding-open,
+.wedding-open-btn {
   color: var(--champagne-light);
   font-weight: 500;
   white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.wedding-open-btn {
+  pointer-events: auto;
 }
 
 .wedding-card:focus-visible {

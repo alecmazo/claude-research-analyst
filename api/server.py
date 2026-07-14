@@ -31694,13 +31694,17 @@ def _mount_sliw_agent() -> None:
             if not target.is_file():
                 raise HTTPException(status_code=404)
             media = None
+            headers = {}
             if target.suffix == ".css":
                 media = "text/css"
+                headers["Cache-Control"] = "no-cache, must-revalidate"
             elif target.suffix == ".js":
                 media = "application/javascript"
+                headers["Cache-Control"] = "no-cache, must-revalidate"
             elif target.suffix == ".html":
                 media = "text/html"
-            return FileResponse(str(target), media_type=media)
+                headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            return FileResponse(str(target), media_type=media, headers=headers or None)
 
         print("[sliw] UI mounted at /sliw/ (isolated from /gp /lp /app)", flush=True)
     except Exception as _outer:

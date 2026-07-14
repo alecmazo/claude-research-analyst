@@ -256,9 +256,10 @@ function showView(name) {
   if (name === "edyta") renderEdyta();
   if (name === "weddings") {
     if (!state.wedding?.length) {
-      api("/wedding/ready?limit=40")
-        .then((r) => { state.wedding = r.items || []; renderWeddings(); })
-        .catch(() => renderWeddings());
+      loadWeddingRows().then((rows) => {
+        state.wedding = rows;
+        renderWeddings();
+      });
     } else {
       renderWeddings();
     }
@@ -383,23 +384,36 @@ function renderReady() {
 }
 
 async function focusLead(id, { autoAgent = true } = {}) {
+  id = String(id || "").trim();
+  if (!id) {
+    toast("Missing lead id — re-import wedding seeds");
+    return;
+  }
   state.focusId = id;
+  // Always land on Work so wedding clicks leave the Weddings tab
+  showView("work");
   renderReady();
+  if (typeof renderWeddings === "function") {
+    try { renderWeddings(); } catch (_) {}
+  }
   busy(true, "Loading pipeline…");
   try {
     let ws = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
     state.workstream = ws;
-    renderWorkstream();
+    await renderWorkstream();
     // Auto-run sales agent when contacts/drafts missing — you should not fill contacts manually
     const needAgent = (ws.next_step?.id === "agent" || ws.next_step?.id === "qualify") && autoAgent;
     if (needAgent) {
-      busy(true, "Sales agent finding contacts & drafting pitch…");
+      const isWedding = (ws.prospect?.book || "") === "wedding";
+      busy(true, isWedding
+        ? "Wedding agent finding planner contacts & drafting pitch…"
+        : "Sales agent finding contacts & drafting pitch…");
       try {
         const result = await api(`/prospects/${encodeURIComponent(id)}/sales-agent`, {
           method: "POST",
           body: JSON.stringify({ live_gamma: false, build_sequences: false }),
         });
-        toast(`Agent ready: ${result.primary_contact?.email || result.primary_contact?.name || "contact"} · mode ${result.marketing_mode}`);
+        toast(`Agent ready: ${result.primary_contact?.email || result.primary_contact?.name || "contact"} · mode ${result.marketing_mode || "wedding"}`);
         state._lastAgent = result;
         state._lastEmail = result.email_preview; // cold_1 only
         state.workstream = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
@@ -407,13 +421,64 @@ async function focusLead(id, { autoAgent = true } = {}) {
         await renderWorkstream();
       } catch (e) {
         toast("Agent: " + e.message);
+        // Still show the lead panel even if agent fails
+        try { await renderWorkstream(); } catch (_) {}
       }
     }
   } catch (e) {
-    toast(e.message);
+    toast("Could not open lead: " + e.message);
+    console.error("focusLead failed", id, e);
   } finally {
     busy(false);
   }
+}
+
+/** Normalize wedding API payload → clickable card rows (always has id). */
+function normalizeWeddingRows(payload) {
+  const raw = Array.isArray(payload)
+    ? payload
+    : (payload?.items || payload?.prospects || []);
+  return (raw || []).map((p) => {
+    const pkg = (p.recommended_packages || [])[0] || {};
+    return {
+      id: p.id,
+      company: p.company,
+      website: p.website || "",
+      industry: p.industry || "",
+      geo: p.geo || "",
+      score: p.score,
+      tier: p.tier,
+      stage: p.stage,
+      package: p.package || pkg.name || "",
+      channel_label: p.channel_label || p.industry || "",
+      agent_note: p.agent_note || "",
+      book: "wedding",
+      has_draft: !!(p.has_draft || p.outreach_path || p.sequence_paths),
+      has_contact: !!(p.has_contact || (p.contacts && p.contacts.length)),
+    };
+  }).filter((p) => p.id && p.company);
+}
+
+async function loadWeddingRows() {
+  try {
+    const ready = await api("/wedding/ready?limit=40");
+    return normalizeWeddingRows(ready);
+  } catch (_) {
+    // Older deploy without /wedding/ready
+    try {
+      const list = await api("/wedding/prospects");
+      return normalizeWeddingRows(list);
+    } catch (e2) {
+      console.error(e2);
+      return [];
+    }
+  }
+}
+
+function openWeddingLead(id) {
+  const lead = (state.wedding || []).find((p) => p.id === id);
+  toast(lead ? `Opening ${lead.company}…` : "Opening wedding lead…");
+  focusLead(id, { autoAgent: true });
 }
 
 function isHunterSource(src) {
@@ -846,6 +911,7 @@ function renderEdyta() {
 function renderWeddings() {
   const rows = state.wedding || [];
   const grid = $("#wedding-grid");
+  if (!grid) return;
   const summary = $("#wedding-summary");
   if (summary) {
     const planners = rows.filter((p) => /planner/i.test(p.industry || "")).length;
@@ -866,8 +932,9 @@ function renderWeddings() {
     const isPlanner = /planner/i.test(p.industry || "");
     const isVenue = /venue|winery|hotel|lodge/i.test(p.industry || "");
     const channel = isPlanner ? "Planner partner" : isVenue ? "Venue partner" : (p.channel_label || p.industry || "Wedding");
+    const id = esc(p.id);
     return `
-    <article class="prospect-card wedding-card ${state.focusId === p.id ? "active" : ""}" data-work="${esc(p.id)}" role="button" tabindex="0">
+    <article class="prospect-card wedding-card ${state.focusId === p.id ? "active" : ""}" data-work="${id}" role="button" tabindex="0" aria-label="Open ${esc(p.company)} in Work">
       <div class="wedding-card-top">
         ${brandMarkHtml(p.company, p.website, { size: "md" })}
         <div class="wedding-card-copy">
@@ -882,23 +949,11 @@ function renderWeddings() {
       <p class="wedding-card-pkg">${esc(p.package || "—")}</p>
       <div class="foot">
         <span>${esc(p.stage || "scored")}${p.has_draft ? " · draft ready" : ""}${p.has_contact ? " · contacts" : ""}</span>
-        <span class="wedding-open">Open in Work →</span>
+        <button type="button" class="btn primary sm wedding-open-btn" data-work="${id}">Open in Work →</button>
       </div>
     </article>`;
   }).join("");
-  grid.querySelectorAll("[data-work]").forEach((card) => {
-    const open = () => {
-      showView("work");
-      focusLead(card.dataset.work, { autoAgent: true });
-    };
-    card.addEventListener("click", open);
-    card.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" || ev.key === " ") {
-        ev.preventDefault();
-        open();
-      }
-    });
-  });
+  // Handlers are delegated on #wedding-grid (boot) so re-renders always work
 }
 
 function renderPartners() {
@@ -931,18 +986,18 @@ async function fullRefresh() {
       if (imp.imported > 0) toast(`Synced ${imp.imported} new leads into CRM`);
     } catch (_) {}
 
-    const [ready, edyta, lib, weddingReady, partners, me] = await Promise.all([
+    const [ready, edyta, lib, weddingRows, partners, me] = await Promise.all([
       api("/work/ready?limit=8"),
       api("/edyta-home"),
       api("/library"),
-      api("/wedding/ready?limit=40").catch(() => ({ items: [] })),
+      loadWeddingRows(),
       api("/partnerships").catch(() => []),
       api("/me").catch(() => null),
     ]);
     state.ready = ready.items || [];
     state.edyta = edyta;
     state.library = lib.rows || [];
-    state.wedding = weddingReady.items || weddingReady || [];
+    state.wedding = weddingRows || [];
     state.partners = partners;
     if (me?.name) $("#brand-user").textContent = me.name;
     $("#lib-summary").textContent =
@@ -1009,12 +1064,38 @@ function boot() {
   $("#lib-tier")?.addEventListener("change", renderLibrary);
   $("#lib-status")?.addEventListener("change", renderLibrary);
 
+  // Wedding cards: event delegation (survives re-render; whole card + Open button)
+  const weddingGrid = $("#wedding-grid");
+  if (weddingGrid && !weddingGrid.dataset.bound) {
+    weddingGrid.dataset.bound = "1";
+    weddingGrid.addEventListener("click", (ev) => {
+      const hit = ev.target.closest("[data-work]");
+      if (!hit || !weddingGrid.contains(hit)) return;
+      const id = hit.getAttribute("data-work") || hit.dataset.work;
+      if (!id) {
+        toast("This card has no lead id — re-import seeds");
+        return;
+      }
+      ev.preventDefault();
+      ev.stopPropagation();
+      openWeddingLead(id);
+    });
+    weddingGrid.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      const hit = ev.target.closest("[data-work]");
+      if (!hit || !weddingGrid.contains(hit)) return;
+      const id = hit.getAttribute("data-work") || hit.dataset.work;
+      if (!id) return;
+      ev.preventDefault();
+      openWeddingLead(id);
+    });
+  }
+
   $("#btn-wedding-import")?.addEventListener("click", async () => {
     busy(true, "Importing & scoring Bay Area planners…");
     try {
       const r = await api("/wedding/library/import?limit=40&rescore=true", { method: "POST" });
-      const ready = await api("/wedding/ready?limit=40");
-      state.wedding = ready.items || [];
+      state.wedding = await loadWeddingRows();
       renderWeddings();
       toast(
         `Wedding desk: +${r.imported || 0} new · ${r.rescored || 0} rescored · `
@@ -1026,10 +1107,9 @@ function boot() {
 
   $("#btn-wedding-refresh")?.addEventListener("click", async () => {
     try {
-      const ready = await api("/wedding/ready?limit=40");
-      state.wedding = ready.items || [];
+      state.wedding = await loadWeddingRows();
       renderWeddings();
-      toast("Wedding list refreshed");
+      toast(`Wedding list refreshed (${state.wedding.length})`);
     } catch (e) { toast(e.message); }
   });
 
