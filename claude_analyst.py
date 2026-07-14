@@ -1821,20 +1821,46 @@ INTEL_SYSTEM_PROMPT = """You are DGA Capital's chief investment strategist. Your
 Use your live web and X (Twitter) search access to ground every section in recent, verifiable facts. Be specific: name exact figures, dates, and sources. Do not be generic.
 
 Output format rules:
-- Use clean Markdown with the EXACT section headers below
-- Under SPECIFIC NAMES, each company must have its ticker in the format **TICKER** on a new line — this is parsed by the app to create tappable links
-- Be direct and investment-focused; no disclaimers, no generic risk language
-- Aim for the highest expected-value ideas — bold contrarian calls are welcome if grounded in data
-- Every section must be populated; if a sector has no genuine opportunity, name a different one"""
+- Use clean Markdown with the EXACT section headers and field labels below
+- Each company block must start with **TICKER** alone on a line (parsed by the app for tappable links)
+- Be direct and investment-focused; no legal disclaimers, no filler
+- Prefer quality of setup over hype; do not invent "2× upside" stories for large-caps
+
+CRITICAL — PRICE / RISK-REWARD DISCIPLINE (this is graded):
+- NEVER write "2×", "3×", "Nx upside", or "double" as the main upside claim for mid/large-cap names.
+  Express scenarios as **percentages** from a stated spot price.
+- For EVERY name use this EXACT structure on the risk line:
+  **Scenarios (12m):** Spot ~$S | Base $B (+b%) | Bull $U (+u%) | Bear $D (-d%) | R/R u/d = r.r×
+- Spot must be a realistic recent price (use search). Base/Bull/Bear are 12-month price levels.
+- **Rational bands (default — break only with explicit micro/special-sit justification):**
+  • Large-cap (>$50B): Base typically −10% to +30%; Bull typically +15% to +55%; Bear typically −15% to −40%
+  • Mid-cap ($5–50B): Base −15% to +40%; Bull +20% to +70%; Bear −20% to −45%
+  • Small/speculative only: Bull may approach ~+100% rarely; still no lazy "2× vs −15%" template
+- **R/R = bull_upside_% / |bear_downside_%|** must usually land in **0.8–2.5**.
+  A pattern of ~+100–200% upside with ~−15% downside is FORBIDDEN — it is not rational risk-reward.
+- If a name does not offer a coherent R/R, either pick a better name or write:
+  **Scenarios (12m):** Spot ~$S | insufficient edge to size a range
+- Vary ranges across names (quality compounders ≠ speculative turnarounds). Do not clone the same % on every ticker.
+- Every section must be populated; if a sector has no genuine opportunity, say so and pivot the focus."""
+
+# Shared field block for sector + best-mix name cards
+_INTEL_NAME_FIELDS = """\
+**TICKER**
+**Company:** [Full name]
+**Thesis:** [2–3 sentences — what is the market missing? what changes from here?]
+**Catalyst:** [1 sentence — what re-rates the stock over the next 6–18 months]
+**Risk:** [1 sentence — what breaks the thesis; be concrete]
+**Scenarios (12m):** Spot ~$S | Base $B (+b%) | Bull $U (+u%) | Bear $D (-d%) | R/R u/d = r.r×
+"""
 
 _INTEL_SECTOR_USER_TEMPLATE = """\
 DATE: {today}
 SECTOR_FOCUS: {sector}
-INVESTMENT_HORIZON: 3–5 years
+INVESTMENT_HORIZON: 3–5 years (scenarios priced to a **12-month** path)
 
-You are generating a sector-focused investment intelligence brief for DGA Capital. Use live web and X search to analyze the {sector} sector and identify 10–15 companies with the most asymmetric return potential right now.
+You are generating a sector-focused investment intelligence brief for DGA Capital. Use live web and X search to analyze the {sector} sector and identify **8–12** investable names with a coherent 12-month risk/reward — not cartoon asymmetry.
 
-"Asymmetric return potential" means: bounded downside, outsized upside from a specific catalyst or structural change that the market is currently underpricing.
+"Asymmetric" here means: **skewed but realistic** expected value (e.g. +35% base / −25% bear on a solid mid-cap), NOT "2× upside vs −15% downside" on every name.
 
 Use EXACTLY this format:
 
@@ -1842,7 +1868,7 @@ Use EXACTLY this format:
 
 ## {sector_upper}: CURRENT SETUP
 
-*What is driving the {sector} sector right now — macro, regulatory, technological, or competitive changes that create asymmetric opportunity.*
+*What is driving the {sector} sector right now — macro, regulatory, technological, or competitive changes that create opportunity.*
 
 - [KEY DRIVER 1]: [2–3 sentences with specific data, dates, catalysts]
 - [KEY DRIVER 2]: [2–3 sentences]
@@ -1850,17 +1876,11 @@ Use EXACTLY this format:
 
 ---
 
-## TOP 10–15 NAMES: MOST ASYMMETRIC RETURN POTENTIAL
+## TOP NAMES: BEST 12-MONTH RISK/REWARD
 
-*Ranked by conviction — highest conviction first. Each name must have a SPECIFIC catalyst or mispricing thesis grounded in recent facts. Be direct and investment-focused.*
+*Ranked by conviction — highest first. Each name needs a SPECIFIC catalyst and **rational** Base/Bull/Bear levels (see system rules). Ban "2× upside" language.*
 
-**TICKER**
-**Company:** [Full name]
-**Thesis:** [2–3 sentences — what is the market missing? what changes from here? what is the specific asymmetric setup?]
-**Catalyst:** [1 sentence — what triggers the upside in 6–18 months]
-**Risk:** [1 sentence — what breaks the thesis]
-**Upside / Downside:** [estimated range, e.g. "2–3× upside vs 20% downside if thesis holds"]
-
+{name_fields}
 [Repeat for each company — always start each block with **TICKER** on its own line]
 
 ---
@@ -1872,16 +1892,16 @@ Use EXACTLY this format:
 - [RISK 1]
 - [RISK 2]
 - [RISK 3 if applicable]
-"""
+""".replace("{name_fields}", _INTEL_NAME_FIELDS)
 
 _INTEL_BESTMIX_USER_TEMPLATE = """\
 DATE: {today}
 PORTFOLIO_TYPE: Best Mix — Cross-Sector High Conviction
-INVESTMENT_HORIZON: 3–5 years
+INVESTMENT_HORIZON: 3–5 years (scenarios priced to a **12-month** path)
 
-You are building DGA Capital's highest-conviction portfolio of 10–15 stocks spanning ALL sectors. These should be the BEST asymmetric opportunities in the entire market right now — not the most popular names, but the most mispriced given current macro, sector, and company-level catalysts.
+You are building DGA Capital's highest-conviction portfolio of **8–12** stocks spanning ALL sectors. Prefer the best **risk-adjusted** setups, not the flashiest sell-side hype deck.
 
-"Asymmetric return potential" means: bounded downside, outsized upside. You are looking for situations where the market is wrong or slow to price in structural change. Use live web and X search to ground every pick in recent, verifiable facts.
+"Asymmetric" = coherent skew (R/R ~1–2.5× bull% vs |bear%|), NOT every name "2× up / 15% down".
 
 Use EXACTLY this format:
 
@@ -1898,16 +1918,16 @@ Use EXACTLY this format:
 
 ---
 
-## BEST MIX: 10–15 HIGHEST CONVICTION NAMES
+## BEST MIX: HIGHEST CONVICTION NAMES
 
-*The most asymmetric return opportunities across all sectors. At least 5 different sectors must be represented. Ranked by conviction — highest first.*
+*Across sectors — at least 5 different sectors. Ranked by conviction. Rational Scenarios line on every name.*
 
 **TICKER**
 **Company:** [Full name] | **Sector:** [sector name]
 **Thesis:** [2–3 sentences — specific mispricing, catalyst, what the market is getting wrong]
-**Upside / Downside:** [estimated range]
-**Key Catalyst:** [1 sentence]
-**Key Risk:** [1 sentence]
+**Catalyst:** [1 sentence]
+**Risk:** [1 sentence]
+**Scenarios (12m):** Spot ~$S | Base $B (+b%) | Bull $U (+u%) | Bear $D (-d%) | R/R u/d = r.r×
 
 [Repeat for each name — always start each block with **TICKER** on its own line]
 
@@ -1917,6 +1937,65 @@ Use EXACTLY this format:
 
 *1–2 sentences on sector concentration, correlation, and the single biggest portfolio-level risk in this mix.*
 """
+
+
+def _sanitize_intel_risk_reward(markdown: str) -> str:
+    """Flag or soften cartoon R/R lines (e.g. '2–3× upside vs 15% downside').
+
+    Does not invent new prices — only annotates irrational patterns so the PM
+    does not treat them as sized levels. Prefer prompt discipline; this is a
+    safety net.
+    """
+    import re as _re
+    if not markdown:
+        return markdown
+
+    def _line_fix(line: str) -> str:
+        low = line.lower()
+        # Multiplier *upside* (2× upside, 2–3× upside) — not "R/R = 1.5×"
+        mult_up = _re.search(
+            r'(\d+(?:\.\d+)?)\s*[–\-to]+\s*(\d+(?:\.\d+)?)\s*[×x]\s*upside|'
+            r'(\d+(?:\.\d+)?)\s*[×x]\s*upside|'
+            r'upside[^\n]{0,24}(\d+(?:\.\d+)?)\s*[×x]|'
+            r'double\s+(?:or\s+more\s+)?upside',
+            low,
+        )
+        # Percent pairs from Bull (+u%) / Bear (-d%) or prose
+        ups = [float(x) for x in _re.findall(
+            r'(?:bull|\+)\s*\$?\d[\d,.]*(?:\s*\(\+?\s*(\d{1,3}(?:\.\d+)?)\s*%\))',
+            low)]
+        ups += [float(x) for x in _re.findall(
+            r'(?:upside|bull)\s*[≈~:=]?\s*(\+?\d{2,3}(?:\.\d+)?)\s*%', low)]
+        ups += [float(x) for x in _re.findall(
+            r'\(\+(\d{1,3}(?:\.\d+)?)%\)', low)]
+        dns = [float(x) for x in _re.findall(
+            r'(?:bear|\-)\s*\$?\d[\d,.]*(?:\s*\(\-?\s*(\d{1,2}(?:\.\d+)?)\s*%\))',
+            low)]
+        dns += [float(x) for x in _re.findall(
+            r'(?:downside|bear)\s*[≈~:=]?\s*\-?(\d{1,2}(?:\.\d+)?)\s*%', low)]
+        dns += [float(x) for x in _re.findall(
+            r'\(\-(\d{1,2}(?:\.\d+)?)%\)', low)]
+
+        bad = bool(mult_up)
+        if ups and dns:
+            u, d = max(ups), max(dns) or 1.0
+            if u >= 80 and d <= 20:
+                bad = True
+            if d > 0 and (u / d) > 3.0 and u >= 60:
+                bad = True
+        if bad and "⚠" not in line and "insufficient edge" not in low:
+            return (line.rstrip()
+                    + "  \n  ⚠ *R/R looks extreme or uses ×-multipliers — treat as "
+                    "qualitative only; re-run or replace with Spot/Base/Bull/Bear % levels.*")
+        return line
+
+    out_lines = []
+    for ln in markdown.splitlines():
+        if _re.search(r'upside\s*/\s*downside|scenarios\s*\(12m\)', ln, _re.I):
+            out_lines.append(_line_fix(ln))
+        else:
+            out_lines.append(ln)
+    return "\n".join(out_lines)
 
 
 def run_market_intelligence(sector: str = "Tech") -> dict:
@@ -1960,7 +2039,8 @@ def run_market_intelligence(sector: str = "Tech") -> dict:
                 INTEL_SYSTEM_PROMPT + (
                     "\n\nNOTE: No live web/X tools on this volume run. "
                     "Be conservative; mark uncertain items (verify). "
-                    "Prefer structural / multi-year asymmetric setups over day-trade noise."
+                    "Use rational Base/Bull/Bear **percent** scenarios — never 2×-upside templates. "
+                    "Prefer structural multi-year setups with coherent 12m R/R (≈0.8–2.5)."
                 ),
                 user_msg,
                 job="intelligence",
@@ -1985,6 +2065,12 @@ def run_market_intelligence(sector: str = "Tech") -> dict:
             "error": str(exc),
             "provider": None,
         }
+
+    # Soft safety net against cartoon R/R the model still emits
+    try:
+        markdown = _sanitize_intel_risk_reward(markdown or "")
+    except Exception as _se:
+        print(f"[intel] sanitize R/R skipped: {_se!s:.100}", flush=True)
 
     # Parse out **TICKER** tokens so the UI can make them tappable.
     import re as _re
