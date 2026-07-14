@@ -1053,6 +1053,7 @@ SECTION 5 — Valuation:
 Multi-Method Valuation – Perform at least two primary methods:
    - Discounted Cash Flow (DCF) with explicit WACC, terminal growth, and sensitivity analysis.
    - Comparable company analysis (multiples: EV/EBITDA, P/E, etc.) and precedent transactions where relevant, minimum 5 peer comps.
+     Comps MUST be true business-model peers (same GICS industry / sub-industry and similar scale) — the standard Morgan Stanley / Goldman / BofA (Merrill) desk approach. Prefer the VERIFIED PEER list in the user message when present. Do NOT pad the table with unrelated same-sector mega-caps (e.g. Amazon is not a peer for Intel; Visa is not a peer for regional banks).
    - Cross-check with any other appropriate method (e.g., sum-of-the-parts).
 → Historical valuation range (5-year P/E band)
 → Bull / Base / Bear price targets with assumptions for each
@@ -1235,48 +1236,9 @@ def _attach_pct_change(snapshot: dict) -> None:
 
 # ============================================================================
 # Verified peer market data — injected into user_msg so the LLM's comps
-# table uses LIVE market caps + prices instead of training-data estimates.
+# table uses LIVE market caps + prices for SELL-SIDE-STYLE industry peers
+# (not a random sector mega-cap basket). Selection lives in peer_comps.py.
 # ============================================================================
-# Sector-mapped curated peer set. Keys match the canonical sector strings
-# yfinance returns (after _builder_classify_sector style normalization).
-# Each list is intentionally 8-12 of the most-traded large/mega-cap names
-# in that sector — enough that any comparable analysis will overlap.
-_PEER_SECTOR_MAP = {
-    "Technology": ["AAPL","MSFT","GOOGL","GOOG","AMZN","META","NVDA","AVGO",
-                   "ORCL","CRM","ADBE","NFLX","AMD","CSCO","IBM","INTC","TXN","QCOM"],
-    "Communication Services": ["GOOGL","GOOG","META","NFLX","DIS","CMCSA","TMUS",
-                               "VZ","T","CHTR","EA","TTWO","WBD","PINS","SNAP","RBLX"],
-    "Consumer Cyclical":      ["AMZN","TSLA","HD","NKE","MCD","SBUX","BKNG","LOW",
-                               "TJX","ABNB","CMG","ORLY","ROST","MAR","HLT","F","GM"],
-    "Consumer Discretionary": ["AMZN","TSLA","HD","NKE","MCD","SBUX","BKNG","LOW",
-                               "TJX","ABNB","CMG","ORLY","ROST","MAR","HLT","F","GM"],
-    "Consumer Defensive":     ["WMT","COST","PG","KO","PEP","PM","MO","MDLZ",
-                               "CL","KDP","KMB","STZ","GIS","KHC","TGT"],
-    "Consumer Staples":       ["WMT","COST","PG","KO","PEP","PM","MO","MDLZ",
-                               "CL","KDP","KMB","STZ","GIS","KHC","TGT"],
-    "Financial Services":     ["JPM","BAC","WFC","GS","MS","C","AXP","BLK","SPGI",
-                               "V","MA","SCHW","PYPL","COF","USB","TFC","PNC"],
-    "Financials":             ["JPM","BAC","WFC","GS","MS","C","AXP","BLK","SPGI",
-                               "V","MA","SCHW","PYPL","COF","USB","TFC","PNC"],
-    "Healthcare":             ["JNJ","UNH","LLY","ABBV","MRK","PFE","ABT","TMO",
-                               "DHR","AMGN","BMY","CVS","ELV","CI","ISRG","SYK","MDT"],
-    "Health Care":            ["JNJ","UNH","LLY","ABBV","MRK","PFE","ABT","TMO",
-                               "DHR","AMGN","BMY","CVS","ELV","CI","ISRG","SYK","MDT"],
-    "Energy":                 ["XOM","CVX","COP","OXY","EOG","SLB","MPC","PSX",
-                               "VLO","HES","PXD","DVN","FANG","WMB","KMI"],
-    "Industrials":            ["HON","RTX","GE","BA","CAT","DE","UPS","UNP","LMT",
-                               "FDX","NOC","ETN","EMR","TT","WM","CSX","NSC","ITW"],
-    "Real Estate":            ["PLD","AMT","EQIX","PSA","CCI","O","SPG","DLR",
-                               "WELL","VICI","EXR","AVB","SBAC","ARE","CSGP"],
-    "Utilities":              ["NEE","SO","DUK","AEP","EXC","D","SRE","XEL","PEG",
-                               "ED","WEC","ETR","ES","DTE","AWK"],
-    "Basic Materials":        ["LIN","SHW","FCX","APD","ECL","DD","DOW","NEM",
-                               "CTVA","NUE","STLD","ALB","IFF","MLM","VMC"],
-    "Materials":              ["LIN","SHW","FCX","APD","ECL","DD","DOW","NEM",
-                               "CTVA","NUE","STLD","ALB","IFF","MLM","VMC"],
-}
-
-# Small TTL cache so consecutive analyses in the same sector reuse the data.
 _PEER_DATA_CACHE: dict[str, tuple[float, dict]] = {}   # ticker -> (ts, snapshot)
 _PEER_DATA_TTL    = 600   # 10 min
 
@@ -1330,38 +1292,80 @@ def _fetch_peer_snapshot(ticker: str) -> dict:
     return out
 
 
-def build_verified_peers_block(ticker: str, sector: str | None) -> str:
-    """Return a markdown block of LIVE peer market data for `ticker`'s sector.
+def build_verified_peers_block(ticker: str, sector: str | None,
+                               industry: str | None = None,
+                               subject_mcap: float | None = None) -> str:
+    """Return a markdown block of LIVE peer market data for sell-side comps.
 
-    The block is prepended with strong instructions: 'use these exact
-    numbers verbatim for any of these tickers in your comparables table.'
-    Returns empty string if the sector is unknown or no peer data could
-    be fetched.
+    Peers are chosen by industry group + market-cap proximity (peer_comps),
+    not a broad sector dump (which mixed Amazon into chip comps, etc.).
     """
-    if not sector:
-        return ""
-    sec = (sector or "").strip()
-    # Try exact match first, then a sloppy case-insensitive fallback
-    peers = _PEER_SECTOR_MAP.get(sec)
-    if not peers:
-        for k, v in _PEER_SECTOR_MAP.items():
-            if k.lower() == sec.lower():
-                peers = v
-                break
-    if not peers:
-        return ""
-
-    # Exclude the target itself + any duplicates
     target_u = (ticker or "").strip().upper()
-    peer_set = [p for p in peers if p.upper() != target_u]
-    # Cap at 12 to keep the block bounded
-    peer_set = peer_set[:12]
+    sec = (sector or "").strip() or None
+    ind = (industry or "").strip() or None
+    if not sec and not ind:
+        return ""
 
-    rows = []
+    # Subject market cap for size banding
+    if subject_mcap is None:
+        try:
+            snap0 = _fetch_peer_snapshot(target_u)
+            subject_mcap = snap0.get("market_cap")
+        except Exception:
+            subject_mcap = None
+
+    try:
+        from peer_comps import resolve_peer_tickers, format_peer_rationale
+        resolved = resolve_peer_tickers(
+            target_u, sector=sec, industry=ind,
+            subject_mcap=subject_mcap, limit=12,
+        )
+        peer_set = list(resolved.get("peers") or [])
+        rationale = format_peer_rationale(resolved)
+        group_id = resolved.get("group_id") or ""
+    except Exception as e:
+        print(f"   ⚠️  peer_comps resolve failed: {e!s:.120}", flush=True)
+        peer_set, rationale, group_id = [], "sector fallback", ""
+        # Last-ditch: import sector list only
+        try:
+            from peer_comps import _SECTOR_FALLBACK
+            peers = _SECTOR_FALLBACK.get(sec or "") or []
+            if not peers and sec:
+                for k, v in _SECTOR_FALLBACK.items():
+                    if k.lower() == sec.lower():
+                        peers = v
+                        break
+            peer_set = [p for p in peers if p.upper() != target_u][:12]
+        except Exception:
+            return ""
+
+    if not peer_set:
+        return ""
+
+    # Fetch live snapshots; re-rank by size if we now have mcaps
+    rows_data = []
     for sym in peer_set:
         snap = _fetch_peer_snapshot(sym)
         if not snap or not snap.get("market_cap"):
             continue
+        rows_data.append((sym, snap))
+
+    # Prefer peers inside the subject's size band when we have subject_mcap
+    if subject_mcap and rows_data:
+        try:
+            from peer_comps import in_size_band, size_score
+            rows_data.sort(
+                key=lambda pair: -size_score(subject_mcap, pair[1].get("market_cap"))
+            )
+            tight = [p for p in rows_data
+                     if in_size_band(subject_mcap, p[1].get("market_cap"))]
+            if len(tight) >= 5:
+                rows_data = tight
+        except Exception:
+            pass
+
+    rows = []
+    for sym, snap in rows_data[:10]:
         rows.append(
             f"| {sym} | {_fmt_market_cap(snap.get('market_cap'))} | "
             f"${snap.get('price', 0):.2f} |"
@@ -1370,13 +1374,17 @@ def build_verified_peers_block(ticker: str, sector: str | None) -> str:
     if not rows:
         return ""
 
+    label = ind or sec or "peers"
+    group_note = f" · group `{group_id}`" if group_id else ""
     block = (
-        "## ✅ VERIFIED PEER MARKET DATA (use these exact figures verbatim)\n\n"
-        f"The following live market data for {sec} sector peers was pulled from Yahoo Finance "
-        f"{datetime.now().strftime('%Y-%m-%d')}. **You MUST use these EXACT market cap and price "
-        f"figures for any of these tickers in your comparables / peer-multiple analysis** — do "
-        f"NOT substitute training-data estimates. If a ticker you want to reference is not in "
-        f"this list, you may use your knowledge but flag it as `(model estimate)` in the cell.\n\n"
+        "## ✅ VERIFIED PEER MARKET DATA (sell-side style industry comps)\n\n"
+        f"Comparable set for **{target_u}** ({label}{group_note}). "
+        f"{rationale}. Live Yahoo Finance data {datetime.now().strftime('%Y-%m-%d')}. "
+        f"**You MUST use these EXACT market cap and price figures for these tickers "
+        f"in your comparables / peer-multiple analysis.** Prefer THIS list over "
+        f"broad sector mega-caps (do NOT put Amazon next to Intel, or JPM next to "
+        f"Visa, unless they appear below). If you add a name not listed, mark the "
+        f"cell `(model estimate)` and explain why it is a true business-model peer.\n\n"
         "| Ticker | Market Cap | Price | TTM P/E |\n"
         "|--------|-----------|-------|---------|\n"
         + "\n".join(rows)
@@ -7252,17 +7260,21 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
             mcap_str  = f"${_mcap / 1e9:.1f}Bn" if _mcap else "N/A"
             ev_str    = f"${_ev / 1e9:.1f}Bn"   if _ev   else "N/A"
             wk52_str  = f"${_yl:.2f}–${_yh:.2f}" if (_yh and _yl) else "N/A"
-            # Verified peer market data — same as the fresh path so comp tables
-            # reflect REAL Yahoo numbers, not training-data estimates.
+            # Sell-side style industry peers + live Yahoo numbers (not sector dump).
             _peers_block = ""
             try:
                 _sector = (data.get("sector") or "").strip()
-                if not _sector:
+                _industry = (data.get("industry") or "").strip()
+                if not _sector or not _industry or _industry == "Unknown":
                     try:
-                        _sector, _ = fetch_sector_and_industry(ticker)
+                        _s, _i = fetch_sector_and_industry(ticker)
+                        _sector = _sector or _s
+                        _industry = _industry if _industry and _industry != "Unknown" else _i
                     except Exception:
-                        _sector = ""
-                _peers_block = build_verified_peers_block(ticker, _sector)
+                        pass
+                _peers_block = build_verified_peers_block(
+                    ticker, _sector, industry=_industry,
+                    subject_mcap=mkt.get("market_cap"))
             except Exception:
                 pass
             user_msg = (
@@ -7446,24 +7458,31 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
         ev_str    = f"${_ev / 1e9:.1f}Bn"   if _ev   else "N/A"
         wk52_str  = f"${_yl:.2f}–${_yh:.2f}" if (_yh and _yl) else "N/A"
 
-        # Live peer market data for the comps table — pulls real Yahoo
-        # market caps + prices so the LLM doesn't hallucinate stale numbers
-        # for Microsoft, Google, Amazon etc.
+        # Live peer market data for the comps table — sell-side style industry
+        # peers (not a broad sector dump), with live Yahoo market caps/prices.
         peers_block = ""
         try:
             sector = (data.get("sector") or "").strip()
-            # Try common spots if not at top-level
-            if not sector:
-                sector = (data.get("entity_metadata", {}) or {}).get("sector", "") if isinstance(data.get("entity_metadata"), dict) else ""
-            if not sector:
-                # Fall back to fetch_sector_and_industry helper used elsewhere
+            industry = (data.get("industry") or "").strip()
+            if isinstance(data.get("entity_metadata"), dict):
+                em = data["entity_metadata"] or {}
+                if not sector:
+                    sector = (em.get("sector") or "").strip()
+                if not industry:
+                    industry = (em.get("industry") or "").strip()
+            if not sector or not industry or industry == "Unknown":
                 try:
-                    sector, _ind = fetch_sector_and_industry(ticker)
+                    _s, _i = fetch_sector_and_industry(ticker)
+                    sector = sector or _s
+                    industry = industry if industry and industry != "Unknown" else _i
                 except Exception:
-                    sector = ""
-            peers_block = build_verified_peers_block(ticker, sector)
+                    pass
+            _subj_mcap = mkt.get("market_cap") if isinstance(mkt, dict) else None
+            peers_block = build_verified_peers_block(
+                ticker, sector, industry=industry, subject_mcap=_subj_mcap)
             if peers_block:
-                print(f"   📊 Loaded verified peer market data for {ticker} ({sector})")
+                print(f"   📊 Loaded sell-side peer comps for {ticker} "
+                      f"({industry or sector})")
         except Exception as _pe:
             print(f"   ⚠️  Peer-data fetch skipped ({_pe})")
 

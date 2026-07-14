@@ -26012,42 +26012,135 @@ def _rk_margin_series(annuals, num_k, den_k):
 
 
 def _industry_peer_snapshots(tk: str, limit: int = 40) -> tuple[list, str | None]:
-    """Latest-FY metric snapshots for industry (else sector) peers in the free store.
-    Returns (list_of_snapshots, scope_label). Empty list if no peers — never guessed."""
+    """Latest-FY metric snapshots for sell-side-style industry peers in the store.
+
+    Uses peer_comps (industry group + size) so rank cards are not polluted by
+    unrelated same-sector names. Returns (snapshots, scope_label)."""
     try:
         meta = _db_meta([tk]).get(tk) or {}
         industry = (meta.get("industry") or "").strip() or None
         sector = (meta.get("sector") or "").strip() or None
         if not industry and not sector:
             return [], None
+
+        # Subject market cap for size banding
+        subj_mcap = None
+        try:
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT DISTINCT ON (ticker)
+                           shares_outstanding, diluted_shares
+                      FROM company_financials
+                     WHERE ticker=%s AND period_type='annual'
+                     ORDER BY ticker, period_end DESC
+                """, (tk,))
+                fr = cur.fetchone() or {}
+            px = _dash_f((_db_quotes([tk]).get(tk) or {}).get("price"))
+            sh = _dash_f(fr.get("shares_outstanding")) or _dash_f(fr.get("diluted_shares"))
+            if px and sh:
+                subj_mcap = px * sh
+        except Exception:
+            pass
+
+        # Pull a wide candidate pool from store (industry + sector), then rank
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            peers = []
-            scope = None
+            cand_rows = []
             if industry:
-                cur.execute("""SELECT symbol FROM security_meta
-                                WHERE industry=%s AND symbol<>%s
-                                ORDER BY symbol LIMIT %s""", (industry, tk, limit))
-                peers = [r["symbol"].upper() for r in (cur.fetchall() or []) if r.get("symbol")]
-                if peers:
-                    scope = "industry"
-            if len(peers) < 3 and sector:
-                cur.execute("""SELECT symbol FROM security_meta
-                                WHERE sector=%s AND symbol<>%s
-                                ORDER BY symbol LIMIT %s""", (sector, tk, limit))
-                peers = [r["symbol"].upper() for r in (cur.fetchall() or []) if r.get("symbol")]
-                scope = "sector"
-            if not peers:
-                return [], scope
+                cur.execute("""SELECT symbol, name, sector, industry FROM security_meta
+                                WHERE industry=%s AND symbol<>%s LIMIT 80""",
+                            (industry, tk))
+                cand_rows.extend(cur.fetchall() or [])
+            if sector:
+                cur.execute("""SELECT symbol, name, sector, industry FROM security_meta
+                                WHERE sector=%s AND symbol<>%s LIMIT 120""",
+                            (sector, tk))
+                seen = {r["symbol"].upper() for r in cand_rows if r.get("symbol")}
+                for r in (cur.fetchall() or []):
+                    s = (r.get("symbol") or "").upper()
+                    if s and s not in seen:
+                        cand_rows.append(r)
+                        seen.add(s)
+
+            # Market caps for candidates from latest financials + quotes
+            cand_syms = list({(r.get("symbol") or "").upper()
+                              for r in cand_rows if r.get("symbol")})
+            # Always include curated peer_comps names so sell-side groups win
+            try:
+                from peer_comps import resolve_peer_tickers
+                seed = resolve_peer_tickers(
+                    tk, sector=sector, industry=industry,
+                    subject_mcap=subj_mcap, limit=20,
+                )
+                for p in (seed.get("peers") or []):
+                    if p not in cand_syms:
+                        cand_syms.append(p)
+            except Exception:
+                pass
+
+            if not cand_syms:
+                return [], None
+
             cur.execute("""
-                SELECT DISTINCT ON (ticker) *
+                SELECT DISTINCT ON (ticker)
+                       ticker, shares_outstanding, diluted_shares, revenue,
+                       net_income, ebitda, operating_income, free_cash_flow,
+                       diluted_eps, total_debt, long_term_debt, short_term_debt,
+                       cash, short_term_investments, stockholders_equity,
+                       total_assets, gross_profit, gross_margin, net_margin,
+                       operating_cash_flow, period_end, entity_name
                   FROM company_financials
                  WHERE ticker = ANY(%s) AND period_type='annual'
                  ORDER BY ticker, period_end DESC
-            """, (peers,))
+            """, (cand_syms,))
             fins = {r["ticker"].upper(): r for r in (cur.fetchall() or [])}
-        quotes = _db_quotes(list(fins.keys()))
+
+        quotes = _db_quotes(list(fins.keys()) + [tk])
+        # Build candidate_meta with mcaps for scoring
+        cand_meta = []
+        for r in cand_rows:
+            s = (r.get("symbol") or "").upper()
+            fin = fins.get(s) or {}
+            px = _dash_f((quotes.get(s) or {}).get("price"))
+            sh = _dash_f(fin.get("shares_outstanding")) or _dash_f(fin.get("diluted_shares"))
+            mcap = (px * sh) if (px and sh) else None
+            cand_meta.append({
+                "symbol": s, "sector": r.get("sector"), "industry": r.get("industry"),
+                "market_cap": mcap,
+            })
+        # Also attach mcaps for curated-only names
+        have = {c["symbol"] for c in cand_meta}
+        for s in cand_syms:
+            if s in have:
+                continue
+            fin = fins.get(s) or {}
+            px = _dash_f((quotes.get(s) or {}).get("price"))
+            sh = _dash_f(fin.get("shares_outstanding")) or _dash_f(fin.get("diluted_shares"))
+            mcap = (px * sh) if (px and sh) else None
+            # Prefer industry of subject for curated inserts
+            cand_meta.append({
+                "symbol": s, "sector": sector, "industry": industry,
+                "market_cap": mcap,
+            })
+
+        try:
+            from peer_comps import resolve_peer_tickers
+            resolved = resolve_peer_tickers(
+                tk, sector=sector, industry=industry,
+                subject_mcap=subj_mcap, candidate_meta=cand_meta,
+                limit=min(limit, 24),
+            )
+            peers = list(resolved.get("peers") or [])
+            scope = "industry" if resolved.get("method") in (
+                "industry_group", "industry_store") else "sector"
+        except Exception:
+            peers = [c["symbol"] for c in cand_meta if c.get("industry") == industry][:limit]
+            scope = "industry" if peers else "sector"
+
         snaps = []
-        for t, fin in fins.items():
+        for t in peers:
+            fin = fins.get(t)
+            if not fin:
+                continue
             px = _dash_f((quotes.get(t) or {}).get("price"))
             snaps.append(_rk_fin_snapshot(fin, px))
         return snaps, scope
@@ -26328,12 +26421,18 @@ def _dash_ttm_from_quarters(quarters: list) -> dict:
 
 
 def _build_peer_comps(tk: str, subject_metrics: dict, limit: int = 8) -> dict:
-    """Sector/industry peers from the free store only (security_meta +
-    company_financials + market_quotes). No network, no LLM.
+    """Sell-side-style peers: GICS industry group + market-cap band.
 
-    Returns {sector, industry, peers:[{ticker, name, is_subject, pe, ev_ebitda,
-    net_margin_pct, rev_yoy_pct, market_cap, price, …}], source}."""
-    out = {"sector": None, "industry": None, "peers": [], "source": "store"}
+    Morgan Stanley / Goldman / BofA desks pick business-model peers of
+    similar scale — not alphabetically-first names in the whole sector.
+    Data still comes from free store only (security_meta + company_financials
+    + market_quotes). No network, no LLM on the request path.
+
+    Returns {sector, industry, peers:[…], source, method, group_id, note}."""
+    out = {
+        "sector": None, "industry": None, "peers": [], "source": "store",
+        "method": None, "group_id": None, "note": None,
+    }
     try:
         meta = _db_meta([tk]).get(tk) or {}
         sector = (meta.get("sector") or "").strip() or None
@@ -26341,31 +26440,49 @@ def _build_peer_comps(tk: str, subject_metrics: dict, limit: int = 8) -> dict:
         out["sector"] = sector
         out["industry"] = industry
         if not sector and not industry:
-            # Still return the subject row so the UI can show a comps shell.
             if subject_metrics:
                 out["peers"] = [{**subject_metrics, "ticker": tk, "is_subject": True}]
             return out
 
+        sub_mkt = subject_metrics.get("market_cap") if subject_metrics else None
+
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            # Prefer industry match; fall back to sector.
-            peers = []
+            # Wide candidate pool (industry + sector); ranking is sell-side style
+            peers_meta = []
             if industry:
                 cur.execute("""SELECT symbol, name, sector, industry FROM security_meta
-                                WHERE industry=%s AND symbol<>%s
-                                ORDER BY symbol LIMIT 40""", (industry, tk))
-                peers = cur.fetchall() or []
-            if len(peers) < 3 and sector:
+                                WHERE industry=%s AND symbol<>%s LIMIT 80""",
+                            (industry, tk))
+                peers_meta.extend(cur.fetchall() or [])
+            if sector:
                 cur.execute("""SELECT symbol, name, sector, industry FROM security_meta
-                                WHERE sector=%s AND symbol<>%s
-                                ORDER BY symbol LIMIT 40""", (sector, tk))
-                peers = cur.fetchall() or []
-            cand = [p["symbol"].upper() for p in peers if p.get("symbol")]
-            if not cand and not subject_metrics:
-                return out
+                                WHERE sector=%s AND symbol<>%s LIMIT 120""",
+                            (sector, tk))
+                seen = {(p.get("symbol") or "").upper() for p in peers_meta}
+                for r in (cur.fetchall() or []):
+                    s = (r.get("symbol") or "").upper()
+                    if s and s not in seen:
+                        peers_meta.append(r)
+                        seen.add(s)
 
-            # Latest annual row per candidate that is in the financials store.
-            fin_map = {}
-            prior_map = {}
+            cand = list({(p.get("symbol") or "").upper()
+                         for p in peers_meta if p.get("symbol")})
+            # Seed curated industry-group names so comps work even if the store
+            # only has the subject (common right after a custom ticker pull).
+            try:
+                from peer_comps import resolve_peer_tickers
+                seed = resolve_peer_tickers(
+                    tk, sector=sector, industry=industry,
+                    subject_mcap=sub_mkt, limit=16,
+                )
+                for p in (seed.get("peers") or []):
+                    if p not in cand:
+                        cand.append(p)
+            except Exception:
+                pass
+
+            fin_map: dict = {}
+            prior_map: dict = {}
             if cand:
                 cur.execute("""
                     SELECT DISTINCT ON (ticker)
@@ -26381,25 +26498,26 @@ def _build_peer_comps(tk: str, subject_metrics: dict, limit: int = 8) -> dict:
                 """, (cand,))
                 for r in (cur.fetchall() or []):
                     fin_map[r["ticker"].upper()] = r
-                # Prior-year revenue for YoY
-                prior_map = {}
                 cur.execute("""
                     SELECT ticker, revenue, period_end FROM company_financials
                      WHERE ticker = ANY(%s) AND period_type='annual'
                      ORDER BY ticker, period_end DESC
                 """, (list(fin_map.keys()) or cand,))
-                seen_n = {}
+                seen_n: dict = {}
                 for r in (cur.fetchall() or []):
                     t = r["ticker"].upper()
                     seen_n[t] = seen_n.get(t, 0) + 1
-                    if seen_n[t] == 2:          # second-most-recent FY
+                    if seen_n[t] == 2:
                         prior_map[t] = _dash_f(r.get("revenue"))
 
         quotes = _db_quotes(list(fin_map.keys()) + [tk]) if fin_map else _db_quotes([tk])
+        name_by = {(p.get("symbol") or "").upper(): (p.get("name") or p.get("industry"))
+                   for p in peers_meta}
 
         def row_metrics(tkr, fin, name=None, is_subject=False):
             price = _dash_f((quotes.get(tkr) or {}).get("price"))
-            shares = _dash_f((fin or {}).get("shares_outstanding")) or _dash_f((fin or {}).get("diluted_shares"))
+            shares = (_dash_f((fin or {}).get("shares_outstanding"))
+                      or _dash_f((fin or {}).get("diluted_shares")))
             eps = _dash_f((fin or {}).get("diluted_eps"))
             ni = _dash_f((fin or {}).get("net_income"))
             if eps is None and ni is not None and shares:
@@ -26413,7 +26531,7 @@ def _build_peer_comps(tk: str, subject_metrics: dict, limit: int = 8) -> dict:
             pe = (price / eps) if (price and eps and eps > 0) else None
             ev_eb = (ev / ebitda) if (ev is not None and ebitda and ebitda > 0) else None
             nm = _dash_f((fin or {}).get("net_margin"))
-            if nm is not None and abs(nm) <= 2:   # fraction → pct points
+            if nm is not None and abs(nm) <= 2:
                 nm_pct = nm * 100.0
             elif nm is not None:
                 nm_pct = nm
@@ -26436,33 +26554,82 @@ def _build_peer_comps(tk: str, subject_metrics: dict, limit: int = 8) -> dict:
                 "revenue": rev,
             }
 
+        # Build candidate_meta with mcaps for peer_comps scoring
+        cand_meta = []
+        for s in cand:
+            fin = fin_map.get(s)
+            # Allow curated names not yet in financials store — they'll be
+            # dropped from the table rows but still influence ranking order
+            # once their financials exist.
+            if not fin:
+                cand_meta.append({
+                    "symbol": s, "sector": sector, "industry": industry,
+                    "market_cap": None,
+                })
+                continue
+            m = row_metrics(s, fin, name=name_by.get(s) or fin.get("entity_name"))
+            cand_meta.append({
+                "symbol": s,
+                "sector": sector,
+                "industry": industry if any(
+                    (p.get("symbol") or "").upper() == s and p.get("industry") == industry
+                    for p in peers_meta) else (meta.get("industry") if s == tk else None),
+                "market_cap": m.get("market_cap"),
+            })
+            # Prefer actual meta industry when known
+            for p in peers_meta:
+                if (p.get("symbol") or "").upper() == s:
+                    cand_meta[-1]["industry"] = p.get("industry")
+                    cand_meta[-1]["sector"] = p.get("sector") or sector
+                    break
+
+        try:
+            from peer_comps import resolve_peer_tickers, format_peer_rationale
+            resolved = resolve_peer_tickers(
+                tk, sector=sector, industry=industry,
+                subject_mcap=sub_mkt, candidate_meta=cand_meta,
+                limit=max(limit * 2, 12),
+            )
+            ordered = list(resolved.get("peers") or [])
+            out["method"] = resolved.get("method")
+            out["group_id"] = resolved.get("group_id")
+            out["note"] = format_peer_rationale(resolved)
+            out["source"] = (
+                "industry" if resolved.get("method") in ("industry_group", "industry_store")
+                else "sector"
+            )
+        except Exception as e:
+            print(f"[fin-dash] peer_comps resolve failed: {e!s:.120}", flush=True)
+            ordered = [c["symbol"] for c in cand_meta]
+            out["source"] = "sector"
+            out["note"] = "Fallback alphabetical/size sort"
+
         rows_out = []
         if subject_metrics:
-            rows_out.append({**{k: v for k, v in subject_metrics.items() if not k.startswith("_")},
-                             "ticker": tk, "is_subject": True})
-        # Rank peers by market-cap proximity to subject when possible.
-        sub_mkt = subject_metrics.get("market_cap") if subject_metrics else None
+            rows_out.append({
+                **{k: v for k, v in subject_metrics.items() if not k.startswith("_")},
+                "ticker": tk, "is_subject": True,
+            })
         peer_rows = []
-        for p in peers:
-            t = (p.get("symbol") or "").upper()
+        for t in ordered:
             fin = fin_map.get(t)
             if not fin:
                 continue
-            peer_rows.append(row_metrics(t, fin, name=p.get("name") or fin.get("entity_name")))
+            peer_rows.append(row_metrics(
+                t, fin, name=name_by.get(t) or fin.get("entity_name")))
+        # Secondary sort by size proximity among the selected set
         if sub_mkt:
             peer_rows.sort(key=lambda r: abs((r.get("market_cap") or sub_mkt) - sub_mkt))
-        else:
-            peer_rows.sort(key=lambda r: -(r.get("market_cap") or 0))
         rows_out.extend(peer_rows[: max(0, limit)])
         out["peers"] = rows_out
-        out["source"] = ("industry" if industry and any(
-            (p.get("industry") == industry) for p in peers) else "sector")
         return out
     except Exception as e:
         print(f"[fin-dash] peer comps failed {tk}: {e!s:.160}", flush=True)
         if subject_metrics:
-            out["peers"] = [{**{k: v for k, v in subject_metrics.items() if not k.startswith("_")},
-                             "ticker": tk, "is_subject": True}]
+            out["peers"] = [{
+                **{k: v for k, v in subject_metrics.items() if not k.startswith("_")},
+                "ticker": tk, "is_subject": True,
+            }]
         return out
 
 
@@ -26817,7 +26984,7 @@ def financials_dashboard(ticker: str, request: Request, period_type: str = "annu
                 "pe": "Prefers TTM diluted EPS (sum of last ≤4 quarters) over last FY.",
                 "share_delta": ("YoY share change" if pt == "annual"
                                 else "Sequential (QoQ) share change — not annualized."),
-                "peers": "Peers from security_meta industry/sector + company_financials store.",
+                "peers": "Sell-side style: industry group + market-cap band (not whole-sector dump).",
                 "tokens": "Dashboard is pure DB arithmetic — zero LLM tokens.",
             }}
 
