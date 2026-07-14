@@ -23901,7 +23901,10 @@ def _run_financials_sync(job_id: str, tickers: list, years_back: int) -> None:
     try:
         _ensure_financials_table()
         total_stored = int(existing.get("stored") or 0)
-        names_ok, all_errors = 0, []
+        names_ok = int(existing.get("names_ok") or 0)
+        names_fail = int(existing.get("names_fail") or 0)
+        names_skip = int(existing.get("names_skip") or 0)
+        all_errors = []
         consecutive_rl = 0
         # Support resume: skip tickers already done this run if checkpoint has cursor
         start_i = int(existing.get("done") or 0)
@@ -23911,47 +23914,71 @@ def _run_financials_sync(job_id: str, tickers: list, years_back: int) -> None:
             tk = tickers[i]
             # Update BEFORE the SEC call so UI never sits on 0/N with "Queued"
             _set(stage="syncing", status="running",
-                 label=f"📊 Pulling {tk} ({i+1}/{len(tickers)})…",
-                 done=i, current=tk)
+                 label=f"📊 Pulling {tk} ({i+1}/{len(tickers)}) · "
+                       f"+{names_ok} new names this chunk…",
+                 done=i, current=tk, names_ok=names_ok,
+                 names_fail=names_fail, names_skip=names_skip)
             try:
                 r = _sync_one_ticker_financials(tk, years_back=years_back,
                                                 skip_if_stored=True)
                 if r.get("skipped"):
-                    # Already in store — leave data alone, advance cursor
+                    names_skip += 1
                     consecutive_rl = 0
-                    _set(stored=total_stored, done=i + 1,
-                         label=f"↷ Skip {tk} (already stored) ({i+1}/{len(tickers)})")
+                    _set(stored=total_stored, done=i + 1, names_ok=names_ok,
+                         names_skip=names_skip, names_fail=names_fail,
+                         label=f"↷ Skip {tk} (already stored) ({i+1}/{len(tickers)}) "
+                               f"· +{names_ok} new")
                     continue
-                total_stored += r.get("stored", 0)
-                if r.get("stored"):
-                    names_ok += 1
+                periods = int(r.get("stored") or 0)
+                total_stored += periods
+                # A name "lands" if we wrote ≥1 period OR SEC returned periods
+                # that were already present (DO NOTHING) but ticker is now known.
+                if periods > 0 or (r.get("periods") and not r.get("errors")):
+                    if periods > 0:
+                        names_ok += 1
+                    elif r.get("periods"):
+                        # Had data but all rows already existed — treat as present
+                        names_ok += 1
                     consecutive_rl = 0
+                elif r.get("errors") or r.get("rate_limited") or r.get("timed_out"):
+                    names_fail += 1
+                else:
+                    # Empty XBRL / no usable periods — no store growth
+                    names_fail += 1
                 for e in (r.get("errors") or [])[:1]:
                     all_errors.append(f"{tk}: {e}")
                 if r.get("timed_out"):
-                    consecutive_rl = 0  # don't pile cool-down on timeouts
+                    consecutive_rl = 0
                     time.sleep(0.2)
                 elif r.get("rate_limited"):
                     consecutive_rl += 1
-                    cool = min(120, 20 * consecutive_rl)  # cap 2 min — keep moving
-                    _set(label=f"⏳ Rate limited after {tk} — waiting {cool}s then continuing "
-                               f"({i+1}/{len(tickers)})…")
+                    cool = min(120, 20 * consecutive_rl)
+                    _set(label=f"⏳ Rate limited after {tk} — waiting {cool}s "
+                               f"({i+1}/{len(tickers)}) · +{names_ok} new…")
                     print(f"[fin sync] cool-down {cool}s after rate limit "
                           f"(streak={consecutive_rl})", flush=True)
                     time.sleep(cool)
                 else:
                     time.sleep(0.35)
             except Exception as e:
+                names_fail += 1
                 all_errors.append(f"{tk}: {e!s:.100}")
                 print(f"⚠️ [fin sync {tk}] {e!s:.150}", flush=True)
                 time.sleep(0.5)
-            _set(stored=total_stored, done=i + 1)
-        if total_stored > 0:
-            label = f"✓ Stored {total_stored} periods across {names_ok} names"
+            _set(stored=total_stored, done=i + 1, names_ok=names_ok,
+                 names_fail=names_fail, names_skip=names_skip,
+                 label=f"📊 {tk} done ({i+1}/{len(tickers)}) · "
+                       f"+{names_ok} new · {names_fail} no-data/err")
+        if names_ok > 0 or total_stored > 0:
+            label = (f"✓ +{names_ok} names / {total_stored} new periods "
+                     f"({names_fail} no-data, {names_skip} skipped)")
         else:
-            label = f"⚠ Stored 0 periods — {(all_errors[0] if all_errors else 'no data returned')[:150]}"
+            label = (f"⚠ 0 new names this chunk — "
+                     f"{(all_errors[0] if all_errors else 'SEC returned no usable data')[:150]}")
         _set(stage="done", status="done", done=len(tickers), label=label,
+             names_ok=names_ok, names_fail=names_fail, names_skip=names_skip,
              result={"periods_stored": total_stored, "names": names_ok,
+                     "names_fail": names_fail, "names_skip": names_skip,
                      "errors": all_errors[:20]})
     except Exception as e:
         print(f"❌ [fin sync {job_id}] {e!s:.300}", flush=True)

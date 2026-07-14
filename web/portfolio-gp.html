@@ -8775,24 +8775,34 @@ End with the sleeve block at this account's real market value so I can push it t
         } else {
           const done = s.done != null ? s.done : 0;
           const total = s.total != null ? s.total : 0;
+          const namesOk = s.names_ok != null ? s.names_ok : null;
+          const namesFail = s.names_fail != null ? s.names_fail : null;
           if (done !== lastDone) { lastDone = done; stuckSince = Date.now(); }
-          // First ticker XBRL can take 30–90s — show that explicitly
           let extra = '';
           if (done === 0 && total > 0 && Date.now() - stuckSince > 45000) {
             extra = ' · first SEC extract can take 30–90s (normal)';
           }
-          // Progress bar
+          // 50/150 = attempts, NOT +50 store names. Only +names_ok grows the badge.
           const pct = total > 0 ? Math.min(100, Math.round(100 * done / total)) : 0;
+          const stats = (namesOk != null)
+            ? (' · <strong style="color:var(--success-700,#15803d);">+' + namesOk + ' new names</strong>'
+               + (namesFail != null ? ' · ' + namesFail + ' no SEC data' : ''))
+            : '';
           box('<div style="font-size:12px;color:var(--text-secondary);line-height:1.5;">'
             + _trEsc(s.label || 'Working…')
-            + (total ? ' · <strong>' + done + '/' + total + '</strong> (' + pct + '%)' : '')
+            + (total ? ' · <strong>' + done + '/' + total + '</strong> tried (' + pct + '%)' : '')
+            + stats
             + extra
             + '<div style="margin-top:6px;height:6px;border-radius:99px;background:var(--gray-100,#f1f5f9);overflow:hidden;">'
             + '<div style="height:100%;width:' + pct + '%;background:var(--blue,#5BB8D4);border-radius:99px;transition:width .3s;"></div></div>'
-            + '<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:4px;">Server keeps running if you close this tab. On timeout/error it auto-resumes remaining names.</div>'
+            + '<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:4px;">'
+            + 'Tried count ≠ store count. Badge grows only when SEC returns usable filings for a new ticker. '
+            + 'Many OTC/shells return nothing. Chunk end refreshes the badge.</div>'
             + '</div>');
-          // Refresh coverage badge occasionally
-          if (done > 0 && done % 25 === 0) _loadFinCoverage();
+          // Refresh coverage whenever a new name lands (or every 5 tries)
+          if (done > 0 && (done % 5 === 0 || (namesOk != null && namesOk > 0 && done % 3 === 0))) {
+            _loadFinCoverage();
+          }
         }
       } catch (_) {
         // Network blip — keep polling; job is server-side
