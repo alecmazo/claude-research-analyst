@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import uuid as _uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -425,7 +426,7 @@ def support_ticket_create(request: Request, background_tasks: BackgroundTasks):
         print(f"[support] screenshot too large ({len(shot)} chars) — dropping", flush=True)
         shot = ""
         mime = None
-        tid = "SUP_" + datetime.utcnow().strftime("%Y%m%d_") + _uuid.uuid4().hex[:8]
+    tid = "SUP_" + datetime.utcnow().strftime("%Y%m%d_") + _uuid.uuid4().hex[:8]
     trail0 = [_support_trail_event(
         claims.get("email") or claims.get("sub") or "gp",
         "submitted",
