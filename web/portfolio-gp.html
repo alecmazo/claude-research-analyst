@@ -232,12 +232,12 @@
     box-shadow: 0 0 0 1.5px var(--blue), 0 1px 4px rgba(0,0,0,0.12);
   }
 
-  /* Universal search — claim horizontal space; tabs stay compact */
+  /* Universal search — compact (half prior width); tabs keep the rest */
   .search-wrap {
-    flex: 1 1 380px;
+    flex: 0 1 200px;
     position: relative;
-    min-width: 300px;
-    max-width: 720px;
+    min-width: 150px;
+    max-width: 360px;
   }
   .search-input {
     width: 100%;
@@ -2640,11 +2640,11 @@
   }
   .status-dot { box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.18); }
 
-  /* Search — wider field; tabs stay tight so the box can breathe */
+  /* Search — ~half prior width (ticket: top-bar ticker/company entry too wide) */
   .search-wrap {
-    flex: 1 1 400px;
-    min-width: 320px;
-    max-width: 760px;
+    flex: 0 1 200px;
+    min-width: 160px;
+    max-width: 380px;
   }
   .search-input {
     background: var(--gray-50);
@@ -3859,9 +3859,9 @@
   <div class="search-wrap" id="search-wrap">
     <span class="search-icon">⌕</span>
     <input id="search-input" class="search-input"
-           placeholder="Ticker or company — e.g. NVDA, AAPL, Apple"
+           placeholder="Ticker or company…"
            autocomplete="off" autocapitalize="characters" spellcheck="false"
-           title="Type a ticker and press Enter for a free stock snapshot (no AI cost)">
+           title="Type a ticker or company name and press Enter for a free stock snapshot (no AI cost). e.g. NVDA, AAPL, Apple">
     <span class="search-kbd">⌘K</span>
     <div id="search-results"></div>
   </div>
