@@ -25766,6 +25766,53 @@ def financials_coverage(request: Request):
         return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
 
 
+@app.get("/api/financials/sheet-links")
+def financials_sheet_links(request: Request, limit: int = 40):
+    """Tickers with stored financials for the Value Line sheet link strip.
+    Prefer followed (reports+watchlist), then rest of store. DB only.
+    Registered before /api/financials/{ticker} so 'sheet-links' is not a ticker."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    limit = max(5, min(int(limit or 40), 80))
+    followed = set(_fin_followed_tickers())
+    out = []
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""
+                SELECT ticker,
+                       MAX(entity_name) AS entity_name,
+                       MAX(period_end)  AS latest,
+                       COUNT(*) FILTER (WHERE period_type='annual')  AS annuals,
+                       COUNT(*) FILTER (WHERE period_type='quarter') AS quarters
+                  FROM company_financials
+                 GROUP BY ticker
+            """)
+            rows = cur.fetchall() or []
+        def sort_key(r):
+            t = (r.get("ticker") or "").upper()
+            return (0 if t in followed else 1, t)
+        for r in sorted(rows, key=sort_key)[:limit]:
+            t = (r.get("ticker") or "").upper()
+            out.append({
+                "ticker": t,
+                "name": r.get("entity_name") or t,
+                "followed": t in followed,
+                "annuals": int(r.get("annuals") or 0),
+                "quarters": int(r.get("quarters") or 0),
+                "latest": (r["latest"].isoformat() if hasattr(r.get("latest"), "isoformat")
+                           else r.get("latest")),
+            })
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+    return {
+        "ok": True,
+        "links": out,
+        "followed_count": sum(1 for x in out if x.get("followed")),
+        "note": "Links open Value Line–style sheets from the free store. No LLM.",
+    }
+
+
 @app.get("/api/financials/screen")
 def financials_screen(request: Request, period_type: str = "quarter",
                       metric: str = "", op: str = "", value: float = None,
@@ -26987,6 +27034,524 @@ def financials_dashboard(ticker: str, request: Request, period_type: str = "annu
                 "peers": "Sell-side style: industry group + market-cap band (not whole-sector dump).",
                 "tokens": "Dashboard is pure DB arithmetic — zero LLM tokens.",
             }}
+
+
+# ── Value Line–style financial sheet (pure store, zero LLM, zero continuous cost) ─
+# Renders all pulled SEC numbers as a printable statistical array (years × metrics).
+# View path = Postgres only. PDF is generated only when the user clicks Download
+# (on-demand CPU) — never on a schedule, never touches SEC/LLM.
+
+_VL_TAX = 0.21
+
+
+def _vl_f(v):
+    try:
+        if v is None:
+            return None
+        x = float(v)
+        if x != x:  # NaN
+            return None
+        return x
+    except (TypeError, ValueError):
+        return None
+
+
+def _vl_pct(num, den):
+    n, d = _vl_f(num), _vl_f(den)
+    if n is None or d in (None, 0):
+        return None
+    return n / d * 100.0
+
+
+def _vl_ratio(num, den):
+    n, d = _vl_f(num), _vl_f(den)
+    if n is None or d in (None, 0):
+        return None
+    return n / d
+
+
+def _vl_debt(r) -> float | None:
+    return _dash_debt_of(r)
+
+
+def _vl_cash(r) -> float | None:
+    return _dash_cash_of(r)
+
+
+def _vl_series_from_annuals(annuals: list) -> dict:
+    """Build Value Line–style row series (oldest → newest) from annual store rows."""
+    labels = []
+    for r in annuals:
+        fy = r.get("fy")
+        pe = r.get("period_end")
+        if fy:
+            labels.append(f"FY{fy}")
+        elif pe is not None:
+            labels.append(str(pe)[:4])
+        else:
+            labels.append("—")
+
+    def col(key):
+        return [_vl_f(r.get(key)) for r in annuals]
+
+    rev = col("revenue")
+    cogs = col("cost_of_revenue")
+    gp = col("gross_profit")
+    opin = col("operating_income")
+    ni = col("net_income")
+    ebitda = col("ebitda")
+    ocf = col("operating_cash_flow")
+    fcf = col("free_cash_flow")
+    capex = col("capex")
+    div = col("dividends")
+    bb = col("buybacks")
+    eps = col("diluted_eps")
+    shares = []
+    for r in annuals:
+        sh = _vl_f(r.get("shares_outstanding")) or _vl_f(r.get("diluted_shares"))
+        shares.append(sh)
+    # Fill EPS from NI/shares when missing
+    for i, e in enumerate(eps):
+        if e is None and ni[i] is not None and shares[i]:
+            eps[i] = ni[i] / shares[i]
+    cash = [_vl_cash(r) for r in annuals]
+    debt = [_vl_debt(r) for r in annuals]
+    equity = col("stockholders_equity")
+    assets = col("total_assets")
+    liab = col("total_liabilities")
+    ltd = col("long_term_debt")
+    rnd = col("rnd")
+
+    # Margins (prefer stored fraction, else compute)
+    def margin_series(stored_key, num_series):
+        out = []
+        for i, r in enumerate(annuals):
+            m = _vl_f(r.get(stored_key))
+            if m is not None:
+                out.append(m * 100.0 if abs(m) <= 2 else m)
+            else:
+                out.append(_vl_pct(num_series[i], rev[i]))
+        return out
+
+    gm = margin_series("gross_margin", gp)
+    om = margin_series("operating_margin", opin)
+    nm = margin_series("net_margin", ni)
+    em = margin_series("ebitda_margin", ebitda)
+    fcfm = [_vl_pct(fcf[i], rev[i]) for i in range(len(annuals))]
+    ocfm = [_vl_pct(ocf[i], rev[i]) for i in range(len(annuals))]
+
+    roe = [_vl_pct(ni[i], equity[i]) for i in range(len(annuals))]
+    roa = [_vl_pct(ni[i], assets[i]) for i in range(len(annuals))]
+    # ROIC ≈ NOPAT / (debt + equity − cash)
+    roic = []
+    for i, r in enumerate(annuals):
+        op = opin[i]
+        if op is None:
+            roic.append(None)
+            continue
+        nopat = op * (1 - _VL_TAX)
+        c = cash[i] or 0.0
+        d = debt[i] or 0.0
+        e = equity[i]
+        if e is None:
+            roic.append(None)
+            continue
+        inv = d + e - c
+        roic.append((nopat / inv * 100.0) if inv > 0 else None)
+
+    bvps = []
+    dps = []  # dividends per share
+    for i in range(len(annuals)):
+        sh = shares[i]
+        bvps.append((equity[i] / sh) if (equity[i] is not None and sh) else None)
+        # Dividends stored as cash outflow (often total); per-share if we have shares
+        if div[i] is not None and sh and sh > 0:
+            dps.append(abs(div[i]) / sh)
+        else:
+            dps.append(None)
+
+    # YoY growth %
+    def yoy(series):
+        out = [None]
+        for i in range(1, len(series)):
+            a, b = series[i - 1], series[i]
+            if a and a != 0 and b is not None:
+                out.append((b / a - 1.0) * 100.0)
+            else:
+                out.append(None)
+        return out
+
+    de = [_vl_ratio(debt[i], equity[i]) for i in range(len(annuals))]
+    c2d = []
+    for i in range(len(annuals)):
+        d = debt[i]
+        c = cash[i]
+        if d is None:
+            c2d.append(None)
+        elif d == 0:
+            c2d.append(10.0 if (c or 0) > 0 else None)
+        else:
+            c2d.append((c or 0.0) / d)
+
+    rows = [
+        {"id": "revenue", "label": "Revenues", "unit": "$", "values": rev},
+        {"id": "cogs", "label": "Cost of Revenue", "unit": "$", "values": cogs},
+        {"id": "gross_profit", "label": "Gross Profit", "unit": "$", "values": gp},
+        {"id": "rnd", "label": "R&D", "unit": "$", "values": rnd},
+        {"id": "operating_income", "label": "Operating Income", "unit": "$", "values": opin},
+        {"id": "ebitda", "label": "EBITDA", "unit": "$", "values": ebitda},
+        {"id": "net_income", "label": "Net Income", "unit": "$", "values": ni},
+        {"id": "diluted_eps", "label": "Diluted EPS", "unit": "$/sh", "values": eps},
+        {"id": "dps", "label": "Dividends / sh", "unit": "$/sh", "values": dps},
+        {"id": "ocf", "label": "Operating Cash Flow", "unit": "$", "values": ocf},
+        {"id": "capex", "label": "Capital Spending", "unit": "$", "values": [abs(x) if x is not None else None for x in capex]},
+        {"id": "fcf", "label": "Free Cash Flow", "unit": "$", "values": fcf},
+        {"id": "buybacks", "label": "Share Buybacks (cash)", "unit": "$", "values": [abs(x) if x is not None else None for x in bb]},
+        {"id": "cash", "label": "Cash & ST Investments", "unit": "$", "values": cash},
+        {"id": "total_debt", "label": "Total Debt", "unit": "$", "values": debt},
+        {"id": "long_term_debt", "label": "Long-Term Debt", "unit": "$", "values": ltd},
+        {"id": "equity", "label": "Shareholders' Equity", "unit": "$", "values": equity},
+        {"id": "assets", "label": "Total Assets", "unit": "$", "values": assets},
+        {"id": "liabilities", "label": "Total Liabilities", "unit": "$", "values": liab},
+        {"id": "shares", "label": "Shares Outstanding", "unit": "sh", "values": shares},
+        {"id": "bvps", "label": "Book Value / sh", "unit": "$/sh", "values": bvps},
+        {"id": "section_ratios", "label": "— Rates & margins —", "unit": "section", "values": [None] * len(annuals)},
+        {"id": "gross_margin", "label": "Gross Margin", "unit": "%", "values": gm},
+        {"id": "op_margin", "label": "Operating Margin", "unit": "%", "values": om},
+        {"id": "ebitda_margin", "label": "EBITDA Margin", "unit": "%", "values": em},
+        {"id": "net_margin", "label": "Net Profit Margin", "unit": "%", "values": nm},
+        {"id": "ocf_margin", "label": "OCF Margin", "unit": "%", "values": ocfm},
+        {"id": "fcf_margin", "label": "FCF Margin", "unit": "%", "values": fcfm},
+        {"id": "roe", "label": "Return on Equity", "unit": "%", "values": roe},
+        {"id": "roa", "label": "Return on Assets", "unit": "%", "values": roa},
+        {"id": "roic", "label": "ROIC (NOPAT)", "unit": "%", "values": roic},
+        {"id": "debt_equity", "label": "Debt / Equity", "unit": "x", "values": de},
+        {"id": "cash_debt", "label": "Cash / Debt", "unit": "x", "values": c2d},
+        {"id": "section_growth", "label": "— Growth (YoY) —", "unit": "section", "values": [None] * len(annuals)},
+        {"id": "rev_yoy", "label": "Revenue Growth", "unit": "%", "values": yoy(rev)},
+        {"id": "eps_yoy", "label": "EPS Growth", "unit": "%", "values": yoy(eps)},
+        {"id": "ni_yoy", "label": "Net Income Growth", "unit": "%", "values": yoy(ni)},
+        {"id": "fcf_yoy", "label": "FCF Growth", "unit": "%", "values": yoy(fcf)},
+    ]
+    return {"labels": labels, "rows": rows, "n_years": len(annuals)}
+
+
+def _build_fin_sheet(ticker: str) -> dict:
+    """Value Line–style sheet payload from company_financials + quotes + meta.
+    Pure DB — no SEC, no LLM, no peer scans."""
+    tk = (ticker or "").strip().upper()
+    if not tk:
+        return {"ok": False, "error": "ticker required"}
+    _ensure_financials_table()
+    annuals = [r for r in _fin_rows_for_ticker(tk, "annual")][::-1]  # oldest→newest
+    annuals = annuals[-12:]  # last 12 FYs like Value Line statistical array
+    quarters = [r for r in _fin_rows_for_ticker(tk, "quarter")][::-1]
+    quarters = quarters[-12:]
+    if not annuals and not quarters:
+        return {"ok": False, "error": f"No financials stored for {tk}. Pull SEC data first."}
+
+    meta = _db_meta([tk]).get(tk) or {}
+    q = _db_quotes([tk]).get(tk) or {}
+    price = _vl_f(q.get("price"))
+    entity = None
+    if annuals:
+        entity = annuals[-1].get("entity_name")
+    if not entity and quarters:
+        entity = quarters[-1].get("entity_name")
+    entity = entity or meta.get("name") or tk
+
+    # Capital structure snapshot from latest annual + price
+    L = annuals[-1] if annuals else (quarters[-1] if quarters else {})
+    shares = _vl_f(L.get("shares_outstanding")) or _vl_f(L.get("diluted_shares"))
+    cash = _vl_cash(L) or 0.0
+    debt = _vl_debt(L)
+    equity = _vl_f(L.get("stockholders_equity"))
+    mktcap = (price * shares) if (price and shares) else None
+    ev = (mktcap + (debt or 0.0) - cash) if mktcap is not None else None
+    eps = _vl_f(L.get("diluted_eps"))
+    ni = _vl_f(L.get("net_income"))
+    if eps is None and ni is not None and shares:
+        eps = ni / shares
+    pe = (price / eps) if (price and eps and eps > 0) else None
+    bvps = (equity / shares) if (equity is not None and shares) else None
+    pb = (price / bvps) if (price and bvps and bvps > 0) else None
+    rev = _vl_f(L.get("revenue"))
+    ebitda = _vl_f(L.get("ebitda"))
+    fcf = _vl_f(L.get("free_cash_flow"))
+    ev_eb = (ev / ebitda) if (ev is not None and ebitda and ebitda > 0) else None
+    fcf_y = (fcf / mktcap * 100.0) if (fcf is not None and mktcap and mktcap > 0) else None
+
+    annual_block = _vl_series_from_annuals(annuals) if annuals else {"labels": [], "rows": [], "n_years": 0}
+
+    # Quarterly compact block (last 8)
+    q_labels, q_rev, q_ni, q_eps, q_fcf, q_om = [], [], [], [], [], []
+    for r in quarters[-8:]:
+        pe = r.get("period_end")
+        fp = r.get("fp") or ""
+        fy = r.get("fy")
+        lab = f"{fp}'{str(fy)[-2:]}" if (fp and fy) else (str(pe)[:10] if pe else "—")
+        q_labels.append(lab)
+        q_rev.append(_vl_f(r.get("revenue")))
+        q_ni.append(_vl_f(r.get("net_income")))
+        e = _vl_f(r.get("diluted_eps"))
+        sh = _vl_f(r.get("shares_outstanding")) or _vl_f(r.get("diluted_shares"))
+        niq = _vl_f(r.get("net_income"))
+        if e is None and niq is not None and sh:
+            e = niq / sh
+        q_eps.append(e)
+        q_fcf.append(_vl_f(r.get("free_cash_flow")))
+        q_om.append(_vl_pct(r.get("operating_income"), r.get("revenue")))
+
+    quarterly = {
+        "labels": q_labels,
+        "rows": [
+            {"id": "q_rev", "label": "Revenue", "unit": "$", "values": q_rev},
+            {"id": "q_ni", "label": "Net Income", "unit": "$", "values": q_ni},
+            {"id": "q_eps", "label": "Diluted EPS", "unit": "$/sh", "values": q_eps},
+            {"id": "q_fcf", "label": "Free Cash Flow", "unit": "$", "values": q_fcf},
+            {"id": "q_om", "label": "Op. Margin", "unit": "%", "values": q_om},
+        ],
+    }
+
+    return {
+        "ok": True,
+        "ticker": tk,
+        "entity_name": entity,
+        "sector": meta.get("sector"),
+        "industry": meta.get("industry"),
+        "price": price,
+        "as_of_quote": q.get("as_of") or q.get("updated_at"),
+        "capital": {
+            "market_cap": mktcap,
+            "enterprise_value": ev,
+            "price": price,
+            "pe": pe,
+            "pb": pb,
+            "ev_ebitda": ev_eb,
+            "fcf_yield_pct": fcf_y,
+            "cash": cash if cash else _vl_cash(L),
+            "total_debt": debt,
+            "equity": equity,
+            "shares": shares,
+            "book_value_ps": bvps,
+            "revenue_ltm_or_fy": rev,
+            "net_income_fy": ni,
+            "fcf_fy": fcf,
+            "period_end": (L.get("period_end").isoformat()
+                           if hasattr(L.get("period_end"), "isoformat") else L.get("period_end")),
+            "fy": L.get("fy"),
+        },
+        "annual": annual_block,
+        "quarterly": quarterly,
+        "source": "Postgres company_financials + market_quotes (SEC XBRL pull)",
+        "cost": "DB read only · zero LLM · zero SEC on view",
+    }
+
+
+def _fin_sheet_pdf_bytes(sheet: dict) -> bytes:
+    """Render a compact Value Line–style PDF from a sheet payload (reportlab)."""
+    if not _REPORTLAB_OK:
+        raise RuntimeError("reportlab not installed")
+    from io import BytesIO
+    from reportlab.lib.pagesizes import letter, landscape
+    from reportlab.lib import colors
+    from reportlab.lib.units import inch
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable,
+    )
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=landscape(letter),
+        leftMargin=0.4 * inch, rightMargin=0.4 * inch,
+        topMargin=0.35 * inch, bottomMargin=0.35 * inch,
+    )
+    styles = getSampleStyleSheet()
+    title_s = ParagraphStyle(
+        "vl_title", parent=styles["Heading1"], fontSize=14, leading=16,
+        spaceAfter=2, textColor=colors.HexColor("#0A1628"))
+    sub_s = ParagraphStyle(
+        "vl_sub", parent=styles["Normal"], fontSize=8, leading=10,
+        textColor=colors.HexColor("#475569"))
+    cell_s = ParagraphStyle(
+        "vl_cell", parent=styles["Normal"], fontSize=6.5, leading=8,
+        alignment=TA_RIGHT)
+    lab_s = ParagraphStyle(
+        "vl_lab", parent=styles["Normal"], fontSize=6.5, leading=8,
+        alignment=TA_LEFT, textColor=colors.HexColor("#0f172a"))
+    sec_s = ParagraphStyle(
+        "vl_sec", parent=styles["Normal"], fontSize=7, leading=9,
+        textColor=colors.HexColor("#0369a1"), fontName="Helvetica-Bold")
+
+    def money(v, unit="$"):
+        if v is None:
+            return "—"
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            return "—"
+        if unit == "%":
+            return f"{x:.1f}%"
+        if unit == "x":
+            return f"{x:.2f}×"
+        if unit == "$/sh":
+            return f"${x:,.2f}"
+        if unit == "sh":
+            if abs(x) >= 1e9:
+                return f"{x/1e9:.2f}B"
+            if abs(x) >= 1e6:
+                return f"{x/1e6:.1f}M"
+            return f"{x:,.0f}"
+        # $ absolute
+        ax = abs(x)
+        sign = "-" if x < 0 else ""
+        if ax >= 1e12:
+            return f"{sign}${ax/1e12:.2f}T"
+        if ax >= 1e9:
+            return f"{sign}${ax/1e9:.2f}B"
+        if ax >= 1e6:
+            return f"{sign}${ax/1e6:.1f}M"
+        if ax >= 1e3:
+            return f"{sign}${ax/1e3:.0f}K"
+        return f"{sign}${ax:,.0f}"
+
+    story = []
+    tk = sheet.get("ticker") or ""
+    name = sheet.get("entity_name") or tk
+    px = sheet.get("price")
+    px_s = f"${px:,.2f}" if px is not None else "—"
+    story.append(Paragraph(
+        f"{name} <font color='#64748b'>({tk})</font>  ·  Recent price {px_s}",
+        title_s))
+    ind = " · ".join(x for x in [sheet.get("industry"), sheet.get("sector")] if x)
+    cap = sheet.get("capital") or {}
+    story.append(Paragraph(
+        f"{ind or '—'}  ·  Mkt cap {money(cap.get('market_cap'))}  ·  "
+        f"EV {money(cap.get('enterprise_value'))}  ·  P/E {money(cap.get('pe'), 'x')}  ·  "
+        f"EV/EBITDA {money(cap.get('ev_ebitda'), 'x')}  ·  Cash {money(cap.get('cash'))}  ·  "
+        f"Debt {money(cap.get('total_debt'))}  ·  SEC store (no LLM)",
+        sub_s))
+    story.append(Spacer(1, 6))
+    story.append(HRFlowable(width="100%", thickness=0.6, color=colors.HexColor("#94a3b8")))
+    story.append(Spacer(1, 4))
+
+    annual = sheet.get("annual") or {}
+    labels = annual.get("labels") or []
+    rows = annual.get("rows") or []
+    if labels and rows:
+        header = [Paragraph("<b>Annual statistical array</b>", lab_s)] + [
+            Paragraph(f"<b>{l}</b>", cell_s) for l in labels]
+        data = [header]
+        for r in rows:
+            unit = r.get("unit") or "$"
+            if unit == "section":
+                data.append([Paragraph(r.get("label") or "", sec_s)] +
+                            [""] * len(labels))
+                continue
+            data.append(
+                [Paragraph(r.get("label") or "", lab_s)] +
+                [Paragraph(money(v, unit), cell_s) for v in (r.get("values") or [])]
+            )
+        ncols = 1 + len(labels)
+        label_w = 1.55 * inch
+        rest = max(0.45 * inch, (10.2 * inch - label_w) / max(len(labels), 1))
+        col_w = [label_w] + [rest] * len(labels)
+        t = Table(data, colWidths=col_w, repeatRows=1)
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0A1628")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 6.5),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+             [colors.white, colors.HexColor("#f8fafc")]),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#e2e8f0")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]))
+        story.append(t)
+
+    qtr = sheet.get("quarterly") or {}
+    ql, qr = qtr.get("labels") or [], qtr.get("rows") or []
+    if ql and qr:
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("Recent quarters", sec_s))
+        story.append(Spacer(1, 3))
+        header = [Paragraph("<b>Quarterly</b>", lab_s)] + [
+            Paragraph(f"<b>{l}</b>", cell_s) for l in ql]
+        data = [header]
+        for r in qr:
+            unit = r.get("unit") or "$"
+            data.append(
+                [Paragraph(r.get("label") or "", lab_s)] +
+                [Paragraph(money(v, unit), cell_s) for v in (r.get("values") or [])]
+            )
+        label_w = 1.4 * inch
+        rest = max(0.55 * inch, (10.2 * inch - label_w) / max(len(ql), 1))
+        t2 = Table(data, colWidths=[label_w] + [rest] * len(ql))
+        t2.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e3a5f")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#e2e8f0")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+             [colors.white, colors.HexColor("#f1f5f9")]),
+            ("FONTSIZE", (0, 0), (-1, -1), 6.5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]))
+        story.append(t2)
+
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(
+        "DGA Capital · Value Line–style sheet from SEC EDGAR XBRL store · "
+        "Insert-only warehouse · Not investment advice · Generated on demand",
+        sub_s))
+    doc.build(story)
+    return buf.getvalue()
+
+
+@app.get("/api/financials/{ticker}/sheet")
+def financials_valueline_sheet(ticker: str, request: Request):
+    """Value Line–style financial sheet (JSON). Pure DB — free, no LLM, no SEC."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    sheet = _build_fin_sheet(ticker)
+    if not sheet.get("ok"):
+        return JSONResponse(sheet, status_code=404 if "No financials" in (sheet.get("error") or "") else 400)
+    return sheet
+
+
+@app.get("/api/financials/{ticker}/sheet.pdf")
+def financials_valueline_pdf(ticker: str, request: Request):
+    """On-demand PDF of the Value Line sheet. CPU only when clicked — not scheduled."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    if not _REPORTLAB_OK:
+        raise HTTPException(400, "PDF engine (reportlab) not installed on this server")
+    sheet = _build_fin_sheet(ticker)
+    if not sheet.get("ok"):
+        raise HTTPException(404, sheet.get("error") or "not found")
+    try:
+        pdf = _fin_sheet_pdf_bytes(sheet)
+    except Exception as e:
+        raise HTTPException(500, f"PDF render failed: {e!s:.160}")
+    tk = sheet.get("ticker") or ticker.upper()
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{tk}_DGA_Financials_Sheet.pdf"',
+            "Cache-Control": "private, max-age=120",
+        },
+    )
 
 
 # ── Interactive price chart (GuruFocus-style) — Tradier history, durable cache ─

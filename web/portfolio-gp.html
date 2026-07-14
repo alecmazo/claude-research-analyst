@@ -76,6 +76,55 @@
   }
   .settings-group-head:not(:first-child) { margin-top: 10px; }
 
+  /* Value Line financial sheet */
+  .fin-vl-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    border: 1px solid var(--border-default, #cbd5e1); border-radius: 999px;
+    padding: 3px 10px; font-size: 11.5px; font-weight: 700;
+    font-family: "SF Mono", Menlo, monospace; letter-spacing: 0.3px;
+    background: var(--bg-elevated, #fff); color: var(--text-primary, #0f172a);
+    cursor: pointer; text-decoration: none;
+  }
+  .fin-vl-chip:hover { border-color: var(--blue, #5BB8D4); color: #0c4a6e; }
+  .fin-vl-chip.active { background: #0A1628; color: #fff; border-color: #0A1628; }
+  .fin-vl-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: #16a34a; }
+  .fin-vl-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  .fin-vl-table th, .fin-vl-table td {
+    border: 1px solid var(--border-subtle, #e2e8f0); padding: 3px 6px;
+    font-size: 10.5px; white-space: nowrap;
+  }
+  .fin-vl-table th {
+    background: #0A1628; color: #fff; font-weight: 700; font-size: 10px;
+    letter-spacing: 0.2px; position: sticky; top: 0; z-index: 1;
+  }
+  .fin-vl-table td.lab { text-align: left; font-weight: 600; color: var(--text-primary); background: var(--gray-50, #f8fafc); position: sticky; left: 0; z-index: 1; min-width: 140px; }
+  .fin-vl-table td.num { text-align: right; color: var(--text-primary); }
+  .fin-vl-table tr.sec td { background: #e0f2fe; color: #075985; font-weight: 800; font-size: 10px; letter-spacing: 0.4px; text-transform: uppercase; }
+  .fin-vl-table tr:nth-child(even):not(.sec) td.num { background: #fafbfc; }
+  .fin-vl-cap {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 6px 12px; margin: 10px 0 12px; padding: 10px 12px;
+    border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-elevated);
+  }
+  .fin-vl-cap .k { font-size: 9.5px; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text-tertiary); }
+  .fin-vl-cap .v { font-size: 13px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .fin-vl-scroll { overflow: auto; max-height: 62vh; border: 1px solid var(--border-subtle); border-radius: 8px; }
+
+  @media print {
+    body * { visibility: hidden !important; }
+    #fin-vl-panel, #fin-vl-panel * { visibility: visible !important; }
+    #fin-vl-panel {
+      position: absolute !important; left: 0; top: 0; width: 100%;
+      box-shadow: none !important; border: none !important;
+    }
+    .topbar, #dga-support-fab, #dga-support-backdrop,
+    #fin-vl-links, #fin-vl-open, #fin-vl-print, #fin-vl-pdf, #fin-vl-ticker,
+    .panel-head button, .tab-toolbar { display: none !important; }
+    .fin-vl-scroll { max-height: none !important; overflow: visible !important; }
+    .fin-vl-table th { position: static !important; }
+    .fin-vl-table td.lab { position: static !important; }
+  }
+
   /* ── TOP NAV BAR ─────────────────────────────────────────────── */
   .topbar {
     background: #fff;
@@ -4916,6 +4965,36 @@ End with the sleeve block at this account's real market value so I can push it t
       </div>
     </section>
 
+    <!-- ── Value Line–style Financials sheet (above the store) ──
+         All numbers from Postgres company_financials already pulled from SEC.
+         Browse = free/DB. Print = browser. PDF = on-demand only (no schedule). -->
+    <section class="panel" id="fin-vl-panel" style="margin-bottom:14px;">
+      <header class="panel-head">
+        <span class="panel-title">📈 Financials</span>
+        <span class="panel-badge" style="background:#dcfce7;color:#166534;" title="Reads the SEC store only — zero LLM, zero background jobs">VALUE LINE · FREE</span>
+        <span style="flex:1"></span>
+        <input id="fin-vl-ticker" list="fin-dash-list" placeholder="Ticker…" maxlength="8"
+          style="width:100px;border:1px solid var(--border-default);border-radius:6px;padding:5px 8px;font-size:12px;font-weight:700;text-transform:uppercase;background:var(--bg-elevated);color:var(--text-primary);">
+        <button type="button" id="fin-vl-open" class="btn-primary" style="padding:0 12px;height:28px;font-size:11.5px;">Open sheet ▶</button>
+        <button type="button" id="fin-vl-print" class="btn-secondary" style="padding:0 10px;height:28px;font-size:11.5px;" title="Browser print → Save as PDF (zero server cost)">🖨 Print / Save PDF</button>
+        <button type="button" id="fin-vl-pdf" class="btn-secondary" style="padding:0 10px;height:28px;font-size:11.5px;" title="On-demand PDF download (uses stored numbers only)">⬇ PDF</button>
+      </header>
+      <div class="panel-body" style="padding:12px 14px;">
+        <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.5;margin-bottom:8px;">
+          <strong>Value Line–style statistical array</strong> of every number already pulled into the store
+          (income, cash flow, balance sheet, margins, ROE/ROA/ROIC, growth).
+          Click a company link below — <em>no SEC re-pull, no LLM, no Railway burn to browse</em>.
+        </div>
+        <div id="fin-vl-links" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;min-height:28px;">
+          <span style="font-size:11px;color:var(--text-tertiary);">Loading company links…</span>
+        </div>
+        <div id="fin-vl-empty" style="font-size:12px;color:var(--text-tertiary);padding:8px 0;">
+          Select a ticker (links above, or type one) to open its financial sheet.
+        </div>
+        <div id="fin-vl-sheet" class="fin-vl-sheet" style="display:none;"></div>
+      </div>
+    </section>
+
     <!-- ── Financials store (low-cost Railway posture) ──
          Viewing dashboards is free/DB-only. SEC pulls are free (no LLM) but use
          CPU/egress — so auto only hits followed names nightly + a light monthly
@@ -7862,11 +7941,39 @@ End with the sleeve block at this account's real market value so I can push it t
           if (_finDashLast) _finDashLoad(_finDashLast);
         });
       });
+      // Value Line sheet
+      const vlo = document.getElementById('fin-vl-open');
+      if (vlo) vlo.addEventListener('click', () => {
+        const t = ((document.getElementById('fin-vl-ticker') || {}).value || '').trim().toUpperCase();
+        if (t) _loadFinVlSheet(t);
+      });
+      const vlt = document.getElementById('fin-vl-ticker');
+      if (vlt) {
+        vlt.addEventListener('input', function() { this.value = this.value.toUpperCase(); });
+        vlt.addEventListener('keydown', e => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            const t = (vlt.value || '').trim().toUpperCase();
+            if (t) _loadFinVlSheet(t);
+          }
+        });
+      }
+      const vlp = document.getElementById('fin-vl-print');
+      if (vlp) vlp.addEventListener('click', () => {
+        if (!document.getElementById('fin-vl-sheet') || document.getElementById('fin-vl-sheet').style.display === 'none') {
+          if (window.toast) window.toast('Open a company sheet first', { type: 'warn' });
+          return;
+        }
+        window.print();
+      });
+      const vlpdf = document.getElementById('fin-vl-pdf');
+      if (vlpdf) vlpdf.addEventListener('click', () => _downloadFinVlPdf());
       _finWired = true;
       _finSyncUniverseUI();
     }
     _loadFinCoverage();
     _loadFinSettings();
+    _loadFinVlLinks();
     // Fill the dashboard's ticker datalist from store coverage (cheap DB call).
     window.dgaFetch('/api/financials/coverage').then(r => r.json()).then(d => {
       const list = document.getElementById('fin-dash-list');
@@ -8699,6 +8806,186 @@ End with the sleeve block at this account's real market value so I can push it t
     if (ch && det) ch.style.transform = det.open ? 'rotate(90deg)' : '';
   }
 
+  // ── Value Line sheet (above Financials store) ─────────────────
+  let _finVlTicker = null;
+  function _vlMoney(v, unit) {
+    if (v == null || v === '' || (typeof v === 'number' && isNaN(v))) return '—';
+    const x = Number(v);
+    if (unit === '%') return (x >= 0 ? '' : '') + x.toFixed(1) + '%';
+    if (unit === 'x') return x.toFixed(2) + '×';
+    if (unit === '$/sh') return '$' + x.toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 2 });
+    if (unit === 'sh') {
+      const a = Math.abs(x);
+      if (a >= 1e9) return (x / 1e9).toFixed(2) + 'B';
+      if (a >= 1e6) return (x / 1e6).toFixed(1) + 'M';
+      return x.toLocaleString('en-US', { maximumFractionDigits: 0 });
+    }
+    const a = Math.abs(x), s = x < 0 ? '−' : '';
+    if (a >= 1e12) return s + '$' + (a / 1e12).toFixed(2) + 'T';
+    if (a >= 1e9) return s + '$' + (a / 1e9).toFixed(2) + 'B';
+    if (a >= 1e6) return s + '$' + (a / 1e6).toFixed(1) + 'M';
+    if (a >= 1e3) return s + '$' + (a / 1e3).toFixed(0) + 'K';
+    return s + '$' + a.toFixed(0);
+  }
+  function _vlTable(block, title) {
+    const labels = (block && block.labels) || [];
+    const rows = (block && block.rows) || [];
+    if (!labels.length || !rows.length) return '';
+    let head = '<tr><th style="text-align:left;min-width:140px;">' + _trEsc(title || '') + '</th>';
+    labels.forEach(l => { head += '<th>' + _trEsc(l) + '</th>'; });
+    head += '</tr>';
+    let body = '';
+    rows.forEach(r => {
+      const unit = r.unit || '$';
+      if (unit === 'section') {
+        body += '<tr class="sec"><td class="lab" colspan="' + (labels.length + 1) + '">'
+          + _trEsc(r.label || '') + '</td></tr>';
+        return;
+      }
+      body += '<tr><td class="lab">' + _trEsc(r.label || '') + '</td>';
+      (r.values || []).forEach(v => {
+        body += '<td class="num">' + _vlMoney(v, unit) + '</td>';
+      });
+      body += '</tr>';
+    });
+    return '<div class="fin-vl-scroll"><table class="fin-vl-table">' + head + body + '</table></div>';
+  }
+  async function _loadFinVlLinks() {
+    const host = document.getElementById('fin-vl-links');
+    if (!host) return;
+    try {
+      const j = await (await window.dgaFetch('/api/financials/sheet-links?limit=48')).json();
+      if (!j.ok) throw new Error(j.error || 'Failed');
+      const links = j.links || [];
+      if (!links.length) {
+        host.innerHTML = '<span style="font-size:11px;color:var(--text-tertiary);">No stored financials yet — pull SEC data below, then company links appear here.</span>';
+        return;
+      }
+      host.innerHTML = links.map(L => {
+        const followed = L.followed ? '<span class="dot" title="In your universe (reports/watchlist)"></span>' : '';
+        return '<a href="#" class="fin-vl-chip' + (_finVlTicker === L.ticker ? ' active' : '')
+          + '" data-vl-tk="' + _trEsc(L.ticker) + '" title="'
+          + _trEsc((L.name || '') + ' · ' + (L.annuals || 0) + ' FY · ' + (L.quarters || 0) + 'Q')
+          + '">' + followed + _trEsc(L.ticker) + '</a>';
+      }).join('');
+      host.querySelectorAll('[data-vl-tk]').forEach(a => {
+        a.addEventListener('click', e => {
+          e.preventDefault();
+          _loadFinVlSheet(a.getAttribute('data-vl-tk'));
+        });
+      });
+    } catch (e) {
+      host.innerHTML = '<span style="font-size:11px;color:#b91c1c;">Could not load links: '
+        + _trEsc(e.message || e) + '</span>';
+    }
+  }
+  async function _loadFinVlSheet(ticker) {
+    const tk = (ticker || '').trim().toUpperCase();
+    if (!tk) return;
+    _finVlTicker = tk;
+    const empty = document.getElementById('fin-vl-empty');
+    const sheet = document.getElementById('fin-vl-sheet');
+    const inp = document.getElementById('fin-vl-ticker');
+    if (inp) inp.value = tk;
+    // highlight active chip
+    document.querySelectorAll('#fin-vl-links .fin-vl-chip').forEach(c => {
+      c.classList.toggle('active', c.getAttribute('data-vl-tk') === tk);
+    });
+    if (empty) empty.textContent = 'Loading ' + tk + '…';
+    if (empty) empty.style.display = 'block';
+    if (sheet) { sheet.style.display = 'none'; sheet.innerHTML = ''; }
+    try {
+      const d = await (await window.dgaFetch('/api/financials/' + encodeURIComponent(tk) + '/sheet')).json();
+      if (!d.ok) throw new Error(d.error || 'Failed');
+      const cap = d.capital || {};
+      const px = d.price != null
+        ? '$' + Number(d.price).toLocaleString('en-US', { maximumFractionDigits: 2 })
+        : '—';
+      const sectorLine = [d.industry, d.sector].filter(Boolean).join(' · ');
+      const capHtml =
+        '<div class="fin-vl-cap">' +
+          [['Recent price', px],
+           ['Market cap', _vlMoney(cap.market_cap)],
+           ['Enterprise val.', _vlMoney(cap.enterprise_value)],
+           ['P/E', _vlMoney(cap.pe, 'x')],
+           ['P/B', _vlMoney(cap.pb, 'x')],
+           ['EV/EBITDA', _vlMoney(cap.ev_ebitda, 'x')],
+           ['FCF yield', _vlMoney(cap.fcf_yield_pct, '%')],
+           ['Cash', _vlMoney(cap.cash)],
+           ['Total debt', _vlMoney(cap.total_debt)],
+           ['Book / sh', _vlMoney(cap.book_value_ps, '$/sh')],
+           ['Shares', _vlMoney(cap.shares, 'sh')],
+           ['FY end', cap.period_end ? String(cap.period_end).slice(0, 10) : '—'],
+          ].map(([k, v]) =>
+            '<div><div class="k">' + k + '</div><div class="v">' + v + '</div></div>'
+          ).join('') +
+        '</div>';
+      const head =
+        '<div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:4px;">' +
+          '<div>' +
+            '<div style="font-size:16px;font-weight:800;color:var(--text-primary);">'
+              + _trEsc(d.entity_name || tk)
+              + ' <span style="color:var(--text-tertiary);font-weight:600;">· ' + _trEsc(tk) + '</span></div>' +
+            (sectorLine ? '<div style="font-size:11px;color:var(--text-tertiary);margin-top:2px;">' + _trEsc(sectorLine) + '</div>' : '') +
+          '</div>' +
+          '<div style="font-size:10.5px;color:var(--text-tertiary);text-align:right;">Value Line–style · SEC store · '
+            + _trEsc(d.cost || 'zero tokens') + '<br>'
+            + '<a href="#" id="fin-vl-to-dash" style="color:var(--blue);">Open PM dashboard →</a></div>' +
+        '</div>';
+      const annualHtml = _vlTable(d.annual, 'Annual');
+      const qHtml = _vlTable(d.quarterly, 'Quarterly');
+      sheet.innerHTML = head + capHtml
+        + (annualHtml ? '<div style="font-size:11px;font-weight:800;letter-spacing:0.6px;text-transform:uppercase;color:var(--text-secondary);margin:12px 0 6px;">Statistical array (annual)</div>' + annualHtml : '')
+        + (qHtml ? '<div style="font-size:11px;font-weight:800;letter-spacing:0.6px;text-transform:uppercase;color:var(--text-secondary);margin:14px 0 6px;">Recent quarters</div>' + qHtml : '')
+        + '<div style="font-size:10px;color:var(--text-tertiary);margin-top:10px;line-height:1.45;">'
+        + 'Source: ' + _trEsc(d.source || 'company_financials') + '. '
+        + 'Print / Save PDF uses your browser (no server cost). Download PDF is generated on click only. Not investment advice.</div>';
+      sheet.style.display = 'block';
+      if (empty) empty.style.display = 'none';
+      const toDash = document.getElementById('fin-vl-to-dash');
+      if (toDash) toDash.addEventListener('click', e => {
+        e.preventDefault();
+        const di = document.getElementById('fin-dash-ticker');
+        if (di) di.value = tk;
+        if (typeof _finDashLoad === 'function') _finDashLoad(tk);
+        try { document.getElementById('fin-dash-head')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (_) {}
+      });
+    } catch (e) {
+      if (empty) {
+        empty.style.display = 'block';
+        empty.innerHTML = '<span style="color:#b91c1c;">' + _trEsc(e.message || e) + '</span>'
+          + ' — pull SEC data for this ticker in the store below.';
+      }
+    }
+  }
+  async function _downloadFinVlPdf() {
+    const tk = _finVlTicker || ((document.getElementById('fin-vl-ticker') || {}).value || '').trim().toUpperCase();
+    if (!tk) {
+      if (window.toast) window.toast('Open a company sheet first', { type: 'warn' });
+      return;
+    }
+    try {
+      const r = await window.dgaFetch('/api/financials/' + encodeURIComponent(tk) + '/sheet.pdf');
+      if (!r.ok) {
+        let msg = 'PDF failed';
+        try { const j = await r.json(); msg = j.detail || j.error || msg; } catch (_) {}
+        throw new Error(msg);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = tk + '_DGA_Financials_Sheet.pdf';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => { try { URL.revokeObjectURL(url); } catch (_) {} }, 30_000);
+      if (window.toast) window.toast('PDF ready: ' + tk, { type: 'success' });
+    } catch (e) {
+      if (window.toast) window.toast(String(e.message || e), { type: 'error' });
+    }
+  }
+
   async function _loadFinCoverage() {
     try {
       const d = await (await window.dgaFetch('/api/financials/coverage')).json();
@@ -8751,6 +9038,8 @@ End with the sleeve block at this account's real market value so I can push it t
         });
       }
       _finCoverageSyncChevron();
+      // Keep VL company links in sync with store coverage
+      try { _loadFinVlLinks(); } catch (_) {}
     } catch(_) {}
     // Universe counts + automation status
     try {
