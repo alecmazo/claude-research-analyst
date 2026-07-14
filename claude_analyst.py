@@ -201,15 +201,32 @@ GROK_INTEL_MODEL = GROK_MODEL
 #   VOLUME_LLM_API_KEY=sk-...
 #   VOLUME_LLM_MODEL=deepseek-chat
 #
-# Rollback: set VOLUME_LLM_ENABLED=false OR flip the Settings toggle (runtime
-# override stored in DB) — volume jobs immediately use Grok again.
+# Rollback: set VOLUME_LLM_ENABLED=false OR flip the Settings master toggle
+# (runtime override stored in DB) — volume jobs immediately use Grok again.
+# Per-job toggles (Settings → Models) can leave master ON but send one job
+# (e.g. daily_brief) back to Grok while others stay on the cheap model.
 VOLUME_LLM_BASE_URL = _optional_env("VOLUME_LLM_BASE_URL", "https://api.deepseek.com/v1")
 VOLUME_LLM_API_KEY  = _optional_env("VOLUME_LLM_API_KEY", "")
 VOLUME_LLM_MODEL    = _optional_env("VOLUME_LLM_MODEL", "deepseek-chat")
 # Env default: on only when a key is present (safe out of the box).
 _VOLUME_ENV_DEFAULT = _optional_env("VOLUME_LLM_ENABLED", "").strip().lower()
-# Runtime override: None = follow env/key heuristic; True/False = Settings toggle
+# Runtime override: None = follow env/key heuristic; True/False = Settings master
 _volume_llm_runtime: bool | None = None
+# Per-job routing (all default True when master is on). Keys are stable API ids.
+VOLUME_LLM_JOBS: tuple[str, ...] = (
+    "daily_brief",    # Daily Pulse / morning digest
+    "intelligence",   # Sector / best-mix intelligence
+    "prioritize",     # Idea Generator Prioritize
+    "market_pulse",   # Market pulse + per-ticker scan
+)
+_VOLUME_JOB_LABELS: dict[str, str] = {
+    "daily_brief": "Daily Pulse (morning brief)",
+    "intelligence": "Sector intelligence",
+    "prioritize": "Idea Generator · Prioritize",
+    "market_pulse": "Market pulse / ticker scan",
+}
+# job_id → bool; missing key means True (use volume when master is on)
+_volume_job_runtime: dict[str, bool] = {k: True for k in VOLUME_LLM_JOBS}
 
 # Gamma.app folder ID is optional; API key is only required if Gamma generation
 # is actually requested at runtime.
@@ -240,7 +257,7 @@ def volume_llm_configured() -> bool:
 
 
 def set_volume_llm_runtime(enabled: bool | None) -> None:
-    """Settings UI / API sets this. None clears override (back to env heuristic)."""
+    """Settings UI / API sets master switch. None clears override (env heuristic)."""
     global _volume_llm_runtime
     _volume_llm_runtime = enabled
 
@@ -249,13 +266,32 @@ def get_volume_llm_runtime() -> bool | None:
     return _volume_llm_runtime
 
 
+def set_volume_llm_jobs(jobs: dict | None) -> dict[str, bool]:
+    """Merge per-job toggles from Settings. Unknown keys ignored.
+    Returns the full job map after update."""
+    global _volume_job_runtime
+    if not isinstance(jobs, dict):
+        return dict(_volume_job_runtime)
+    for k, v in jobs.items():
+        kid = str(k or "").strip().lower()
+        if kid in VOLUME_LLM_JOBS:
+            _volume_job_runtime[kid] = bool(v)
+    return dict(_volume_job_runtime)
+
+
+def get_volume_llm_jobs() -> dict[str, bool]:
+    return {k: bool(_volume_job_runtime.get(k, True)) for k in VOLUME_LLM_JOBS}
+
+
 def volume_llm_enabled() -> bool:
-    """Whether volume jobs should use the cheap open model right now.
+    """Master switch: whether the cheap open model is available at all.
 
     Rollback paths:
-      1. Settings toggle → set_volume_llm_runtime(False)
+      1. Settings master → set_volume_llm_runtime(False)
       2. VOLUME_LLM_ENABLED=false in env
       3. Missing VOLUME_LLM_API_KEY → always off (safe)
+
+    Prefer volume_llm_enabled_for(job) at call sites so per-feature toggles apply.
     """
     if not volume_llm_configured():
         return False
@@ -269,24 +305,42 @@ def volume_llm_enabled() -> bool:
     return True
 
 
+def volume_llm_enabled_for(job: str | None) -> bool:
+    """True when this specific volume job should use the cheap model.
+
+    Master off → all jobs Grok. Master on → per-job toggle (default on).
+    Unknown job ids fall back to master only.
+    """
+    if not volume_llm_enabled():
+        return False
+    kid = (job or "").strip().lower()
+    if not kid or kid not in VOLUME_LLM_JOBS:
+        return True
+    return bool(_volume_job_runtime.get(kid, True))
+
+
 def volume_llm_status() -> dict:
     """Snapshot for Settings / config API (no secrets)."""
+    master = volume_llm_enabled()
+    jobs = get_volume_llm_jobs()
+    routes = {
+        j: ("volume" if volume_llm_enabled_for(j) else "grok")
+        for j in VOLUME_LLM_JOBS
+    }
+    routes["full_reports"] = "grok | claude (unchanged)"
+    routes["podcast"] = "claude | grok (unchanged)"
     return {
         "configured": volume_llm_configured(),
-        "enabled": volume_llm_enabled(),
+        "enabled": master,
         "runtime_override": _volume_llm_runtime,
         "env_default": _VOLUME_ENV_DEFAULT or "(auto: on if key present)",
         "base_url": VOLUME_LLM_BASE_URL,
         "model": VOLUME_LLM_MODEL,
         "has_api_key": bool(VOLUME_LLM_API_KEY),
-        "routes": {
-            "daily_brief": "volume" if volume_llm_enabled() else "grok",
-            "intelligence": "volume" if volume_llm_enabled() else "grok",
-            "prioritize": "volume" if volume_llm_enabled() else "grok",
-            "market_pulse": "volume" if volume_llm_enabled() else "grok",
-            "full_reports": "grok | claude (unchanged)",
-            "podcast": "claude | grok (unchanged)",
-        },
+        "jobs": jobs,
+        "job_labels": dict(_VOLUME_JOB_LABELS),
+        "job_ids": list(VOLUME_LLM_JOBS),
+        "routes": routes,
         "rollback": "POST /api/config/volume-llm {\"enabled\": false}",
     }
 
@@ -340,18 +394,22 @@ def call_volume_llm(system_prompt: str, user_content: str,
 
 def call_volume_or_grok(system_prompt: str, user_content: str,
                         *,
+                        job: str | None = None,
                         live_search: bool = False,
                         grok_model: str | None = None,
                         volume_model: str | None = None,
                         grok_live_on_fallback: bool = True,
                         usage_capture=None) -> tuple[str, str]:
-    """Route a volume job: cheap model when enabled, else Grok.
+    """Route a volume job: cheap model when that job's toggle is on, else Grok.
+
+    ``job`` should be one of VOLUME_LLM_JOBS (daily_brief, intelligence,
+    prioritize, market_pulse). Missing job → master switch only.
 
     Returns (text, provider_label) where provider_label is 'volume' or 'grok'.
     On volume failure, falls back to Grok once (logged). Full reports / podcast
     must never call this — they stay on call_grok / call_claude directly.
     """
-    if volume_llm_enabled():
+    if volume_llm_enabled_for(job):
         try:
             text = call_volume_llm(
                 system_prompt, user_content,
@@ -1576,7 +1634,7 @@ def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
     sign = "+" if (pct_change or 0) >= 0 else ""
     pct_abs = abs(pct_change) if pct_change is not None else 0.0
 
-    use_vol = volume_llm_enabled()
+    use_vol = volume_llm_enabled_for("market_pulse")
     evidence_block = ""
     if use_vol:
         headlines = _free_ticker_headlines(ticker, limit=6)
@@ -1622,7 +1680,8 @@ def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
                 "Use FREE HEADLINES + price data only. Do not invent catalysts."
             )
             markdown, provider = call_volume_or_grok(
-                sys_p, user_msg, live_search=False, grok_live_on_fallback=True,
+                sys_p, user_msg, job="market_pulse",
+                live_search=False, grok_live_on_fallback=True,
             )
             model_used = VOLUME_LLM_MODEL if provider == "volume" else GROK_MODEL
         else:
@@ -1891,7 +1950,7 @@ def run_market_intelligence(sector: str = "Tech") -> dict:
             sector_upper=sector.upper(),
         )
 
-    use_vol = volume_llm_enabled()
+    use_vol = volume_llm_enabled_for("intelligence")
     route = f"volume/{VOLUME_LLM_MODEL}" if use_vol else f"grok/{GROK_INTEL_MODEL}+live"
     print(f"🧠 Running market intelligence (sector: {sector}) via {route}…")
 
@@ -1904,6 +1963,7 @@ def run_market_intelligence(sector: str = "Tech") -> dict:
                     "Prefer structural / multi-year asymmetric setups over day-trade noise."
                 ),
                 user_msg,
+                job="intelligence",
                 live_search=False,
             )
         else:
@@ -2105,7 +2165,7 @@ def run_daily_brief(book_tickers: list[str] | None = None,
             + "\n── END EVIDENCE ──\n"
         )
 
-    use_vol = volume_llm_enabled()
+    use_vol = volume_llm_enabled_for("daily_brief")
     route = f"volume/{VOLUME_LLM_MODEL}" if use_vol else f"grok/{GROK_INTEL_MODEL}+live"
     print(f"📰 Running Daily Brief via {route}…")
 
@@ -2119,6 +2179,7 @@ def run_daily_brief(book_tickers: list[str] | None = None,
                     "Do not invent overnight headlines not supported by evidence."
                 ),
                 user_msg,
+                job="daily_brief",
                 live_search=False,
             )
         else:
@@ -6414,13 +6475,13 @@ def screen_universe(candidates: list[dict], *, top_n: int = 5) -> dict:
         f"{_json.dumps(candidates, indent=2, default=str)}"
     )
 
-    # Volume mode → cheap open model; rollback → Grok 4.5 screen
-    use_vol = volume_llm_enabled()
+    # Volume mode → cheap open model; rollback → Grok screen model
+    use_vol = volume_llm_enabled_for("prioritize")
     screen_model = VOLUME_LLM_MODEL if use_vol else GROK_SCREEN_MODEL
     try:
         if use_vol:
             raw, provider = call_volume_or_grok(
-                sys_prompt, user, live_search=False,
+                sys_prompt, user, job="prioritize", live_search=False,
                 grok_model=GROK_SCREEN_MODEL,
             )
             if provider == "grok":

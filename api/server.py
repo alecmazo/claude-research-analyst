@@ -6082,20 +6082,41 @@ _VOLUME_KV_KEY = "dga.volume_llm.enabled"
 
 
 def _load_volume_llm_override_from_db() -> None:
-    """Hydrate Settings toggle from kv_store into the analyst runtime flag."""
+    """Hydrate Settings master + per-job toggles from kv_store."""
     try:
         raw = _kv_get(_VOLUME_KV_KEY)
         if raw is None:
             return
         if isinstance(raw, dict):
             en = raw.get("enabled")
+            jobs = raw.get("jobs")
         else:
             en = raw
+            jobs = None
         if en is True or en is False:
             analyst.set_volume_llm_runtime(bool(en))
             print(f"[volume-llm] runtime override from DB: enabled={bool(en)}", flush=True)
+        if isinstance(jobs, dict):
+            analyst.set_volume_llm_jobs(jobs)
+            print(f"[volume-llm] job toggles from DB: {analyst.get_volume_llm_jobs()}", flush=True)
     except Exception as e:
         print(f"[volume-llm] load override failed: {e!s:.120}", flush=True)
+
+
+def _persist_volume_llm_settings() -> None:
+    """Write master + per-job map to kv (survives redeploy)."""
+    try:
+        if analyst.get_volume_llm_runtime() is not None:
+            en = bool(analyst.get_volume_llm_runtime())
+        else:
+            en = bool(analyst.volume_llm_enabled())
+        _kv_put(_VOLUME_KV_KEY, {
+            "enabled": en,
+            "jobs": analyst.get_volume_llm_jobs(),
+            "updated_at": _now_pacific().isoformat(),
+        })
+    except Exception as e:
+        print(f"[volume-llm] kv_put failed: {e!s:.120}", flush=True)
 
 
 @app.get("/api/config/volume-llm")
@@ -6107,9 +6128,12 @@ def get_volume_llm_config(request: Request):
 
 @app.post("/api/config/volume-llm")
 def set_volume_llm_config(request: Request):
-    """Enable / roll back the volume LLM for daily jobs.
+    """Enable / roll back the volume LLM and/or set per-job toggles.
 
-    Body: { "enabled": true|false }  — false = rollback to Grok for volume.
+    Body (any combination):
+      { "enabled": true|false }   — master: false = all volume jobs → Grok
+      { "jobs": { "daily_brief": true, "intelligence": false, ... } }
+
     Full reports (Grok + Claude) and podcasts are never affected.
     """
     _claims_or_401(request)
@@ -6117,24 +6141,46 @@ def set_volume_llm_config(request: Request):
         body = _request_json_sync(request) or {}
     except Exception:
         body = {}
-    if "enabled" not in body:
-        raise HTTPException(status_code=422, detail="Body must include {enabled: true|false}")
-    enabled = bool(body.get("enabled"))
-    analyst.set_volume_llm_runtime(enabled)
-    try:
-        _kv_put(_VOLUME_KV_KEY, {"enabled": enabled, "updated_at": _now_pacific().isoformat()})
-    except Exception as e:
-        print(f"[volume-llm] kv_put failed: {e!s:.120}", flush=True)
+    if "enabled" not in body and "jobs" not in body:
+        raise HTTPException(
+            status_code=422,
+            detail="Body must include {enabled: bool} and/or {jobs: {job_id: bool}}",
+        )
+    message_bits = []
+    if "enabled" in body:
+        enabled = bool(body.get("enabled"))
+        analyst.set_volume_llm_runtime(enabled)
+        message_bits.append(
+            "Volume master ON — jobs use cheap model when their toggle is on."
+            if enabled else
+            "Volume master OFF — all volume jobs use Grok (premium)."
+        )
+    if "jobs" in body and isinstance(body.get("jobs"), dict):
+        jobs = analyst.set_volume_llm_jobs(body.get("jobs"))
+        on = [k for k, v in jobs.items() if v]
+        off = [k for k, v in jobs.items() if not v]
+        message_bits.append(
+            "Jobs on volume: " + (", ".join(on) if on else "none")
+            + ((" · on Grok: " + ", ".join(off)) if off else "")
+        )
+    _persist_volume_llm_settings()
     st = analyst.volume_llm_status()
+    enabled = bool(st.get("enabled"))
     return {
         "ok": True,
         "enabled": enabled,
-        "message": (
-            "Volume LLM ON — daily brief / intelligence / prioritize use the cheap model."
-            if enabled else
-            "Rolled back — daily volume jobs use Grok again. Full reports + podcasts unchanged."
-        ),
-        **st,
+        "jobs": st.get("jobs"),
+        "routes": st.get("routes"),
+        "model": st.get("model"),
+        "configured": st.get("configured"),
+        "message": " ".join(message_bits) if message_bits else "Saved.",
+        "volume": {
+            "enabled": enabled,
+            "model": st.get("model"),
+            "configured": st.get("configured"),
+            "jobs": st.get("jobs"),
+            "routes": st.get("routes"),
+        },
     }
 
 

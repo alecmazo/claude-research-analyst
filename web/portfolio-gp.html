@@ -5877,23 +5877,24 @@ End with the sleeve block at this account's real market value so I can push it t
           <span class="panel-badge" id="volume-llm-badge" style="background:#f1f5f9;color:#64748b;">…</span>
         </header>
         <div class="settings-card-body">
-          <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:12px;align-items:start;">
-            <div>
-              <p style="margin:0 0 8px;font-size:11px;color:#64748b;line-height:1.45;">
-                <strong>Option 4:</strong> daily brief, sector intel, Idea Generator <em>Prioritize</em> can use a cheap OpenAI-compatible model (e.g. DeepSeek).
-                Full equity reports stay Grok + Claude; podcasts unchanged.
-              </p>
-              <div id="volume-llm-status" style="font-size:11.5px;color:#64748b;margin-bottom:8px;line-height:1.4;">Loading…</div>
-              <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-                <button type="button" id="volume-llm-enable" class="btn-primary">Use cheap volume model</button>
-                <button type="button" id="volume-llm-rollback" class="tab-btn" style="border:1px solid #dc2626;color:#b91c1c;">↩ Roll back to Grok</button>
-                <button type="button" id="volume-llm-refresh" class="tab-btn">↻ Status</button>
-              </div>
-            </div>
-            <div class="settings-help" style="margin:0;padding:8px 10px;background:var(--gray-50,#f8fafc);border:1px solid var(--border-subtle,#e2e8f0);border-radius:8px;">
-              Env: <code>VOLUME_LLM_API_KEY</code>, <code>VOLUME_LLM_BASE_URL</code>, <code>VOLUME_LLM_MODEL</code>, optional <code>VOLUME_LLM_ENABLED=false</code>.
-              Toggle survives redeploys via DB. Rollback never touches full-report or podcast models.
-            </div>
+          <p style="margin:0 0 8px;font-size:11px;color:#64748b;line-height:1.45;">
+            <strong>Option 4:</strong> route high-volume jobs to a cheap OpenAI-compatible model (e.g. DeepSeek).
+            Toggle <em>each</em> feature below, or master off → all use Grok.
+            Full equity reports stay Grok + Claude; podcasts unchanged.
+          </p>
+          <div id="volume-llm-status" style="font-size:11.5px;color:#64748b;margin-bottom:8px;line-height:1.4;">Loading…</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+            <button type="button" id="volume-llm-enable" class="btn-primary">Master ON · cheap model</button>
+            <button type="button" id="volume-llm-rollback" class="tab-btn" style="border:1px solid #dc2626;color:#b91c1c;">↩ Master OFF · all Grok</button>
+            <button type="button" id="volume-llm-refresh" class="tab-btn">↻ Status</button>
+          </div>
+          <div style="font-size:9.5px;font-weight:800;letter-spacing:0.7px;text-transform:uppercase;color:#94a3b8;margin-bottom:6px;">Per-feature routing (on = cheap volume · off = Grok)</div>
+          <div id="volume-llm-jobs" style="display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;">
+            <!-- filled by JS from job_ids / job_labels -->
+          </div>
+          <div class="settings-help" style="margin-top:10px;padding:8px 10px;background:var(--gray-50,#f8fafc);border:1px solid var(--border-subtle,#e2e8f0);border-radius:8px;">
+            Env: <code>VOLUME_LLM_API_KEY</code>, <code>VOLUME_LLM_BASE_URL</code>, <code>VOLUME_LLM_MODEL</code>.
+            Toggles survive redeploys. Reports + podcasts never use volume.
           </div>
         </div>
       </section>
@@ -6601,8 +6602,18 @@ End with the sleeve block at this account's real market value so I can push it t
   function llmDescribe(action) {
     const cfg = window.DGA_LLM || {};
     const est = cfg.est || {};
-    const volOn = !!(cfg.volume && cfg.volume.enabled && cfg.volume.configured);
-    const volModel = (cfg.volume && cfg.volume.model) || 'volume';
+    const vol = cfg.volume || {};
+    const volMaster = !!(vol.enabled && vol.configured);
+    const volRoutes = vol.routes || {};
+    const volJobs = vol.jobs || {};
+    /** Per-feature: master on AND job toggle on (or route says volume). */
+    function volFor(jobId) {
+      if (!volMaster) return false;
+      if (volRoutes[jobId]) return volRoutes[jobId] === 'volume';
+      if (jobId in volJobs) return volJobs[jobId] !== false;
+      return true;
+    }
+    const volModel = vol.model || 'volume';
     const g = cfg.grok || 'grok';
     const c = cfg.claude || 'claude';
     const map = {
@@ -6627,7 +6638,7 @@ End with the sleeve block at this account's real market value so I can push it t
         cost: _llmRng(est.both_report, '≈ $0.80–1.60'),
         paid: true,
       },
-      daily_brief: volOn ? {
+      daily_brief: volFor('daily_brief') ? {
         action: 'Daily brief (volume)',
         provider: 'volume',
         model: volModel,
@@ -6641,7 +6652,7 @@ End with the sleeve block at this account's real market value so I can push it t
         cost: _llmRng(est.daily_brief_grok, '≈ $0.15–0.50'),
         paid: true,
       },
-      intelligence: volOn ? {
+      intelligence: volFor('intelligence') ? {
         action: 'Sector intelligence',
         provider: 'volume',
         model: volModel,
@@ -6654,7 +6665,7 @@ End with the sleeve block at this account's real market value so I can push it t
         cost: _llmRng(est.intel_grok, '≈ $0.20–0.60'),
         paid: true,
       },
-      prioritize: volOn ? {
+      prioritize: volFor('prioritize') ? {
         action: 'Prioritize (Idea Generator)',
         provider: 'volume',
         model: volModel,
@@ -6663,12 +6674,11 @@ End with the sleeve block at this account's real market value so I can push it t
       } : {
         action: 'Prioritize (Idea Generator)',
         provider: 'grok',
-        model: (cfg.volume && cfg.volume.routes && false) || (cfg.grok || 'grok-4.5') ,
-        // Prefer screen model name if we only have grok id
+        model: g,
         cost: _llmRng(est.prioritize_grok, '≈ $0.02–0.08'),
         paid: true,
       },
-      pulse: volOn ? {
+      pulse: volFor('market_pulse') ? {
         action: 'Market pulse / ticker scan (volume)',
         provider: 'volume',
         model: volModel,
@@ -19038,7 +19048,7 @@ End with the sleeve block at this account's real market value so I can push it t
     _settingsPanel('volume-llm',  loadVolumeLlmSettings);
   }
 
-  // ── Option 4 · Volume LLM settings (rollback safe) ─────────────────────
+  // ── Option 4 · Volume LLM settings (master + per-job toggles) ───────────
   var _volumeLlmWired = false;
   async function loadVolumeLlmSettings() {
     const $st = document.getElementById('volume-llm-status');
@@ -19046,7 +19056,72 @@ End with the sleeve block at this account's real market value so I can push it t
     const $on = document.getElementById('volume-llm-enable');
     const $off = document.getElementById('volume-llm-rollback');
     const $ref = document.getElementById('volume-llm-refresh');
+    const $jobs = document.getElementById('volume-llm-jobs');
     if (!$st) return;
+
+    function renderJobs(d) {
+      if (!$jobs) return;
+      const ids = d.job_ids || Object.keys(d.jobs || {}) || [];
+      const labels = d.job_labels || {};
+      const jobs = d.jobs || {};
+      const routes = d.routes || {};
+      const master = !!d.enabled;
+      const cfg = !!d.configured;
+      if (!ids.length) {
+        $jobs.innerHTML = '<div style="font-size:11px;color:#94a3b8;">No job list from server.</div>';
+        return;
+      }
+      $jobs.innerHTML = ids.map(function (id) {
+        const on = jobs[id] !== false;
+        const route = routes[id] || (master && on ? 'volume' : 'grok');
+        const lab = labels[id] || id;
+        const disabled = !cfg || !master;
+        return '<label style="display:flex;align-items:center;gap:8px;padding:7px 10px;'
+          + 'background:var(--bg-elevated,#fff);border:1px solid var(--border-subtle,#e2e8f0);'
+          + 'border-radius:8px;cursor:' + (disabled ? 'not-allowed' : 'pointer') + ';'
+          + 'opacity:' + (disabled ? '0.55' : '1') + ';">'
+          + '<input type="checkbox" class="vol-job-toggle" data-job="' + id + '" '
+          + (on ? 'checked ' : '') + (disabled ? 'disabled ' : '')
+          + 'style="width:15px;height:15px;accent-color:var(--blue,#0ea5e9);flex-shrink:0;">'
+          + '<span style="flex:1;min-width:0;">'
+          + '<span style="display:block;font-size:11.5px;font-weight:700;color:var(--text-primary,#0f172a);">' + lab + '</span>'
+          + '<span style="font-size:10px;color:#94a3b8;">now → <code>' + route + '</code></span>'
+          + '</span></label>';
+      }).join('');
+      $jobs.querySelectorAll('.vol-job-toggle').forEach(function (cb) {
+        cb.addEventListener('change', function () {
+          const job = cb.getAttribute('data-job');
+          if (!job) return;
+          const body = { jobs: {} };
+          body.jobs[job] = !!cb.checked;
+          setVolumeConfig(body);
+        });
+      });
+    }
+
+    async function refreshCatalog(d) {
+      try {
+        if (window.DGA_LLM && d) {
+          window.DGA_LLM.volume = Object.assign({}, window.DGA_LLM.volume || {}, d.volume || {
+            enabled: d.enabled,
+            model: d.model,
+            configured: d.configured,
+            jobs: d.jobs,
+            routes: d.routes,
+          });
+        }
+        const mr = await window.dgaFetch('/api/config/models');
+        if (mr.ok) {
+          const mj = await mr.json();
+          window.DGA_LLM = Object.assign(window.DGA_LLM || {}, {
+            grok: mj.grok, claude: mj.claude, agentic: mj.agentic,
+            volume: mj.volume || (window.DGA_LLM && window.DGA_LLM.volume),
+            est: mj.est || (window.DGA_LLM && window.DGA_LLM.est),
+          });
+        }
+        if (typeof llmRefreshAllStamps === 'function') llmRefreshAllStamps();
+      } catch (_) {}
+    }
 
     async function refresh() {
       try {
@@ -19055,74 +19130,60 @@ End with the sleeve block at this account's real market value so I can push it t
         const d = await r.json();
         const en = !!d.enabled;
         const cfg = !!d.configured;
+        const jobs = d.jobs || {};
+        const nOn = Object.keys(jobs).filter(function (k) { return jobs[k] !== false; }).length;
+        const nAll = Object.keys(jobs).length || 4;
         if ($badge) {
-          $badge.textContent = !cfg ? 'NOT CONFIGURED' : (en ? 'VOLUME ON' : 'ROLLED BACK → GROK');
-          $badge.style.background = !cfg ? '#fef3c7' : (en ? '#dcfce7' : '#fee2e2');
-          $badge.style.color = !cfg ? '#92400e' : (en ? '#166534' : '#991b1b');
+          if (!cfg) {
+            $badge.textContent = 'NOT CONFIGURED';
+            $badge.style.background = '#fef3c7'; $badge.style.color = '#92400e';
+          } else if (!en) {
+            $badge.textContent = 'ALL → GROK';
+            $badge.style.background = '#fee2e2'; $badge.style.color = '#991b1b';
+          } else {
+            $badge.textContent = 'VOLUME ' + nOn + '/' + nAll;
+            $badge.style.background = '#dcfce7'; $badge.style.color = '#166534';
+          }
         }
-        const routes = d.routes || {};
         $st.innerHTML =
           '<div><strong>Configured:</strong> ' + (cfg ? 'yes' : 'no (set VOLUME_LLM_API_KEY on Railway)') + '</div>'
-          + '<div><strong>Active for volume jobs:</strong> ' + (en ? 'YES — cheap model' : 'NO — Grok (premium)') + '</div>'
+          + '<div><strong>Master:</strong> ' + (en ? 'ON — per-feature toggles apply' : 'OFF — every job uses Grok') + '</div>'
           + '<div><strong>Model:</strong> ' + (d.model || '—') + ' · <strong>Host:</strong> ' + (d.base_url || '—') + '</div>'
-          + '<div style="margin-top:6px;font-size:11px;color:#64748b;">'
-          + 'Routes — brief: <code>' + (routes.daily_brief || '—') + '</code> · '
-          + 'intel: <code>' + (routes.intelligence || '—') + '</code> · '
-          + 'prioritize: <code>' + (routes.prioritize || '—') + '</code> · '
-          + 'pulse/scan: <code>' + (routes.market_pulse || '—') + '</code><br>'
-          + 'Reports: <code>' + (routes.full_reports || 'grok | claude') + '</code> · '
-          + 'Podcast: <code>' + (routes.podcast || 'claude | grok') + '</code>'
-          + '</div>';
+          + '<div style="margin-top:4px;font-size:10.5px;color:#94a3b8;">Reports + podcasts never use volume (always Grok/Claude).</div>';
         if ($on) $on.disabled = !cfg || en;
         if ($off) $off.disabled = !cfg || !en;
+        renderJobs(d);
       } catch (e) {
         $st.textContent = 'Could not load volume LLM status: ' + (e.message || e);
       }
     }
 
+    async function setVolumeConfig(body) {
+      try {
+        const r = await window.dgaFetch('/api/config/volume-llm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body || {}),
+        });
+        const d = await r.json().catch(function () { return {}; });
+        if (!r.ok) throw new Error(d.detail || d.error || ('HTTP ' + r.status));
+        try {
+          window.toast && window.toast(d.message || 'Volume routing saved', { type: 'success', ttl: 3200 });
+        } catch (_) {}
+        await refresh();
+        await refreshCatalog(d);
+      } catch (e) {
+        alert('Volume LLM save failed: ' + (e.message || e));
+        await refresh();
+      }
+    }
+
     if (!_volumeLlmWired) {
       _volumeLlmWired = true;
-      async function setEnabled(enabled) {
-        try {
-          const r = await window.dgaFetch('/api/config/volume-llm', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: !!enabled }),
-          });
-          const d = await r.json().catch(function () { return {}; });
-          if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
-          try { window.toast && window.toast(d.message || (enabled ? 'Volume LLM on' : 'Rolled back to Grok'), { type: 'info', ttl: 3500 }); } catch (_) {}
-          await refresh();
-          // Refresh button tooltips / catalog after toggle
-          try {
-            if (window.DGA_LLM) {
-              window.DGA_LLM.volume = Object.assign({}, window.DGA_LLM.volume || {}, d.volume || {
-                enabled: d.enabled,
-                model: d.model,
-                configured: d.configured,
-              });
-              if (d.est) window.DGA_LLM.est = Object.assign({}, window.DGA_LLM.est || {}, d.est || {});
-            }
-            // Re-fetch full models config so est.volume_active is fresh
-            const mr = await window.dgaFetch('/api/config/models');
-            if (mr.ok) {
-              const mj = await mr.json();
-              window.DGA_LLM = Object.assign(window.DGA_LLM || {}, {
-                grok: mj.grok, claude: mj.claude, agentic: mj.agentic,
-                volume: mj.volume || window.DGA_LLM.volume,
-                est: mj.est || window.DGA_LLM.est,
-              });
-            }
-            llmRefreshAllStamps();
-          } catch (_) {}
-        } catch (e) {
-          alert('Volume LLM toggle failed: ' + (e.message || e));
-        }
-      }
-      if ($on) $on.addEventListener('click', function () { setEnabled(true); });
+      if ($on) $on.addEventListener('click', function () { setVolumeConfig({ enabled: true }); });
       if ($off) $off.addEventListener('click', function () {
-        if (!confirm('Roll back volume jobs to Grok?\n\nDaily brief, intelligence, and Prioritize will use Grok again (higher cost).\nFull reports (Grok + Claude) and podcasts are unchanged.')) return;
-        setEnabled(false);
+        if (!confirm('Turn volume master OFF?\n\nAll volume jobs (brief, intel, prioritize, pulse) will use Grok (higher cost).\nFull reports and podcasts are unchanged.\n\nYou can still re-enable and pick features one-by-one.')) return;
+        setVolumeConfig({ enabled: false });
       });
       if ($ref) $ref.addEventListener('click', refresh);
     }
