@@ -4437,19 +4437,21 @@
       });
     }
 
-    // Single batch quote call — one request for all tickers instead of N
-    // parallel /api/quote/ calls that hammer Yahoo and trigger rate limits.
-    const tickerList = reports.map(r => r.ticker).join(',');
-    window.dgaFetch('/api/quotes?tickers=' + encodeURIComponent(tickerList))
-      .then(r => r.ok ? r.json() : {}).catch(() => ({}))
-      .then(quotesMap => {
+    // Prefer prices already on the report payload (server enriches /api/reports);
+    // still refresh via /api/quotes so day-% stays live without a full reload.
+    function _paintRows(quotesMap) {
+      quotesMap = quotesMap || {};
       tbody.innerHTML = reports.map((rep, i) => {
         const q = quotesMap[rep.ticker] || {};
-        const price = q.price != null ? Number(q.price) : null;
-        const pct = q.pct_change != null ? Number(q.pct_change) : null;
+        // Live quote → server-enriched current_price → null
+        const price = q.price != null ? Number(q.price)
+                    : (rep.current_price != null ? Number(rep.current_price) : null);
+        const pct = q.pct_change != null ? Number(q.pct_change)
+                  : (rep.pct_change != null ? Number(rep.pct_change) : null);
         const target = rep.price_target != null ? Number(rep.price_target) : null;
         const upside = (target != null && price != null && price > 0)
-                       ? ((target - price) / price * 100) : (rep.upside_pct != null ? Number(rep.upside_pct) : null);
+                       ? ((target - price) / price * 100)
+                       : (rep.upside_pct != null ? Number(rep.upside_pct) : null);
         // Status indicator: ✅ on success, ❌ on failure (tooltip = error message).
         // Date shown is the LATEST attempt time (success or fail), so the user
         // can tell at a glance which reports refreshed and which are stale.
@@ -4533,8 +4535,14 @@
               const gT = rep.grok_price_target,   cT = rep.claude_price_target;
               const _fmtTgt = function(v) { return v == null ? '—' : '$' + (v >= 100 ? Number(v).toFixed(0) : Number(v).toFixed(2)); };
               if (gT != null && cT != null) {
-                const gUp = (price != null && price > 0) ? ((gT - price) / price * 100) : null;
-                const cUp = (price != null && price > 0) ? ((cT - price) / price * 100) : null;
+                // Live upside if we have a price; else stored per-provider upside
+                // (was null when quotes failed → blank % next to both targets).
+                const gUp = (price != null && price > 0)
+                  ? ((gT - price) / price * 100)
+                  : (rep.grok_upside_pct != null ? Number(rep.grok_upside_pct) : null);
+                const cUp = (price != null && price > 0)
+                  ? ((cT - price) / price * 100)
+                  : (rep.claude_upside_pct != null ? Number(rep.claude_upside_pct) : null);
                 return '<div class="rep-num-stack">'
                   + '<div class="rep-tgt-row">'
                   +   '<span class="rep-tgt-prov grok">G</span>'
@@ -4558,9 +4566,7 @@
         );
       }).join('');
 
-      // Trigger inline news headlines once the rows are in the DOM. The
-      // old setTimeout-from-loadReports approach fired before this point
-      // because tbody.innerHTML is set inside the async quotes .then().
+      // Trigger inline news headlines once the rows are in the DOM.
       try {
         if (typeof window.loadNewsForReports === 'function') {
           setTimeout(window.loadNewsForReports, 0);
@@ -4580,8 +4586,7 @@
         });
       });
 
-      // Ticker chip → GuruFocus summary (only when clicking the ticker text;
-      // row-click still opens the report)
+      // Ticker chip → free snapshot
       tbody.querySelectorAll('[data-rep-gf]').forEach(span => {
         span.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -4776,7 +4781,32 @@
             : '';
         }
       }
+    } // end _paintRows
+
+    // Paint immediately from report payload (server now includes current_price)
+    // so Price/Upside are never blank while waiting on a second quotes hop.
+    const seed = {};
+    reports.forEach(function (rep) {
+      if (rep.current_price != null || rep.pct_change != null) {
+        seed[rep.ticker] = {
+          price: rep.current_price,
+          pct_change: rep.pct_change,
+        };
+      }
     });
+    _paintRows(seed);
+
+    // Background live refresh (day % + any tickers the list endpoint missed)
+    const tickerList = reports.map(function (r) { return r.ticker; }).filter(Boolean);
+    if (tickerList.length) {
+      window.dgaFetch('/api/quotes?tickers=' + encodeURIComponent(tickerList.join(',')),
+                      { cache: 'no-store' })
+        .then(function (r) { return r.ok ? r.json() : {}; })
+        .then(function (quotesMap) {
+          if (quotesMap && Object.keys(quotesMap).length) _paintRows(quotesMap);
+        })
+        .catch(function () { /* keep seed paint */ });
+    }
   }
 
   // ── Hero Analyze Ticker ──────────────────────────────────────────

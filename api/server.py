@@ -10178,10 +10178,50 @@ def list_reports(request: Request = None):
                         "report_date":         r.get("report_date"),
                         "claude_report_date":  r.get("claude_report_date"),
                         "current_price":       None,
+                        "pct_change":          None,
                         "last_attempt_at":     r["last_attempt_at"].isoformat() if r.get("last_attempt_at") else None,
                         "last_attempt_status": r.get("last_attempt_status"),
                         "last_attempt_error":  r.get("last_attempt_error"),
                     })
+                # Live prices for the Saved Reports table — never leave the
+                # client depending solely on a second /api/quotes round-trip
+                # (that was leaving Price + Upside blank when the quotes call
+                # failed or dual-provider rows only computed upside from px).
+                try:
+                    tks = [row["ticker"] for row in out if row.get("ticker")]
+                    if tks:
+                        qmap = batch_quotes(",".join(tks)) or {}
+                        for row in out:
+                            q = qmap.get(row["ticker"]) or {}
+                            px = q.get("price")
+                            if px is not None:
+                                try:
+                                    px = float(px)
+                                except (TypeError, ValueError):
+                                    px = None
+                            row["current_price"] = px
+                            row["pct_change"] = q.get("pct_change")
+                            # Refresh upside vs live price when we have a target
+                            if px and px > 0 and row.get("price_target") is not None:
+                                try:
+                                    row["upside_pct"] = round(
+                                        (float(row["price_target"]) - px) / px * 100.0, 2)
+                                except Exception:
+                                    pass
+                            if px and px > 0 and row.get("grok_price_target") is not None:
+                                try:
+                                    row["grok_upside_pct"] = round(
+                                        (float(row["grok_price_target"]) - px) / px * 100.0, 2)
+                                except Exception:
+                                    pass
+                            if px and px > 0 and row.get("claude_price_target") is not None:
+                                try:
+                                    row["claude_upside_pct"] = round(
+                                        (float(row["claude_price_target"]) - px) / px * 100.0, 2)
+                                except Exception:
+                                    pass
+                except Exception as e:
+                    print(f"[list_reports] live quote enrich failed: {e!s:.140}", flush=True)
                 # Freshest content first (as-of date), not bulk hydration stamp.
                 out.sort(key=_report_freshness_key, reverse=True)
                 return out
