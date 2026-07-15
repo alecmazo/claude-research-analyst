@@ -360,6 +360,9 @@ export const api = {
   // ---------- Markets dashboard (mobile home tab) ----------
   // Live index ribbon (S&P, Nasdaq, Dow, VIX, …)
   getMarketIndices: () => request('/api/market/indices'),
+  // Desk Market Wire — free macro RSS (no LLM). Used on Research tab.
+  getMarketWire: (limit = 10) =>
+    request(`/api/v2/news/market-wire?limit=${limit}`),
   // Idea Generator — today's movers ≥ threshold% from the user's universe
   getIdeaFeed: (threshold = 4, limit = 60) =>
     request(`/api/v2/research/idea-feed?threshold=${threshold}&limit=${limit}`),

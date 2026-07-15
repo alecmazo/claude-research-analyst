@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, FlatList,
+  View, Text, TextInput, TouchableOpacity, FlatList, ScrollView,
   StyleSheet, ActivityIndicator, RefreshControl, Alert, Switch,
   Linking, Platform,
 } from 'react-native';
@@ -13,6 +13,14 @@ import AppHeader from '../components/AppHeader';
 import {
   formatTime, formatDateCompact, haptics, SkeletonList, useTheme,
 } from '../design';
+
+function _wireRelAge(pubTs) {
+  if (pubTs == null) return '';
+  const sec = Math.max(0, Date.now() / 1000 - Number(pubTs));
+  if (sec < 3600) return Math.max(1, Math.floor(sec / 60)) + 'm';
+  if (sec < 86400) return Math.floor(sec / 3600) + 'h';
+  return Math.floor(sec / 86400) + 'd';
+}
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function HomeScreen({ navigation, route }) {
@@ -34,6 +42,10 @@ export default function HomeScreen({ navigation, route }) {
   // Bulk re-analyze state (active job tracking + polling)
   const [bulkJob, setBulkJob]           = useState(null);   // {bulk_job_id, total, completed:[], failed:[], status}
   const [bulkPolling, setBulkPolling]   = useState(false);
+  // Market Wire (free macro RSS — same source as desktop Desk)
+  const [wireItems, setWireItems]       = useState([]);
+  const [wireAsOf, setWireAsOf]         = useState('');
+  const [wireLoading, setWireLoading]   = useState(false);
 
   const checkServer = async () => {
     const t0 = Date.now();
@@ -73,10 +85,25 @@ export default function HomeScreen({ navigation, route }) {
     }
   };
 
+  const loadMarketWire = async () => {
+    setWireLoading(true);
+    try {
+      const d = await api.getMarketWire(10);
+      setWireItems(Array.isArray(d?.items) ? d.items : []);
+      setWireAsOf(d?.as_of || '');
+    } catch (err) {
+      console.warn('getMarketWire:', err.message);
+      // Keep prior items if refresh fails
+    } finally {
+      setWireLoading(false);
+    }
+  };
+
   useFocusEffect(
     useCallback(() => {
       checkServer();
       loadReports();
+      loadMarketWire();
       getGammaEnabled().then(setGammaEnabled);
       // Pre-fill ticker if navigated here from Intelligence/other screen
       const prefill = route?.params?.prefillTicker || route?.params?.ticker;
@@ -90,7 +117,7 @@ export default function HomeScreen({ navigation, route }) {
   const onRefresh = async () => {
     setRefreshing(true);
     haptics.onPressTab();
-    await Promise.all([checkServer(), loadReports()]);
+    await Promise.all([checkServer(), loadReports(), loadMarketWire()]);
     setRefreshing(false);
   };
 
@@ -536,6 +563,53 @@ export default function HomeScreen({ navigation, route }) {
         </TouchableOpacity>
       </View>
 
+      {/* Market Wire — free macro RSS (same desk feed as desktop), under Analyze */}
+      <View style={s.wireCard}>
+        <View style={s.wireHead}>
+          <Text style={s.wireTitle}>📡 MARKET WIRE</Text>
+          <Text style={s.wireBadge}>FREE · NO AI</Text>
+          <View style={{ flex: 1 }} />
+          {wireAsOf ? <Text style={s.wireAsOf}>{wireAsOf}</Text> : null}
+          {wireLoading ? <ActivityIndicator size="small" color={t.primary} style={{ marginLeft: 6 }} /> : null}
+        </View>
+        {wireItems.length === 0 && !wireLoading ? (
+          <Text style={s.wireEmpty}>
+            No high-signal macro items in the last 48h (or RSS was quiet). Pull to refresh.
+          </Text>
+        ) : (
+          <ScrollView
+            style={s.wireScroll}
+            nestedScrollEnabled
+            showsVerticalScrollIndicator={false}
+          >
+            {wireItems.slice(0, 10).map((it, i) => {
+              const age = _wireRelAge(it.pub_ts);
+              const feed = it.feed || it.publisher || 'Wire';
+              return (
+                <TouchableOpacity
+                  key={(it.url || it.title || '') + i}
+                  style={[s.wireRow, i === 0 && s.wireRowFirst]}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    if (it.url) {
+                      haptics.onPressTab?.();
+                      Linking.openURL(it.url).catch(() => {});
+                    }
+                  }}
+                >
+                  <Text style={s.wireRowTitle} numberOfLines={2}>{it.title || '—'}</Text>
+                  <View style={s.wireRowMeta}>
+                    <Text style={s.wireChip}>{feed}</Text>
+                    {age ? <Text style={s.wireAge}>{age} ago</Text> : null}
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
+        <Text style={s.wireFoot}>Macro / policy RSS · zero tokens</Text>
+      </View>
+
       {/* Reports section header */}
       <View style={s.listHeaderRow}>
         <Text style={s.sectionTitle}>SAVED REPORTS</Text>
@@ -635,39 +709,42 @@ function makeStyles(t) {
   container:  { flex: 1, backgroundColor: t.bg },
   statusDot:  { width: 10, height: 10, borderRadius: 5 },
 
-  // Input card — compact: input + button share one row, slim options row below,
-  // AI Analyst entry merged in as the card's bottom row.
+  // Input card — denser on mobile (smaller paddings / controls)
   inputSection: {
     backgroundColor: t.surface,
-    margin: 16,
+    marginHorizontal: 12,
+    marginTop: 10,
     marginBottom: 6,
-    borderRadius: 12,
-    padding: 12,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
   },
-  label:    { fontSize: 10, fontWeight: '700', color: t.textSecondary, letterSpacing: 1.5, marginBottom: 6 },
-  inputRow: { flexDirection: 'row', gap: 8 },
+  label:    { fontSize: 9, fontWeight: '700', color: t.textSecondary, letterSpacing: 1.2, marginBottom: 4 },
+  inputRow: { flexDirection: 'row', gap: 6 },
   input: {
     flex: 1,
-    height: 40,
+    height: 34,
     borderWidth: 1,
     borderColor: t.border,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    fontSize: 16,
+    borderRadius: 7,
+    paddingHorizontal: 10,
+    fontSize: 14,
     fontWeight: '700',
     color: t.textPrimary,
-    letterSpacing: 1.5,
+    letterSpacing: 1.2,
+    paddingVertical: 0,
   },
   analyzeBtn: {
     backgroundColor: t.primary,
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    minWidth: 76,
+    borderRadius: 7,
+    paddingHorizontal: 12,
+    minWidth: 64,
+    height: 34,
     justifyContent: 'center',
     alignItems: 'center',
     borderTopWidth: 1,
@@ -677,38 +754,38 @@ function makeStyles(t) {
     ...Platform.select({
       ios: {
         shadowColor: t.primary,
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.55,
-        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.4,
+        shadowRadius: 6,
       },
-      android: { elevation: 8 },
+      android: { elevation: 4 },
     }),
   },
   analyzeBtnDisabled: { opacity: 0.5 },
   analyzeBtnInner: { flexDirection: 'row', alignItems: 'center' },
-  analyzeBtnText: { color: t.chromeNavy, fontWeight: '800', fontSize: 12, letterSpacing: 1 },
-  analyzeBtnLoadingText: { color: t.chromeNavy, fontWeight: '800', fontSize: 11, letterSpacing: 1, marginLeft: 6 },
+  analyzeBtnText: { color: t.chromeNavy, fontWeight: '800', fontSize: 11, letterSpacing: 0.8 },
+  analyzeBtnLoadingText: { color: t.chromeNavy, fontWeight: '800', fontSize: 10, letterSpacing: 0.6, marginLeft: 4 },
 
   // Slim options row — engine chips left, presentation toggle right
   optionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: 6,
   },
-  gammaLabel: { fontSize: 11, fontWeight: '600', color: t.textSecondary, marginRight: 2 },
-  gammaSwitch: { transform: [{ scaleX: 0.75 }, { scaleY: 0.75 }] },
+  gammaLabel: { fontSize: 10, fontWeight: '600', color: t.textSecondary, marginRight: 2 },
+  gammaSwitch: { transform: [{ scaleX: 0.68 }, { scaleY: 0.68 }] },
   llmPicker: {
     flexDirection: 'row', backgroundColor: t.surfaceAlt,
-    borderRadius: 6, padding: 2, gap: 2,
+    borderRadius: 5, padding: 1.5, gap: 1,
   },
   llmPickerOpt: {
-    paddingVertical: 4, paddingHorizontal: 10, borderRadius: 4,
+    paddingVertical: 3, paddingHorizontal: 8, borderRadius: 4,
   },
   llmPickerOptActiveGrok:   { backgroundColor: '#0A1628' },
   llmPickerOptActiveClaude: { backgroundColor: '#d97706' },
   llmPickerOptActiveBoth:   { backgroundColor: '#475569' },
   llmPickerOptText: {
-    fontSize: 11, fontWeight: '700', color: t.textPrimary,
+    fontSize: 10, fontWeight: '700', color: t.textPrimary,
   },
   llmPickerOptTextActive: { color: t.onChrome },
 
@@ -716,15 +793,66 @@ function makeStyles(t) {
   analystRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 10,
-    paddingTop: 9,
+    marginTop: 6,
+    paddingTop: 6,
     borderTopWidth: 1,
     borderTopColor: t.border,
   },
-  analystRowEmoji: { fontSize: 15, marginRight: 8 },
-  analystRowText:  { flex: 1, fontSize: 12.5, color: t.textSecondary },
+  analystRowEmoji: { fontSize: 13, marginRight: 6 },
+  analystRowText:  { flex: 1, fontSize: 11.5, color: t.textSecondary },
   analystRowTitle: { fontWeight: '800', color: t.textPrimary },
-  analystRowArrow: { color: t.gold, fontSize: 22, fontWeight: '300', marginLeft: 8, lineHeight: 24 },
+  analystRowArrow: { color: t.gold, fontSize: 18, fontWeight: '300', marginLeft: 6, lineHeight: 20 },
+
+  // Market Wire card (under Analyze)
+  wireCard: {
+    backgroundColor: t.surface,
+    marginHorizontal: 12,
+    marginBottom: 6,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingTop: 8,
+    paddingBottom: 6,
+    borderWidth: 1,
+    borderColor: t.border,
+  },
+  wireScroll: { maxHeight: 168 },
+  wireHead: {
+    flexDirection: 'row', alignItems: 'center', marginBottom: 6, gap: 6,
+  },
+  wireTitle: {
+    fontSize: 9, fontWeight: '800', color: t.textSecondary, letterSpacing: 1.1,
+  },
+  wireBadge: {
+    fontSize: 8, fontWeight: '800', letterSpacing: 0.4,
+    color: '#166534', backgroundColor: '#dcfce7',
+    paddingHorizontal: 5, paddingVertical: 1, borderRadius: 3, overflow: 'hidden',
+  },
+  wireAsOf: { fontSize: 9, color: t.textDim, fontWeight: '600' },
+  wireEmpty: {
+    fontSize: 11, color: t.textDim, lineHeight: 15, paddingVertical: 6,
+  },
+  wireRow: {
+    paddingVertical: 6,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: t.border,
+  },
+  wireRowFirst: { borderTopWidth: 0, paddingTop: 2 },
+  wireRowTitle: {
+    fontSize: 12, fontWeight: '600', color: t.textPrimary, lineHeight: 16,
+  },
+  wireRowMeta: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 3,
+  },
+  wireChip: {
+    fontSize: 9, fontWeight: '700', color: t.primary,
+    backgroundColor: t.surfaceAlt || t.bg,
+    paddingHorizontal: 5, paddingVertical: 1, borderRadius: 3, overflow: 'hidden',
+  },
+  wireAge: { fontSize: 10, color: t.textDim, fontWeight: '600' },
+  wireFoot: {
+    fontSize: 9, color: t.textDim, marginTop: 4, paddingTop: 4,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.border,
+  },
 
   // Per-report provider badges (GROK / CLAUDE) — tappable
   llmPill: {
