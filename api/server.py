@@ -2624,24 +2624,41 @@ def _build_fund_filings(lp_id: str | None, limit: int = 50, days: int = 30) -> d
     errors: list[str] = []
     scanned = 0
 
-    # Parallel workers — SEC allows ~10 req/s with a proper User-Agent
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    workers = 6
+    # Parallel workers — SEC allows ~10 req/s with a proper User-Agent.
+    # Hard wall-clock budget so desk-feeds never leaves the browser spinning
+    # on "Loading…" for minutes (was blank Market Wire + Fund Filings cards).
+    from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
+    workers = 8
+    hard_budget_s = 12.0
+    t0 = time.time()
     try:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futs = {pool.submit(_filings_for_ticker, tk, ua, cutoff): tk for tk in tickers}
-            for fut in as_completed(futs, timeout=45):
-                scanned += 1
-                try:
-                    part, err = fut.result()
-                    if err:
-                        errors.append(err)
-                    if part:
-                        items.extend(part)
-                except Exception as e:
-                    errors.append(f"{futs[fut]}: {e!s:.60}")
+            pending = set(futs.keys())
+            while pending and (time.time() - t0) < hard_budget_s:
+                done, pending = wait(
+                    pending,
+                    timeout=max(0.2, hard_budget_s - (time.time() - t0)),
+                    return_when=FIRST_COMPLETED,
+                )
+                if not done:
+                    break
+                for fut in done:
+                    scanned += 1
+                    try:
+                        part, err = fut.result(timeout=0.05)
+                        if err:
+                            errors.append(err)
+                        if part:
+                            items.extend(part)
+                    except Exception as e:
+                        errors.append(f"{futs.get(fut, '?')}: {e!s:.60}")
+            # Cancel stragglers so they don't pin Railway workers
+            for fut in pending:
+                fut.cancel()
+            if pending:
+                errors.append(f"scan budget {hard_budget_s:.0f}s — {len(pending)} tickers skipped")
     except Exception as e:
-        # Timeout on as_completed — keep whatever we collected
         errors.append(f"scan partial: {e!s:.80}")
 
     # De-dupe by accession; sort NEWEST first (then form priority)
@@ -2742,12 +2759,30 @@ def news_fund_filings(request: Request, limit: int = 50, days: int = 30):
 
 @app.get("/api/v2/news/desk-feeds")
 def news_desk_feeds(request: Request, market_limit: int = 12, filings_limit: int = 50, days: int = 30):
-    """Both Desk cards in one call, cross-deduped (filings own company EDGAR signal)."""
+    """Both Desk cards in one call, cross-deduped (filings own company EDGAR signal).
+
+    Market wire is built FIRST so a slow SEC scan never blanks both panels.
+    Filings use a hard wall-clock budget inside _build_fund_filings.
+    """
     claims = _claims_or_401(request)
     lp_id = claims.get("lp_id") or claims.get("email") or "anon"
-    filings = _build_fund_filings(lp_id, limit=filings_limit, days=days)
-    market = _build_market_wire(limit=market_limit + 8)  # over-fetch then trim after dedupe
-    market = _cross_dedupe_market_vs_filings(market, filings)
+    # Wire first (RSS, usually <1s, cached) — always return something paint-able
+    try:
+        market = _build_market_wire(limit=market_limit + 8)
+    except Exception as e:
+        print(f"[desk-feeds] market wire failed: {e!s:.120}", flush=True)
+        market = {"ok": False, "items": [], "error": f"{e!s:.120}",
+                  "as_of": _pacific_time_str()}
+    try:
+        filings = _build_fund_filings(lp_id, limit=filings_limit, days=days)
+    except Exception as e:
+        print(f"[desk-feeds] fund filings failed: {e!s:.120}", flush=True)
+        filings = {"ok": False, "items": [], "error": f"{e!s:.120}",
+                   "as_of": _pacific_time_str(), "universe_size": 0}
+    try:
+        market = _cross_dedupe_market_vs_filings(market, filings)
+    except Exception:
+        pass
     market["items"] = (market.get("items") or [])[: max(5, min(int(market_limit or 12), 25))]
     return {
         "ok": True,

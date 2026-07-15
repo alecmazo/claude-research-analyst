@@ -615,34 +615,46 @@
     if (mwBody) mwBody.innerHTML = '<div class="feed-empty">Loading macro wire…</div>';
     if (ffBody) ffBody.innerHTML = '<div class="feed-empty">Scanning SEC for saved-report universe (newest first)…</div>';
 
-    try {
-      // force=1 only for client UX note — server cache is short; refresh bumps tab stale timer
-      const r = await window.dgaFetch(
-        '/api/v2/news/desk-feeds?market_limit=12&filings_limit=50&days=30'
-        + (force ? '&_=' + Date.now() : '')
-      );
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const d = await r.json();
-      const market = d.market_wire || {};
-      const filings = d.fund_filings || {};
-      _renderMarketWire(mwBody, market);
-      _renderFundFilings(ffBody, filings);
-      if (mwAsOf) mwAsOf.textContent = market.as_of || d.as_of || '—';
-      if (ffAsOf) {
-        const u = filings.universe_size != null ? filings.universe_size + ' tk · ' : '';
-        ffAsOf.textContent = u + (filings.as_of || d.as_of || '—');
+    // Load wire + filings in PARALLEL as separate endpoints so a slow SEC
+    // scan can never blank Market Wire (combined desk-feeds used to block both).
+    async function loadWire() {
+      try {
+        const url = '/api/v2/news/market-wire?limit=12' + (force ? '&_=' + Date.now() : '');
+        const r = await window.dgaFetch(url, { cache: 'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const market = await r.json();
+        _renderMarketWire(mwBody, market);
+        if (mwAsOf) mwAsOf.textContent = market.as_of || '—';
+        if (mwBadge) mwBadge.textContent = ((market.items || []).length || 0) + ' items';
+      } catch (e) {
+        if (mwBody) mwBody.innerHTML = '<div class="feed-empty">Market wire unavailable: '
+          + _feedEsc(e.message) + '</div>';
       }
-      if (mwBadge) mwBadge.textContent = ((market.items || []).length || 0) + ' items';
-      if (ffBadge) {
-        const n = (filings.items || []).length || 0;
-        const tot = filings.total_matched;
-        ffBadge.textContent = tot && tot > n ? (n + '/' + tot) : (n + ' filings');
-        ffBadge.title = filings.note || 'SEC EDGAR · saved reports · newest first';
-      }
-    } catch (e) {
-      if (mwBody) mwBody.innerHTML = '<div class="feed-empty">Market wire unavailable: ' + _feedEsc(e.message) + '</div>';
-      if (ffBody) ffBody.innerHTML = '<div class="feed-empty">Fund filings unavailable.</div>';
     }
+    async function loadFilings() {
+      try {
+        const url = '/api/v2/news/fund-filings?limit=50&days=30'
+          + (force ? '&_=' + Date.now() : '');
+        const r = await window.dgaFetch(url, { cache: 'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const filings = await r.json();
+        _renderFundFilings(ffBody, filings);
+        if (ffAsOf) {
+          const u = filings.universe_size != null ? filings.universe_size + ' tk · ' : '';
+          ffAsOf.textContent = u + (filings.as_of || '—');
+        }
+        if (ffBadge) {
+          const n = (filings.items || []).length || 0;
+          const tot = filings.total_matched;
+          ffBadge.textContent = tot && tot > n ? (n + '/' + tot) : (n + ' filings');
+          ffBadge.title = filings.note || 'SEC EDGAR · saved reports · newest first';
+        }
+      } catch (e) {
+        if (ffBody) ffBody.innerHTML = '<div class="feed-empty">Fund filings unavailable: '
+          + _feedEsc(e.message) + '</div>';
+      }
+    }
+    await Promise.all([loadWire(), loadFilings()]);
   }
 
   // ══════════════════════════════════════════════════════════════
