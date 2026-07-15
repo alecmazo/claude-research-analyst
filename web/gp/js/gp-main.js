@@ -645,90 +645,6 @@
     }
   }
 
-  async function loadBookSnapshot() {
-    const bookBody = document.getElementById('desk-book-body');
-    const bookMeta = document.getElementById('desk-book-meta');
-    const openBtn = document.getElementById('desk-book-open');
-    if (openBtn && !openBtn._wired) {
-      openBtn._wired = true;
-      openBtn.addEventListener('click', function () { showTab('positions'); });
-    }
-    if (!bookBody) return;
-
-    async function safeJson(url) {
-      try {
-        const r = await window.dgaFetch(url);
-        if (!r.ok) return null;
-        return await r.json();
-      } catch (e) { return null; }
-    }
-
-    let pos = await safeJson('/api/v2/lp/me/positions');
-    if (!pos) pos = await safeJson('/api/watchlist');
-
-    try {
-      let totalMV = null, dayAbs = null, count = 0, asOf = '';
-      if (pos && Array.isArray(pos.positions)) {
-        totalMV = pos.total_market_value != null ? Number(pos.total_market_value) : null;
-        count = pos.positions.length;
-        asOf = pos.as_of || '';
-        let daySum = 0, ok = false;
-        pos.positions.forEach(function (p) {
-          if (p.day_change_abs != null && p.total_qty != null) {
-            daySum += Number(p.day_change_abs) * Number(p.total_qty || 0);
-            ok = true;
-          }
-        });
-        if (ok) dayAbs = daySum;
-      } else if (Array.isArray(pos)) {
-        count = pos.length;
-      } else if (pos && Array.isArray(pos.tickers)) {
-        count = pos.tickers.length;
-      }
-
-      if (bookMeta) bookMeta.textContent = asOf ? _deskRel(asOf) : (count ? (count + ' names') : '—');
-
-      if (totalMV != null) {
-        const dayCls = dayAbs == null ? '' : (dayAbs >= 0 ? 'up' : 'dn');
-        const dayStr = dayAbs == null ? '—' : ((dayAbs >= 0 ? '+' : '') + fmtUSD(dayAbs));
-        // Top 5 contributors by market value
-        let topHtml = '';
-        if (pos.positions && pos.positions.length) {
-          const top = pos.positions.slice().sort(function (a, b) {
-            return (b.market_value || 0) - (a.market_value || 0);
-          }).slice(0, 5);
-          topHtml = '<ul class="desk-list" style="margin-top:10px;">' + top.map(function (p) {
-            const tk = p.symbol || p.ticker || '—';
-            const mv = p.market_value != null ? fmtUSD(p.market_value) : '—';
-            const dp = p.day_change_pct != null ? Number(p.day_change_pct)
-                     : (p.pct_change != null ? Number(p.pct_change) : null);
-            const cls = dp == null ? '' : (dp >= 0 ? 'up' : 'dn');
-            const dps = dp == null ? '' : ('<span class="desk-chip ' + cls + '">' + (dp >= 0 ? '+' : '') + dp.toFixed(1) + '%</span>');
-            return '<li style="cursor:default;"><span class="desk-tk">' + _deskEsc(tk) + '</span>'
-              + dps + '<span class="desk-muted" style="margin-left:auto;">' + _deskEsc(mv) + '</span></li>';
-          }).join('') + '</ul>';
-        }
-        bookBody.innerHTML =
-          '<div class="desk-stat-row">'
-          + '<div><div class="desk-stat-lbl">Total MV</div>'
-          + '<div class="desk-stat-val" style="font-size:22px;">' + _deskEsc(fmtUSD(totalMV)) + '</div></div>'
-          + '<div><div class="desk-stat-lbl">Today</div>'
-          + '<div class="desk-stat-val" style="font-size:16px;"><span class="desk-chip ' + dayCls + '">' + _deskEsc(dayStr) + '</span></div></div>'
-          + '<div><div class="desk-stat-lbl">Positions</div>'
-          + '<div class="desk-stat-val" style="font-size:16px;">' + count + '</div></div>'
-          + '</div>'
-          + topHtml;
-      } else {
-        bookBody.innerHTML =
-          '<div class="desk-muted">Book detail loads when positions are available. '
-          + (count ? (count + ' watchlist names ready.') : 'Open Positions after a SnapTrade sync or YTD upload.')
-          + '</div>';
-      }
-    } catch (e) {
-      bookBody.innerHTML = '<div class="desk-muted">Book snapshot unavailable.</div>';
-    }
-  }
-
   // ══════════════════════════════════════════════════════════════
   // TAB ROUTING
   // ══════════════════════════════════════════════════════════════
@@ -741,7 +657,6 @@
       // persisted results — a scan NEVER auto-runs from tab activation.
       _pulseMount('rpulse-panel', 'rpulse');
       _pulseLoadLatest();
-      loadBookSnapshot();
       loadDeskFeeds();
     },
     builder:   () => _initBuilderTab(),
