@@ -1726,11 +1726,25 @@
               ? ('$' + _trFmtUsd(spent || 0) + (freeHits ? ' · ' + freeHits + ' free' : ''))
               : ('free · hits ' + freeHits);
           }
+          // Live pull trail under cascade track
+          const trail = (s.trail || (s.result && s.result.trail) || []);
+          if (trail.length) {
+            _renderCascadeTrack({
+              cascade: s.cascade || (s.result && s.result.cascade) || j.cascade,
+              keys: s.keys || (s.result && s.result.keys) || {},
+              source_summary: (s.result && s.result.source_counts)
+                ? Object.fromEntries(Object.entries(s.result.source_counts).map(([k,v]) => [k, {transcripts: v}]))
+                : {},
+            }, trail);
+          }
           if (s.status === 'done') {
             clearInterval(_trSyncPoll); _trSyncPoll=null;
             const n = (s.result && s.result.chunks_indexed) || 0;
             const errs = (s.result && s.result.errors) || [];
-            const srcs = ((s.result && s.result.sources) || []).join(', ');
+            const srcCounts = (s.result && s.result.source_counts) || {};
+            const srcs = Object.keys(srcCounts).length
+              ? Object.entries(srcCounts).map(([k,v]) => _trSrcLabel(k) + '=' + v).join(', ')
+              : ((s.result && s.result.sources) || []).map(_trSrcLabel).join(', ');
             const costDone = (s.result && s.result.cost_usd_est != null)
               ? s.result.cost_usd_est : (s.cost_usd != null ? s.cost_usd : 0);
             const meta = ' · free hits ' + ((s.result && s.result.free_hits) || freeHits || 0)
@@ -1832,6 +1846,112 @@
     }
   }
 
+  const _TR_SRC_LABEL = {
+    motley_fool: 'Fool', fmp: 'FMP', alpha_vantage: 'αVantage',
+    api_ninjas: 'Ninjas', grok: 'Grok', huggingface: 'HF',
+    legacy: 'legacy', unknown: '?', none: '—',
+  };
+  function _trSrcLabel(s) { return _TR_SRC_LABEL[s] || s || '?'; }
+  function _trSrcColor(s) {
+    return ({
+      motley_fool: '#0f766e', fmp: '#1d4ed8', alpha_vantage: '#7c3aed',
+      api_ninjas: '#b45309', grok: '#be123c', huggingface: '#166534',
+      legacy: '#6b7280',
+    })[s] || '#4b5563';
+  }
+  function _renderCascadeTrack(d, liveTrail) {
+    const el = document.getElementById('tr-cascade-track');
+    if (!el) return;
+    const cascade = d.cascade || ['motley_fool','fmp','alpha_vantage','api_ninjas','grok'];
+    const keys = d.keys || {};
+    const hist = d.source_summary || {};
+    const steps = cascade.map(s => {
+      const on = keys[s] !== false && (s === 'motley_fool' || s === 'huggingface' || keys[s]);
+      const keyOn = (s === 'motley_fool' || s === 'huggingface') ? true : !!keys[s];
+      const n = (hist[s] && hist[s].transcripts) || 0;
+      return '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;border:1px solid '
+        + (keyOn ? '#bbf7d0' : '#fecaca') + ';background:' + (keyOn ? '#f0fdf4' : '#fef2f2')
+        + ';color:' + _trSrcColor(s) + ';font-family:\'SF Mono\',monospace;font-size:10.5px;">'
+        + (keyOn ? '✓' : '✗') + ' ' + _trEsc(_trSrcLabel(s))
+        + (n ? ' <span style="opacity:0.7;">' + n + '</span>' : '')
+        + '</span>';
+    }).join('<span style="color:var(--text-tertiary);margin:0 3px;">→</span>');
+    let trailHtml = '';
+    const trail = liveTrail || [];
+    if (trail.length) {
+      const rows = trail.slice(-12).map(t => {
+        const ok = t.ok !== false && t.ok !== 0;
+        const tried = (t.cascade_tried || []).map(_trSrcLabel).join('→');
+        return '<div style="font-family:\'SF Mono\',monospace;font-size:10.5px;padding:1px 0;">'
+          + (ok ? '<span style="color:#166534;">✓</span>' : '<span style="color:#b91c1c;">✗</span>')
+          + ' <strong>' + _trEsc(t.ticker || '') + '</strong> '
+          + _trEsc(t.quarter || '')
+          + ' · <span style="color:' + _trSrcColor(t.source) + ';">' + _trEsc(_trSrcLabel(t.source)) + '</span>'
+          + (t.chunks ? ' · ' + t.chunks + ' chunks' : '')
+          + (t.date ? ' · ' + _trEsc(t.date) : '')
+          + (tried ? ' <span style="color:var(--text-tertiary);">[' + _trEsc(tried) + ']</span>' : '')
+          + (!ok && t.error ? ' <span style="color:#92400e;">' + _trEsc(String(t.error).slice(0,80)) + '</span>' : '')
+          + '</div>';
+      }).join('');
+      trailHtml = '<div style="margin-top:6px;padding:8px 10px;background:var(--bg-subtle);border:1px solid var(--border-subtle);border-radius:8px;">'
+        + '<div style="font-size:10px;font-weight:700;letter-spacing:0.4px;text-transform:uppercase;color:var(--text-secondary);margin-bottom:4px;">Pull trail (this run)</div>'
+        + rows + '</div>';
+    }
+    const keyNote = [
+      keys.fmp ? 'FMP key ✓' : 'FMP key ✗',
+      keys.alpha_vantage ? 'αVantage key ✓' : 'αVantage key ✗',
+      keys.api_ninjas ? 'Ninjas key ✓' : 'Ninjas key ✗',
+      keys.grok ? 'Grok key ✓' : 'Grok key ✗',
+    ].join(' · ');
+    el.innerHTML = '<div style="margin-bottom:4px;font-size:10px;font-weight:700;letter-spacing:0.4px;text-transform:uppercase;color:var(--text-secondary);">Pull cascade</div>'
+      + '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:2px 0;">' + steps + '</div>'
+      + '<div style="margin-top:4px;font-size:10.5px;color:var(--text-tertiary);">' + _trEsc(keyNote)
+      + ' · numbers = transcripts already stored from that source'
+      + ' · <button id="tr-probe-cascade-btn" type="button" style="font-size:10.5px;background:transparent;border:none;color:#0f766e;cursor:pointer;text-decoration:underline;padding:0;">Test cascade (WFC)</button></div>'
+      + trailHtml;
+    const pb = document.getElementById('tr-probe-cascade-btn');
+    if (pb) pb.onclick = () => _probeCascade('WFC');
+  }
+  async function _probeCascade(ticker) {
+    const status = document.getElementById('tr-sync-status');
+    const tk = (ticker || 'WFC').toUpperCase();
+    if (status) status.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);">Probing cascade for ' + _trEsc(tk) + '…</div>';
+    try {
+      const d = await (await window.dgaFetch(
+        '/api/transcripts/calls/probe?ticker=' + encodeURIComponent(tk))).json();
+      const steps = d.steps || d.attempts || [];
+      const rows = steps.map(s => {
+        const src = s.source || '?';
+        const ok = s.ok;
+        return '<div style="font-family:\'SF Mono\',monospace;font-size:10.5px;padding:2px 0;">'
+          + (ok ? '<span style="color:#166534;">✓</span>' : '<span style="color:#b91c1c;">✗</span>')
+          + ' <strong style="color:' + _trSrcColor(src) + ';">' + _trEsc(_trSrcLabel(src)) + '</strong>'
+          + ' · key ' + (s.key_configured ? 'set' : 'missing')
+          + (ok ? (' · ' + (s.transcript_chars || 0) + ' chars · ' + _trEsc(s.date || s.quarter || ''))
+                : (' · ' + _trEsc(String(s.error || 'miss').slice(0, 100))))
+          + (s.ms != null ? ' · ' + s.ms + 'ms' : '')
+          + '</div>';
+      }).join('');
+      const win = d.winner
+        ? ('Winner for live sync: <strong style="color:' + _trSrcColor(d.winner) + ';">'
+          + _trEsc(_trSrcLabel(d.winner)) + '</strong>')
+        : 'No free source returned a transcript for this quarter.';
+      if (status) {
+        status.innerHTML = '<div style="background:var(--bg-subtle);border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;">'
+          + '<div style="font-size:12px;font-weight:700;margin-bottom:6px;">Cascade probe · '
+          + _trEsc(d.ticker || tk) + ' · ' + _trEsc(d.quarter || '') + '</div>'
+          + rows
+          + '<div style="margin-top:8px;font-size:11.5px;color:var(--text-secondary);">' + win + '</div>'
+          + '<div style="margin-top:4px;font-size:10.5px;color:var(--text-tertiary);">'
+          + _trEsc(d.note || '') + '</div></div>';
+      }
+      // refresh key lamps
+      _loadCallCoverage();
+    } catch (e) {
+      if (status) status.innerHTML = '<div style="color:#b91c1c;font-size:12px;">Probe failed: '
+        + _trEsc(e.message) + '</div>';
+    }
+  }
   async function _loadCallCoverage() {
     try {
       const d = await (await window.dgaFetch('/api/transcripts/calls/coverage')).json();
@@ -1850,7 +1970,6 @@
           ? (indexed + '/' + total + (missing ? ' · ' + missing + ' missing' : ' · complete'))
           : (cov.length ? cov.length + ' names' : 'empty');
         badge.textContent = base + (freshN ? ' · ' + freshN + ' fresh' : '');
-        // Prefer green only when coverage is full AND something is actually fresh
         if (missing) {
           badge.style.background = '#fef3c7'; badge.style.color = '#92400e';
         } else if (freshN > 0) {
@@ -1859,16 +1978,15 @@
           badge.style.background = '#e0f2fe'; badge.style.color = '#075985';
         }
       }
+      _renderCascadeTrack(d, null);
       if (hintEl) {
         const ch = d.cost_hint || {};
         const parts = [];
-        parts.push('<span style="color:#166534;">📚 Backfill history = $0</span>');
+        parts.push('<span style="color:#166534;">📚 Backfill = HF $0</span>');
+        parts.push('<span style="color:#0f766e;">🕳 Gap = free cascade</span>');
         if (missing > 0 && ch.est_cost_usd_low != null) {
-          parts.push('⚡ Latest calls (up to ' + (ch.names_needing_work || missing) + ' missing · '
-            + (document.getElementById('tr-sync-quarters') || {value:'2'}).value + 'q) est ~$'
+          parts.push('⚡ free→Grok worst-case ~$'
             + _trFmtUsd(ch.est_cost_usd_low) + '–$' + _trFmtUsd(ch.est_cost_usd_high));
-        } else if (!missing) {
-          parts.push('⚡ Latest calls would only top-up new quarters (already-indexed free)');
         }
         if (d.note) parts.push('<span style="color:var(--text-tertiary);">' + _trEsc(d.note) + '</span>');
         hintEl.innerHTML = parts.join(' · ');
@@ -1882,49 +2000,48 @@
             + (missing > missList.length ? ' <span style="font-size:10px;color:var(--text-tertiary);">+' + (missing - missList.length) + ' more</span>' : '')
             + '</div>'
           : '';
-        // Freshness buckets: latest call age — answers "is this yesterday's earnings?"
         const BUCKETS = [
-          { key: 'fresh',  title: 'Fresh · latest call ≤7 days',  tip: 'Current earnings cycle (e.g. yesterday’s print)', bg: '#dcfce7', bd: '#bbf7d0', fg: '#166534' },
+          { key: 'fresh',  title: 'Fresh · latest call ≤7 days',  tip: 'Current earnings cycle', bg: '#dcfce7', bd: '#bbf7d0', fg: '#166534' },
           { key: 'recent', title: 'Recent · ≤45 days',            tip: 'This cycle / prior few weeks', bg: '#e0f2fe', bd: '#bae6fd', fg: '#075985' },
-          { key: 'aging',  title: 'Aging · ≤180 days',            tip: 'History present; likely missing newest print — use Latest calls (Grok)', bg: '#fef3c7', bd: '#fde68a', fg: '#92400e' },
-          { key: 'stale',  title: 'Stale / history-only · >180 days', tip: 'HF multi-year backfill only — not the latest earnings', bg: '#f3f4f6', bd: '#e5e7eb', fg: '#4b5563' },
+          { key: 'aging',  title: 'Aging · ≤180 days',            tip: 'Likely missing newest print', bg: '#fef3c7', bd: '#fde68a', fg: '#92400e' },
+          { key: 'stale',  title: 'Stale / history-only · >180 days', tip: 'HF multi-year only', bg: '#f3f4f6', bd: '#e5e7eb', fg: '#4b5563' },
         ];
         const byB = {};
         cov.forEach(c => {
           const b = c.freshness || 'stale';
           (byB[b] = byB[b] || []).push(c);
         });
-        // Within each bucket: newest latest_call first
         Object.keys(byB).forEach(k => {
           byB[k].sort((a, b) => String(b.latest_call || '').localeCompare(String(a.latest_call || '')));
         });
         const sum = d.freshness_summary || {};
         const legend = '<div style="margin-bottom:8px;font-size:10.5px;color:var(--text-tertiary);line-height:1.45;">'
-          + 'Each chip: <strong>TICKER · latest quarter · call date · #quarters</strong>. '
-          + 'Hover for oldest. Sorted newest→oldest inside each band. '
+          + 'Chip: <strong>TICKER · quarter · date · source · #q</strong>. Hover for all sources + oldest. '
           + (sum.fresh != null
             ? ('Counts: fresh ' + (sum.fresh || 0)
               + ' · recent ' + (sum.recent || 0)
               + ' · aging ' + (sum.aging || 0)
               + ' · stale ' + (sum.stale || 0)
-              + ((d.needs_topup_count) ? (' · <span style="color:#92400e;">' + d.needs_topup_count + ' need Grok top-up</span>') : ''))
+              + ((d.needs_topup_count) ? (' · <span style="color:#92400e;">' + d.needs_topup_count + ' need top-up</span>') : ''))
             : '')
           + '</div>';
         const chip = (c, bg, bd, fg) => {
           const lq = c.latest_quarter || '?';
           const ld = c.latest_call || '—';
-          const oq = c.oldest_quarter || '';
-          const od = c.oldest_call || '';
+          const src = c.latest_source || ((c.sources || [])[0]) || 'legacy';
+          const allSrc = (c.sources || []).map(_trSrcLabel).join(', ') || src;
           const days = (c.days_since_latest != null) ? (c.days_since_latest + 'd ago') : '';
           const title = _trEsc(c.ticker) + ' latest ' + _trEsc(lq) + ' on ' + _trEsc(ld)
             + (days ? ' (' + days + ')' : '')
-            + (oq || od ? ' · oldest ' + _trEsc(oq) + (od ? ' ' + _trEsc(od) : '') : '')
-            + ' · ' + (c.quarters || 0) + ' quarters · ' + (c.chunks || 0) + ' passages';
+            + ' · via ' + _trEsc(allSrc)
+            + ' · ' + (c.quarters || 0) + 'q · ' + (c.chunks || 0) + ' passages'
+            + (c.oldest_quarter ? ' · oldest ' + _trEsc(c.oldest_quarter) + ' ' + _trEsc(c.oldest_call || '') : '');
           return '<span title="' + title + '" style="display:inline-block;margin:0 5px 4px 0;font-family:\'SF Mono\',monospace;font-size:10.5px;background:'
             + bg + ';border:1px solid ' + bd + ';color:' + fg + ';padding:2px 7px;border-radius:9px;cursor:default;">'
             + '<strong>' + _trEsc(c.ticker) + '</strong>'
             + ' · ' + _trEsc(lq)
             + ' · ' + _trEsc(ld)
+            + ' · <span style="color:' + _trSrcColor(src) + ';">' + _trEsc(_trSrcLabel(src)) + '</span>'
             + ' · ' + (c.quarters || 0) + 'q</span>';
         };
         let bands = '';

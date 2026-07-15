@@ -23022,11 +23022,18 @@ def _ensure_transcripts_tables() -> None:
                     chunk_idx   INTEGER,
                     chunk_text  TEXT NOT NULL,
                     embedding   JSONB,
+                    source      TEXT,
                     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
             """)
+            # Additive migration for DBs created before source tracking
+            try:
+                cur.execute("ALTER TABLE call_chunks ADD COLUMN IF NOT EXISTS source TEXT")
+            except Exception:
+                pass
             cur.execute("CREATE INDEX IF NOT EXISTS call_chunks_ticker_idx ON call_chunks(ticker)")
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS call_chunks_uniq ON call_chunks(ticker, quarter, chunk_idx)")
+            cur.execute("CREATE INDEX IF NOT EXISTS call_chunks_source_idx ON call_chunks(source)")
             conn.commit()
     except Exception as e:
         print(f"❌ _ensure_transcripts_tables failed: {e!s:.300}", flush=True)
@@ -23948,8 +23955,13 @@ def _fetch_grok_call_transcript_for_quarter(ticker: str, year: int, quarter: int
     return _parse_grok_transcript(out, default_quarter=qtag)
 
 
-def _store_call_chunks(ticker: str, qtag: str, call_date, transcript: str) -> tuple:
-    """Chunk + embed + store one transcript. Returns (indexed_count, error|None)."""
+def _store_call_chunks(ticker: str, qtag: str, call_date, transcript: str,
+                       source: str | None = None) -> tuple:
+    """Chunk + embed + store one transcript. Returns (indexed_count, error|None).
+
+    `source` is persisted so the UI can show the pull cascade track
+    (motley_fool / fmp / alpha_vantage / huggingface / grok / …).
+    """
     chunks = _chunk_call_text(transcript)
     if not chunks:
         return 0, "no chunks"
@@ -23958,19 +23970,35 @@ def _store_call_chunks(ticker: str, qtag: str, call_date, transcript: str) -> tu
     except Exception as e:
         return 0, f"embed failed {e!s:.100}"
     n = 0
+    src = (source or "unknown").strip()[:40] or "unknown"
     try:
         with _fund_conn() as conn, conn.cursor() as cur:
             for idx, (ch, emb) in enumerate(zip(chunks, embs)):
                 cur.execute("""
-                    INSERT INTO call_chunks (ticker, quarter, call_date, speaker, chunk_idx, chunk_text, embedding)
-                    VALUES (%s,%s,%s,NULL,%s,%s,%s)
-                    ON CONFLICT (ticker, quarter, chunk_idx) DO NOTHING
-                """, (ticker, qtag, call_date, idx, ch, json.dumps(emb)))
+                    INSERT INTO call_chunks
+                        (ticker, quarter, call_date, speaker, chunk_idx, chunk_text, embedding, source)
+                    VALUES (%s,%s,%s,NULL,%s,%s,%s,%s)
+                    ON CONFLICT (ticker, quarter, chunk_idx) DO UPDATE
+                       SET source = COALESCE(EXCLUDED.source, call_chunks.source)
+                """, (ticker, qtag, call_date, idx, ch, json.dumps(emb), src))
                 n += 1
             conn.commit()
     except Exception as e:
-        return 0, f"store failed {e!s:.100}"
-    print(f"📞 [calls] {ticker} {qtag}: indexed {len(chunks)} chunks", flush=True)
+        # Fallback without source column if migration lag
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                for idx, (ch, emb) in enumerate(zip(chunks, embs)):
+                    cur.execute("""
+                        INSERT INTO call_chunks
+                            (ticker, quarter, call_date, speaker, chunk_idx, chunk_text, embedding)
+                        VALUES (%s,%s,%s,NULL,%s,%s,%s)
+                        ON CONFLICT (ticker, quarter, chunk_idx) DO NOTHING
+                    """, (ticker, qtag, call_date, idx, ch, json.dumps(emb)))
+                    n += 1
+                conn.commit()
+        except Exception as e2:
+            return 0, f"store failed {e2!s:.100}"
+    print(f"📞 [calls] {ticker} {qtag}: indexed {len(chunks)} chunks via {src}", flush=True)
     return n, None
 
 
@@ -24070,6 +24098,7 @@ def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4,
             # default — only force pure Grok if explicitly requested via flag.
             pass
         indexed, found, errors = 0, [], []
+        trail: list[dict] = []
         seen, new_count, consec_miss = set(), 0, 0
         grok_calls, free_hits = 0, 0
         sources_used: list[str] = []
@@ -24102,6 +24131,15 @@ def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4,
                 # Don't spam expected future-quarter misses
                 if consec_miss <= 2 or st not in (200, 404):
                     errors.append(f"{qtag}: [{res.get('source') or '?'}] {err}")
+                trail.append({
+                    "ticker": ticker, "quarter": qtag, "ok": False,
+                    "source": res.get("source") or "none",
+                    "error": err,
+                    "cascade_tried": [
+                        a.get("source") for a in (res.get("attempts") or [])
+                    ] + ([res.get("source")] if res.get("source") else []),
+                    "attempts": (res.get("attempts") or [])[:6],
+                })
                 if consec_miss >= 3 and found:
                     break
                 continue
@@ -24115,17 +24153,25 @@ def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4,
                     found.append(act)
                 continue
             seen.add(act)
-            n, err = _store_call_chunks(ticker, act, res.get("date"), res["transcript"])
+            n, err = _store_call_chunks(ticker, act, res.get("date"),
+                                        res["transcript"], source=src)
             if err:
                 errors.append(f"{act}: {err}")
             else:
                 found.append(act)
                 indexed += n
                 new_count += 1
+                trail.append({
+                    "ticker": ticker, "quarter": act, "source": src,
+                    "chunks": n, "date": res.get("date"), "ok": True,
+                    "cascade_tried": [
+                        a.get("source") for a in (res.get("attempts") or [])
+                    ] + [src],
+                })
                 print(f"📞 [calls] {ticker} {act}: +{n} via {src}", flush=True)
         return {"indexed": indexed, "found": found, "errors": errors,
                 "grok_calls": grok_calls, "free_hits": free_hits,
-                "sources": sources_used}
+                "sources": sources_used, "trail": trail}
 
     # ── API Ninjas path (premium) — multi-quarter walk-back ──
     from datetime import datetime as _dt
@@ -24190,9 +24236,24 @@ def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int,
                  "est_grok_calls": 0, "est_cost_usd_low": 0.0,
                  "est_cost_usd_high": 0.0,
                  "note": "Free sources only (Motley Fool / FMP / AV). $0 Grok."})
+    cascade_order = ["motley_fool", "fmp", "alpha_vantage", "api_ninjas"] + (
+        ["grok"] if allow_grok else [])
+    keys_status = {
+        "fmp": bool((os.environ.get("FMP_API_KEY")
+                     or os.environ.get("FINANCIAL_MODELING_PREP_KEY")
+                     or os.environ.get("FMP_KEY") or "").strip()),
+        "alpha_vantage": bool((os.environ.get("ALPHA_VANTAGE_API_KEY")
+                               or os.environ.get("ALPHAVANTAGE_API_KEY")
+                               or os.environ.get("AV_API_KEY") or "").strip()),
+        "api_ninjas": bool((os.environ.get("API_NINJAS_KEY") or "").strip()),
+        "grok": bool(allow_grok),
+        "motley_fool": True,  # always available (public HTML)
+        "huggingface": True,
+    }
     _set(stage="queued", status="running", label="Queued…", started_at=time.time(),
          total=len(tickers), done=0, indexed=0, grok_calls=0, free_hits=0,
-         cost_usd=0.0, cost_est=cost_est, allow_grok=allow_grok)
+         cost_usd=0.0, cost_est=cost_est, allow_grok=allow_grok,
+         cascade=cascade_order, keys=keys_status, trail=[])
     try:
         _ensure_transcripts_tables()
         total_indexed = 0
@@ -24202,6 +24263,7 @@ def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int,
         cost_usd = 0.0
         all_errors = []
         sources_all: list[str] = []
+        trail_all: list[dict] = []
         # ~$0.05 mid-point per live-search call for running counter
         per_call = 0.05
         mode = "free cascade" if not allow_grok else "cascade (free→Grok)"
@@ -24209,9 +24271,9 @@ def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int,
             spent_bit = (f" · free hits {free_hits}"
                          + (f" · ~${cost_usd:.2f} Grok" if allow_grok else " · $0 Grok"))
             _set(stage="syncing",
-                 label=f"📞 {tk} ({i+1}/{len(tickers)}){spent_bit}…",
+                 label=f"📞 {tk} ({i+1}/{len(tickers)}) · cascade {' → '.join(cascade_order)}{spent_bit}…",
                  done=i, grok_calls=grok_calls, free_hits=free_hits,
-                 cost_usd=round(cost_usd, 2))
+                 cost_usd=round(cost_usd, 2), trail=trail_all[-40:])
             try:
                 r = _sync_one_ticker_calls(tk, max_quarters=max_quarters,
                                            allow_grok=allow_grok)
@@ -24224,6 +24286,8 @@ def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int,
                 for s in (r.get("sources") or []):
                     if s not in sources_all:
                         sources_all.append(s)
+                for trow in (r.get("trail") or []):
+                    trail_all.append(trow)
                 if r.get("found"):
                     names_with_calls += 1
                 for e in (r.get("errors") or [])[:2]:
@@ -24232,7 +24296,7 @@ def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int,
                 all_errors.append(f"{tk}: {e!s:.100}")
                 print(f"⚠️ [call sync {tk}] {e!s:.150}", flush=True)
             _set(indexed=total_indexed, grok_calls=grok_calls, free_hits=free_hits,
-                 cost_usd=round(cost_usd, 2))
+                 cost_usd=round(cost_usd, 2), trail=trail_all[-60:])
         if total_indexed > 0:
             label = (f"✓ Indexed {total_indexed} passages across {names_with_calls} names"
                      f" · free hits {free_hits}"
@@ -24244,12 +24308,22 @@ def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int,
             label = f"⚠ Indexed 0 passages — {reason[:160]}"
             if grok_calls:
                 label += f" · ~${cost_usd:.2f} spent"
+        # Summarize sources used on this run
+        by_src: dict[str, int] = {}
+        for trow in trail_all:
+            if trow.get("ok"):
+                by_src[trow.get("source") or "?"] = by_src.get(trow.get("source") or "?", 0) + 1
         _set(stage="done", status="done", done=len(tickers), label=label,
              grok_calls=grok_calls, free_hits=free_hits, cost_usd=round(cost_usd, 2),
+             trail=trail_all[-80:],
              result={"tickers": tickers, "chunks_indexed": total_indexed,
                      "names_with_calls": names_with_calls,
                      "grok_calls": grok_calls, "free_hits": free_hits,
                      "sources": sources_all,
+                     "source_counts": by_src,
+                     "trail": trail_all[:120],
+                     "cascade": cascade_order,
+                     "keys": keys_status,
                      "cost_usd_est": round(cost_usd, 2),
                      "allow_grok": allow_grok,
                      "errors": all_errors[:12]})
@@ -24333,7 +24407,9 @@ def _index_call_rows(rows: list[dict], on_progress=None) -> tuple:
             per[tk] = per.get(tk, 0) + 1
             if on_progress and i % 10 == 0: on_progress(i, n, indexed)
             continue
-        cnt, err = _store_call_chunks(tk, qtag, (row.get("date") or "")[:10], row.get("content") or "")
+        cnt, err = _store_call_chunks(tk, qtag, (row.get("date") or "")[:10],
+                                      row.get("content") or "",
+                                      source="huggingface")
         if not err:
             indexed += cnt
             per[tk] = per.get(tk, 0) + 1
@@ -25139,13 +25215,28 @@ def _call_freshness(latest_iso: str | None, today=None) -> dict:
     return {"bucket": bucket, "days_since_latest": days, "label": label}
 
 
+def _call_source_keys_status() -> dict:
+    """Which cascade credentials are present (booleans only — never leak keys)."""
+    return {
+        "motley_fool": True,
+        "huggingface": True,
+        "fmp": bool((os.environ.get("FMP_API_KEY")
+                     or os.environ.get("FINANCIAL_MODELING_PREP_KEY")
+                     or os.environ.get("FMP_KEY") or "").strip()),
+        "alpha_vantage": bool((os.environ.get("ALPHA_VANTAGE_API_KEY")
+                               or os.environ.get("ALPHAVANTAGE_API_KEY")
+                               or os.environ.get("AV_API_KEY") or "").strip()),
+        "api_ninjas": bool((os.environ.get("API_NINJAS_KEY") or "").strip()),
+        "grok": False,
+    }
+
+
 @app.get("/api/transcripts/calls/coverage")
 def transcripts_calls_coverage(request: Request):
     """Which tickers/quarters are indexed vs the saved-report universe.
 
-    Each row includes latest/oldest call dates + quarters and a freshness
-    bucket (fresh/recent/aging/stale) so you can tell if WFC is yesterday's
-    print vs multi-year HF history.
+    Each row includes latest/oldest call dates + quarters, freshness bucket,
+    and which pull sources supplied those chunks (cascade track).
     """
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
@@ -25154,6 +25245,7 @@ def transcripts_calls_coverage(request: Request):
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
             # Quarter tags are YYYYQn — lexical min/max = chronological.
+            # source column may be NULL on legacy HF rows → coalesce.
             cur.execute("""
                 SELECT ticker,
                        COUNT(DISTINCT quarter) AS quarters,
@@ -25161,12 +25253,46 @@ def transcripts_calls_coverage(request: Request):
                        MAX(call_date) AS latest_call,
                        MIN(call_date) AS oldest_call,
                        MAX(quarter) AS latest_quarter,
-                       MIN(quarter) AS oldest_quarter
+                       MIN(quarter) AS oldest_quarter,
+                       ARRAY_AGG(DISTINCT COALESCE(NULLIF(source, ''), 'legacy'))
+                           AS sources
                   FROM call_chunks
                  GROUP BY ticker
                  ORDER BY MAX(call_date) DESC NULLS LAST, ticker
             """)
             rows = cur.fetchall() or []
+            # Per-ticker latest quarter's source (for the chip badge)
+            try:
+                cur.execute("""
+                    SELECT DISTINCT ON (ticker)
+                           ticker, quarter, call_date, COALESCE(NULLIF(source,''),'legacy') AS source
+                      FROM call_chunks
+                     ORDER BY ticker, call_date DESC NULLS LAST, quarter DESC
+                """)
+                latest_src_rows = cur.fetchall() or []
+            except Exception:
+                latest_src_rows = []
+            # Global source histogram
+            try:
+                cur.execute("""
+                    SELECT COALESCE(NULLIF(source,''), 'legacy') AS source,
+                           COUNT(DISTINCT ticker || ':' || quarter) AS transcripts,
+                           COUNT(*) AS chunks
+                      FROM call_chunks
+                     GROUP BY 1
+                     ORDER BY transcripts DESC
+                """)
+                source_hist = cur.fetchall() or []
+            except Exception:
+                source_hist = []
+        latest_src_map = {
+            (r["ticker"] if isinstance(r, dict) else r[0]): {
+                "quarter": r["quarter"] if isinstance(r, dict) else r[1],
+                "call_date": _call_date_str(r["call_date"] if isinstance(r, dict) else r[2]),
+                "source": r["source"] if isinstance(r, dict) else r[3],
+            }
+            for r in latest_src_rows
+        }
         coverage = []
         by_bucket = {"fresh": 0, "recent": 0, "aging": 0, "stale": 0}
         for r in rows:
@@ -25174,6 +25300,11 @@ def transcripts_calls_coverage(request: Request):
             oldest = _call_date_str(r.get("oldest_call"))
             fr = _call_freshness(latest)
             by_bucket[fr["bucket"]] = by_bucket.get(fr["bucket"], 0) + 1
+            srcs = r.get("sources") or []
+            if isinstance(srcs, str):
+                srcs = [srcs]
+            srcs = sorted({(s or "legacy") for s in srcs if s})
+            ls = latest_src_map.get(r["ticker"]) or {}
             coverage.append({
                 "ticker": r["ticker"],
                 "quarters": int(r["quarters"] or 0),
@@ -25185,11 +25316,12 @@ def transcripts_calls_coverage(request: Request):
                 "freshness": fr["bucket"],
                 "days_since_latest": fr["days_since_latest"],
                 "freshness_label": fr["label"],
+                "sources": srcs,
+                "latest_source": ls.get("source") or (srcs[0] if srcs else "legacy"),
             })
         universe = _call_index_universe()
         covered = {c["ticker"].upper() for c in coverage}
         missing = [t for t in universe if t not in covered]
-        # Names that are indexed but latest call is aging/stale → Grok top-up candidates
         needs_topup = [c["ticker"] for c in coverage
                        if c.get("freshness") in ("aging", "stale")
                        and c["ticker"].upper() in set(universe)]
@@ -25198,10 +25330,30 @@ def transcripts_calls_coverage(request: Request):
             min(40, n_work if n_work > 0 else len(universe)),
             max_quarters=2,
             n_already=0 if n_work else len(universe))
+        keys = _call_source_keys_status()
+        try:
+            if analyst.get_grok_api_key():
+                keys["grok"] = True
+        except Exception:
+            keys["grok"] = False
+        cascade = ["motley_fool", "fmp", "alpha_vantage", "api_ninjas", "grok"]
+        source_summary = {}
+        for row in source_hist:
+            if isinstance(row, dict):
+                source_summary[row.get("source") or "legacy"] = {
+                    "transcripts": int(row.get("transcripts") or 0),
+                    "chunks": int(row.get("chunks") or 0),
+                }
+            else:
+                source_summary[row[0] or "legacy"] = {
+                    "transcripts": int(row[1] or 0),
+                    "chunks": int(row[2] or 0),
+                }
         return {
             "ok": True,
             "coverage": coverage,
             "freshness_summary": by_bucket,
+            "source_summary": source_summary,
             "needs_topup": needs_topup[:60],
             "needs_topup_count": len(needs_topup),
             "universe": {
@@ -25211,11 +25363,13 @@ def transcripts_calls_coverage(request: Request):
                 "missing_tickers": missing[:80],
                 "extra_indexed": sorted(covered - set(universe))[:40],
             },
+            "mode": _CALL_SOURCE,
+            "cascade": cascade,
+            "keys": keys,
             "source": _CALL_SOURCE,
             "cost_hint": cost_hint,
-            "note": ("Badge = indexed/universe. Chips show latest quarter + date + "
-                     "freshness. HF Backfill = multi-year history ($0). Latest calls "
-                     "(Grok) fills forward to the newest reported print."),
+            "note": ("Pull cascade: Motley Fool → FMP → Alpha Vantage → API Ninjas → Grok. "
+                     "Chips show latest source + date. legacy = pre-tracking HF rows."),
         }
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
@@ -25223,39 +25377,104 @@ def transcripts_calls_coverage(request: Request):
 
 @app.get("/api/transcripts/calls/probe")
 def transcripts_calls_probe(request: Request, ticker: str = "AAPL",
-                            year: int = 0, quarter: int = 0):
-    """Diagnostic: fetch one transcript from the ACTIVE source and return the
-    raw status/error/shape so we can see why a sync indexed nothing. GP-only."""
+                            year: int = 0, quarter: int = 0,
+                            allow_grok: int = 0):
+    """Diagnostic: run the full cascade on one ticker/quarter and report
+    each step (ok/fail, chars, error) so you can verify FMP/AV/Fool keys.
+
+    Does NOT index. GP-only. allow_grok=1 enables paid last step.
+    """
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
     tk = (ticker or "AAPL").upper().strip()
-    attempts = []
-    if _CALL_SOURCE == "grok":
-        res = _fetch_grok_call_transcript(tk)
-        attempts.append({"quarter": res.get("quarter") or "latest",
-                         "status": res.get("status"), "ok": res.get("ok"),
-                         "transcript_chars": len(res.get("transcript") or "") if res.get("ok") else 0,
-                         "date": res.get("date"), "error": res.get("error")})
-        return {"ok": True, "source": "grok", "ticker": tk, "attempts": attempts}
     from datetime import datetime as _dt
     if year and quarter:
-        cand = [(int(year), int(quarter))]
+        y, q = int(year), int(quarter)
     else:
-        cy = _dt.utcnow().year
-        cand = [(cy, 1), (cy - 1, 4), (cy - 1, 3), (cy - 1, 2), (cy - 1, 1)]
-    for (y, q) in cand:
-        res = _fetch_api_ninjas_transcript(tk, y, q)
-        attempts.append({"quarter": f"{y}Q{q}", "status": res.get("status"),
-                         "ok": res.get("ok"),
-                         "transcript_chars": len(res.get("transcript") or "") if res.get("ok") else 0,
-                         "error": res.get("error"), "keys": res.get("keys")})
-        if res.get("ok"):
-            break
-    return {"ok": True, "source": "api_ninjas",
-            "api_ninjas_key_set": bool(os.environ.get("API_NINJAS_KEY")),
-            "ticker": tk, "attempts": attempts}
-
+        # Prefer most recent completed-ish quarter
+        now = _dt.utcnow()
+        y, q = now.year, (now.month - 1) // 3 + 1
+        q -= 1
+        if q == 0:
+            q, y = 4, y - 1
+    qtag = f"{y}Q{q}"
+    keys = _call_source_keys_status()
+    try:
+        if analyst.get_grok_api_key():
+            keys["grok"] = True
+    except Exception:
+        keys["grok"] = False
+    cascade = [
+        ("motley_fool", _fetch_motley_fool_transcript),
+        ("fmp", _fetch_fmp_transcript),
+        ("alpha_vantage", _fetch_alphavantage_transcript),
+        ("api_ninjas", _fetch_api_ninjas_transcript),
+    ]
+    steps = []
+    winner = None
+    for name, fn in cascade:
+        t0 = time.time()
+        try:
+            res = fn(tk, y, q)
+        except Exception as e:
+            res = {"ok": False, "status": -1, "error": str(e)[:200], "source": name}
+        ms = int((time.time() - t0) * 1000)
+        step = {
+            "source": name,
+            "key_configured": keys.get(name, name in ("motley_fool", "huggingface")),
+            "ok": bool(res.get("ok")),
+            "status": res.get("status"),
+            "transcript_chars": len(res.get("transcript") or "") if res.get("ok") else 0,
+            "date": res.get("date"),
+            "quarter": res.get("quarter") or qtag,
+            "error": None if res.get("ok") else (res.get("error") or "miss")[:220],
+            "ms": ms,
+            "url": res.get("url"),
+        }
+        steps.append(step)
+        if res.get("ok") and winner is None:
+            winner = name
+            # Still run remaining free steps? No — show full track: keep testing
+            # all free sources so user sees which keys work independently.
+    if int(allow_grok or 0) and keys.get("grok"):
+        t0 = time.time()
+        try:
+            res = _fetch_grok_call_transcript_for_quarter(tk, y, q)
+        except Exception as e:
+            res = {"ok": False, "status": -1, "error": str(e)[:200]}
+        steps.append({
+            "source": "grok",
+            "key_configured": True,
+            "ok": bool(res.get("ok")),
+            "status": res.get("status"),
+            "transcript_chars": len(res.get("transcript") or "") if res.get("ok") else 0,
+            "date": res.get("date"),
+            "quarter": res.get("quarter") or qtag,
+            "error": None if res.get("ok") else (res.get("error") or "miss")[:220],
+            "ms": int((time.time() - t0) * 1000),
+        })
+        if res.get("ok") and winner is None:
+            winner = "grok"
+    # Also expose legacy single-path for older UI buttons
+    attempts = [
+        {"quarter": s.get("quarter"), "status": s.get("status"), "ok": s.get("ok"),
+         "transcript_chars": s.get("transcript_chars"), "date": s.get("date"),
+         "error": s.get("error"), "source": s.get("source")}
+        for s in steps
+    ]
+    return {
+        "ok": True,
+        "ticker": tk,
+        "quarter": qtag,
+        "cascade": [s["source"] for s in steps],
+        "keys": keys,
+        "steps": steps,
+        "winner": winner,
+        "attempts": attempts,  # backward compat with older UI
+        "note": ("Each step is tested independently so you can see which keys work. "
+                 "Live sync stops at the first success (order = cascade list)."),
+    }
 
 
 # Financials store + dashboard: api.domains._financials_body (mounted at boot)
