@@ -3143,6 +3143,14 @@ def earnings_detail(ticker: str, request: Request):
             }
     except Exception:
         pass
+    # Stock-moving Q&A highlights from indexed earnings-call chunks (free, no LLM)
+    try:
+        card["call_highlights"] = _earnings_call_highlights(tk, limit=5)
+    except Exception as e:
+        print(f"[earnings] call_highlights {tk}: {e!s:.120}", flush=True)
+        card["call_highlights"] = {
+            "ok": False, "highlights": [], "note": "Call highlights unavailable.",
+        }
     return card
 
 
@@ -23735,6 +23743,200 @@ def _search_call_chunks(ticker: str, query: str, k: int = 6) -> list[dict]:
     except Exception as e:
         print(f"⚠️ [_search_call_chunks rank {ticker}] {e!s:.150}", flush=True)
         return []
+
+
+# Themes that tend to move stocks when mgmt answers analysts on the call.
+_EARN_QA_THEMES: list[tuple[str, re.Pattern]] = [
+    ("Guidance", re.compile(
+        r"\b(guid(ance|ed|ing)|outlook|raise[sd]?|lower(ed|ing)?|cut|reaffirm|"
+        r"increase[sd]? (our )?(full.?year|FY|Q[1-4])|update[sd]? (our )?view)\b", re.I)),
+    ("Margins", re.compile(
+        r"\b(gross margin|operating margin|op.?ex|opex|cost structure|ASP|"
+        r"pricing power|mix (shift|benefit)|margin expansion|margin pressure)\b", re.I)),
+    ("Demand", re.compile(
+        r"\b(demand|orders?|bookings?|backlog|pipeline|utilization|capacity|"
+        r"sell.?through|channel inventory|destock)\b", re.I)),
+    ("AI / growth", re.compile(
+        r"\b(artificial intelligence|\bAI\b|GPU|data center|cloud|ads? revenue|"
+        r"user growth|MAU|DAU|engagement|ARPU)\b", re.I)),
+    ("Capital return", re.compile(
+        r"\b(buyback|share repurchas|dividend|capital return|FCF|free cash flow|"
+        r"balance sheet|leverage|debt)\b", re.I)),
+    ("Risks", re.compile(
+        r"\b(headwind|tariff|China|regulation|lawsuit|impairment|write.?down|"
+        r"slowdown|recession|inflation|FX|foreign exchange|supply chain)\b", re.I)),
+]
+_EARN_QA_MARKER = re.compile(
+    r"\b(analyst|question|Q&A|operator|thank you for taking|my question|"
+    r"follow.?up|can you (talk|speak|comment|help us)|how should we think|"
+    r"what drives|visibility|color on)\b", re.I)
+_EARN_MGMT_MARKER = re.compile(
+    r"\b(CEO|CFO|chief (executive|financial)|we (expect|see|believe|remain|"
+    r"continue|are seeing|are investing)|our view|management)\b", re.I)
+
+
+def _earn_highlight_score(text: str) -> tuple[float, list[str]]:
+    """Score a passage for stock-moving content; return (score, theme labels)."""
+    if not text or len(text) < 80:
+        return 0.0, []
+    themes = []
+    score = 0.0
+    for label, pat in _EARN_QA_THEMES:
+        hits = pat.findall(text)
+        if hits:
+            themes.append(label)
+            score += 2.0 + min(3, len(hits)) * 0.4
+    if _EARN_QA_MARKER.search(text):
+        score += 2.5   # prefer Q&A over pure prepared remarks
+    if _EARN_MGMT_MARKER.search(text):
+        score += 1.0
+    # Soft boost for numbers/% (guidance and KPIs)
+    if re.search(r"\b\d+(\.\d+)?\s*%", text):
+        score += 0.8
+    if re.search(r"\$\s?\d", text):
+        score += 0.4
+    return score, themes
+
+
+def _trim_highlight_quote(text: str, max_len: int = 320) -> str:
+    t = re.sub(r"\s+", " ", (text or "")).strip()
+    if len(t) <= max_len:
+        return t
+    cut = t[: max_len - 1]
+    sp = cut.rfind(" ")
+    if sp > max_len // 2:
+        cut = cut[:sp]
+    return cut.rstrip(" ,;:") + "…"
+
+
+def _earnings_call_highlights(ticker: str, limit: int = 5) -> dict:
+    """Stock-moving Q&A / call highlights for the earnings card.
+
+    Free path: score indexed call_chunks (no LLM). Prefers the most recent
+    quarter and passages that look like analyst Q&A with guidance/margin/demand
+    language. Returns {ok, highlights, quarter, note, source}.
+    """
+    tk = (ticker or "").upper().strip()
+    empty = {"ok": True, "highlights": [], "quarter": None, "call_date": None,
+             "note": None, "source": "call_chunks"}
+    if not tk or not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        empty["note"] = "No call index available."
+        return empty
+    rows = []
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""
+                SELECT quarter, call_date, chunk_text
+                  FROM call_chunks
+                 WHERE ticker = %s
+                 ORDER BY call_date DESC NULLS LAST, quarter DESC
+                 LIMIT 200
+            """, (tk,))
+            rows = cur.fetchall() or []
+    except Exception as e:
+        print(f"[earnings] call highlights {tk}: {e!s:.140}", flush=True)
+        empty["note"] = "Call index query failed."
+        return empty
+    if not rows:
+        empty["note"] = ("No earnings-call transcript indexed yet — "
+                         "Transcripts → Sync earnings calls.")
+        return empty
+
+    # Prefer newest quarter that has any content
+    latest_q = rows[0].get("quarter")
+    latest_date = rows[0].get("call_date")
+    pool = [r for r in rows if (r.get("quarter") or "") == (latest_q or "")]
+    if len(pool) < 4:
+        pool = rows[:80]
+
+    scored = []
+    for r in pool:
+        txt = (r.get("chunk_text") or "").strip()
+        sc, themes = _earn_highlight_score(txt)
+        if sc < 2.5 or not themes:
+            continue
+        scored.append({
+            "score": sc,
+            "themes": themes[:3],
+            "theme": themes[0],
+            "quote": _trim_highlight_quote(txt, 340),
+            "quarter": r.get("quarter"),
+            "call_date": (
+                r["call_date"].isoformat()[:10]
+                if hasattr(r.get("call_date"), "isoformat")
+                else (str(r.get("call_date") or "")[:10] or None)
+            ),
+        })
+    scored.sort(key=lambda x: -x["score"])
+
+    # De-dupe near-identical openings
+    seen: set[str] = set()
+    highlights = []
+    for h in scored:
+        key = re.sub(r"\W+", " ", h["quote"][:80].lower()).strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        highlights.append({
+            "theme": h["theme"],
+            "themes": h["themes"],
+            "quote": h["quote"],
+            "quarter": h["quarter"],
+            "call_date": h["call_date"],
+        })
+        if len(highlights) >= max(1, min(int(limit or 5), 8)):
+            break
+
+    # Light semantic fill if keyword path was thin (uses embeddings when available)
+    if len(highlights) < 3:
+        for q in ("guidance outlook raised lowered",
+                  "margin pricing cost",
+                  "demand orders backlog AI cloud"):
+            try:
+                hits = _search_call_chunks(tk, q, k=3) or []
+            except Exception:
+                hits = []
+            for hit in hits:
+                pas = (hit.get("passage") or "").strip()
+                if len(pas) < 80:
+                    continue
+                key = re.sub(r"\W+", " ", pas[:80].lower()).strip()
+                if key in seen:
+                    continue
+                sc, themes = _earn_highlight_score(pas)
+                if sc < 1.5 and not themes:
+                    themes = ["Call"]
+                seen.add(key)
+                highlights.append({
+                    "theme": (themes[0] if themes else "Call"),
+                    "themes": themes[:3] or ["Call"],
+                    "quote": _trim_highlight_quote(pas, 340),
+                    "quarter": hit.get("quarter") or latest_q,
+                    "call_date": (
+                        hit["call_date"].isoformat()[:10]
+                        if hasattr(hit.get("call_date"), "isoformat")
+                        else (str(hit.get("call_date") or "")[:10] or None)
+                    ),
+                })
+                if len(highlights) >= max(1, min(int(limit or 5), 8)):
+                    break
+            if len(highlights) >= max(1, min(int(limit or 5), 8)):
+                break
+
+    return {
+        "ok": True,
+        "highlights": highlights,
+        "quarter": latest_q,
+        "call_date": (
+            latest_date.isoformat()[:10]
+            if hasattr(latest_date, "isoformat")
+            else (str(latest_date or "")[:10] or None)
+        ),
+        "note": (None if highlights else
+                 "Transcript indexed but no high-signal Q&A passages found."),
+        "source": "call_chunks",
+        "n_chunks": len(rows),
+    }
 
 
 # ── Transcript endpoints ───────────────────────────────────────────────

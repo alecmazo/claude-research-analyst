@@ -902,6 +902,25 @@
     color: var(--text-primary);
   }
   .earn-hist th { font-weight: 700; font-size: 10px; letter-spacing: 0.3px; }
+  .earn-qa summary::-webkit-details-marker { display: none; }
+  .earn-qa summary::after {
+    content: '▾'; margin-left: 6px; color: var(--dim); font-size: 11px;
+  }
+  .earn-qa:not([open]) summary::after { content: '▸'; }
+  .earn-qa-item {
+    padding: 8px 0; border-top: 1px solid var(--panel-edge);
+  }
+  .earn-qa-item:first-child { border-top: none; padding-top: 2px; }
+  .earn-qa-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+  .earn-qa-tag {
+    font-size: 9px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase;
+    color: #1e40af; background: #dbeafe; border: 1px solid #93c5fd;
+    padding: 1px 6px; border-radius: 3px;
+  }
+  .earn-qa-quote {
+    font-size: 12px; line-height: 1.45; color: var(--text-primary);
+    font-style: italic;
+  }
   .wl-name {
     font-size: 11px; color: var(--mid);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
