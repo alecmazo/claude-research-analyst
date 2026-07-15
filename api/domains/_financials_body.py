@@ -2580,11 +2580,70 @@ def _rk_percentile(current, vals, higher_better, min_n=3):
     return round(pct)
 
 
-def _rk_row(name, value, fmt, higher_better, series=None, peer_vals=None, note=None):
+def _rk_abs_strength_quality(name: str, value) -> float | None:
+    """Absolute 0–1 quality floors for fortress balance sheets.
+
+    Own-history percentiles alone punish mega-caps that moved from ~zero debt
+    to modest leverage (META Cash-To-Debt hist 5% → Financial Strength 0/10)
+    even when absolute leverage is still excellent. Used only for the /10
+    rank; Rating bars stay pure history.
+    """
+    if value is None or not isinstance(value, (int, float)):
+        return None
+    v = float(value)
+    n = (name or "").lower()
+    # Higher-is-better
+    if "cash-to-debt" in n or "cash_to_debt" in n:
+        if v >= 5:   return 0.95
+        if v >= 2:   return 0.88
+        if v >= 1:   return 0.80
+        if v >= 0.5: return 0.65
+        if v >= 0.25: return 0.45
+        return 0.20
+    if "equity-to-asset" in n or "equity_to_asset" in n:
+        if v >= 0.60: return 0.92
+        if v >= 0.45: return 0.80
+        if v >= 0.30: return 0.60
+        if v >= 0.20: return 0.40
+        return 0.20
+    if "wacc vs roic" in n or "spread" in n:
+        # ROIC − WACC (pp). Positive spread = value creation.
+        if v >= 15:  return 0.95
+        if v >= 8:   return 0.88
+        if v >= 3:   return 0.75
+        if v >= 0:   return 0.55
+        if v >= -3:  return 0.35
+        return 0.15
+    # Lower-is-better leverage
+    if "debt-to-equity" in n or "debt_to_equity" in n:
+        if v <= 0.05: return 0.95
+        if v <= 0.15: return 0.90
+        if v <= 0.30: return 0.85
+        if v <= 0.50: return 0.72
+        if v <= 1.0:  return 0.55
+        if v <= 1.5:  return 0.40
+        if v <= 2.5:  return 0.25
+        return 0.10
+    if "debt-to-ebitda" in n or "debt_to_ebitda" in n:
+        if v <= 0.25: return 0.95
+        if v <= 0.75: return 0.88
+        if v <= 1.5:  return 0.78
+        if v <= 2.5:  return 0.60
+        if v <= 3.5:  return 0.45
+        if v <= 5.0:  return 0.30
+        return 0.12
+    return None
+
+
+def _rk_row(name, value, fmt, higher_better, series=None, peer_vals=None, note=None,
+            strength_blend: bool = False):
     """Build one metric row.
     hist_pct → Rating bar (own history only — blank if no multi-year series).
     ind_pct  → Vs Industry bar (peers only — blank if &lt;3 peers).
     quality  → 0–1 for card /10: prefer history, else industry (score only).
+    strength_blend → for Financial Strength: quality = max(hist, industry,
+      absolute fortress floor) so modest leverage after zero-debt years
+      cannot zero the whole card.
     Never copy industry into hist_pct — that made Rating and Vs Industry identical.
     """
     hist_vals = [x for x in (series or []) if x is not None]
@@ -2594,7 +2653,18 @@ def _rk_row(name, value, fmt, higher_better, series=None, peer_vals=None, note=N
     ip = _rk_percentile(value, peer_vals, higher_better, min_n=3)
     # Card /10 may use industry when history missing (value multiples with only
     # current price). UI Rating bar uses hist_pct alone so bars never twin.
-    q = (hp / 100.0) if hp is not None else ((ip / 100.0) if ip is not None else None)
+    if strength_blend:
+        qs = []
+        if hp is not None:
+            qs.append(hp / 100.0)
+        if ip is not None:
+            qs.append(ip / 100.0)
+        aq = _rk_abs_strength_quality(name, value)
+        if aq is not None:
+            qs.append(aq)
+        q = max(qs) if qs else None
+    else:
+        q = (hp / 100.0) if hp is not None else ((ip / 100.0) if ip is not None else None)
     return {
         "name": name,
         "value": (round(value, 4) if isinstance(value, (int, float)) else value),
@@ -2909,7 +2979,9 @@ def _build_rank_cards(annuals, price, anchor_map, growth_pct, ticker=None):
         if d is None:
             cash_series.append(None)
         elif d == 0:
-            cash_series.append(10.0 if (c or 0) > 0 else None)
+            # Skip zero-debt years in history — a synthetic 10x cap made later
+            # modest leverage look like a 5th-percentile collapse (META bug).
+            cash_series.append(None)
         else:
             cash_series.append(((c or 0.0) / d))
     e2a_series = [ratio(g(r, "stockholders_equity"), g(r, "total_assets")) for r in annuals]
@@ -2917,14 +2989,20 @@ def _build_rank_cards(annuals, price, anchor_map, growth_pct, ticker=None):
     d2eb_series = [ratio(debt_of(r), g(r, "ebitda")) for r in annuals]
     spread = (roic_latest - wacc_latest) if (roic_latest is not None and wacc_latest is not None) else None
     # WACC–ROIC spread has no clean industry peer field; history only if we can.
+    # strength_blend: /10 uses max(history, industry, absolute fortress floor).
     fs = [
-        _rk_row("Cash-To-Debt", c2d, "x", True, cash_series, peers_of("cash_to_debt")),
-        _rk_row("Equity-to-Asset", ratio(eq, ta), "x", True, e2a_series, peers_of("equity_to_asset")),
-        _rk_row("Debt-to-Equity", ratio(debt, eq), "x", False, d2e_series, peers_of("debt_to_equity")),
-        _rk_row("Debt-to-EBITDA", ratio(debt, ebitda), "x", False, d2eb_series, peers_of("debt_to_ebitda")),
+        _rk_row("Cash-To-Debt", c2d, "x", True, cash_series, peers_of("cash_to_debt"),
+                strength_blend=True),
+        _rk_row("Equity-to-Asset", ratio(eq, ta), "x", True, e2a_series, peers_of("equity_to_asset"),
+                strength_blend=True),
+        _rk_row("Debt-to-Equity", ratio(debt, eq), "x", False, d2e_series, peers_of("debt_to_equity"),
+                strength_blend=True),
+        _rk_row("Debt-to-EBITDA", ratio(debt, ebitda), "x", False, d2eb_series, peers_of("debt_to_ebitda"),
+                strength_blend=True),
         _rk_row("WACC vs ROIC", spread, "spread", True, None, None,
                 (f"ROIC {roic_latest:.1f}% − WACC {wacc_latest:.1f}% (est.)"
-                 if spread is not None else None)),
+                 if spread is not None else None),
+                strength_blend=True),
     ]
 
     # ── Profitability Rank ──
