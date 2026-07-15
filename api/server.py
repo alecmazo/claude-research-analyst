@@ -3180,7 +3180,13 @@ def earnings_detail(ticker: str, request: Request):
         pass
     # Stock-moving Q&A highlights from indexed earnings-call chunks (free, no LLM)
     try:
-        card["call_highlights"] = _earnings_call_highlights(tk, limit=5)
+        ev_date = None
+        try:
+            ev_date = (card.get("event") or {}).get("date")
+        except Exception:
+            ev_date = None
+        card["call_highlights"] = _earnings_call_highlights(
+            tk, limit=5, prefer_event_date=ev_date)
     except Exception as e:
         print(f"[earnings] call_highlights {tk}: {e!s:.120}", flush=True)
         card["call_highlights"] = {
@@ -23884,28 +23890,66 @@ def _trim_highlight_quote(text: str, max_len: int = 320) -> str:
     return cut.rstrip(" ,;:") + "…"
 
 
-def _earnings_call_highlights(ticker: str, limit: int = 5) -> dict:
+def _parse_call_quarter_key(quarter, call_date=None) -> tuple:
+    """Sort key for call quarters — higher = more recent.
+
+    Handles '2025Q3', '2025 Q3', 'Q3 2025', '2025-Q3'. Falls back to call_date
+    when the quarter tag is missing/unparseable. Never prefer a row solely
+    because call_date is non-NULL while a newer null-dated quarter exists
+    (that bug served META 2025Q1 while 2026Q* sat at the end of NULLS LAST).
+    """
+    from datetime import date as _date, datetime as _dt
+    y = q = 0
+    qs = re.sub(r"\s+", "", str(quarter or "")).upper()
+    m = re.match(r"^(\d{4})Q([1-4])$", qs)
+    if not m:
+        m = re.match(r"^Q([1-4])(\d{4})$", qs)
+        if m:
+            y, q = int(m.group(2)), int(m.group(1))
+        else:
+            m = re.match(r"^(\d{4})-?Q([1-4])$", qs)
+            if m:
+                y, q = int(m.group(1)), int(m.group(2))
+    else:
+        y, q = int(m.group(1)), int(m.group(2))
+    d_ord = 0
+    if call_date is not None:
+        try:
+            if hasattr(call_date, "toordinal"):
+                d_ord = call_date.toordinal()
+            else:
+                d_ord = _dt.strptime(str(call_date)[:10], "%Y-%m-%d").date().toordinal()
+        except Exception:
+            d_ord = 0
+    # Year/quarter dominate; date is tie-breaker only
+    return (y, q, d_ord)
+
+
+def _earnings_call_highlights(ticker: str, limit: int = 5,
+                              prefer_event_date: str | None = None) -> dict:
     """Stock-moving Q&A / call highlights for the earnings card.
 
-    Free path: score indexed call_chunks (no LLM). Prefers the most recent
-    quarter and passages that look like analyst Q&A with guidance/margin/demand
-    language. Returns {ok, highlights, quarter, note, source}.
+    Free path: score indexed call_chunks (no LLM). Uses the single newest
+    quarter only (never mixes 2025 into a 2026 card). Returns
+    {ok, highlights, quarter, note, source, stale}.
     """
+    from datetime import date as _date, datetime as _dt, timedelta as _td
     tk = (ticker or "").upper().strip()
     empty = {"ok": True, "highlights": [], "quarter": None, "call_date": None,
-             "note": None, "source": "call_chunks"}
+             "note": None, "source": "call_chunks", "stale": False}
     if not tk or not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         empty["note"] = "No call index available."
         return empty
     rows = []
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            # Pull a wide set; rank in Python by parsed quarter (not SQL
+            # call_date DESC NULLS LAST, which buried newer null-dated rows).
             cur.execute("""
                 SELECT quarter, call_date, chunk_text
                   FROM call_chunks
                  WHERE ticker = %s
-                 ORDER BY call_date DESC NULLS LAST, quarter DESC
-                 LIMIT 200
+                 LIMIT 400
             """, (tk,))
             rows = cur.fetchall() or []
     except Exception as e:
@@ -23917,12 +23961,99 @@ def _earnings_call_highlights(ticker: str, limit: int = 5) -> dict:
                          "Transcripts → Sync earnings calls.")
         return empty
 
-    # Prefer newest quarter that has any content
-    latest_q = rows[0].get("quarter")
-    latest_date = rows[0].get("call_date")
-    pool = [r for r in rows if (r.get("quarter") or "") == (latest_q or "")]
-    if len(pool) < 4:
-        pool = rows[:80]
+    # Rank every row; newest quarter wins
+    ranked = sorted(
+        rows,
+        key=lambda r: _parse_call_quarter_key(r.get("quarter"), r.get("call_date")),
+        reverse=True,
+    )
+    latest_q = ranked[0].get("quarter")
+    latest_date = ranked[0].get("call_date")
+    latest_key = _parse_call_quarter_key(latest_q, latest_date)
+    # Strict pool: only the newest (year, quarter) — never dilute with older calls
+    pool = [
+        r for r in ranked
+        if _parse_call_quarter_key(r.get("quarter"), r.get("call_date"))[:2]
+        == latest_key[:2]
+    ]
+    if not pool:
+        pool = ranked[:40]
+
+    # Staleness: latest indexed call older than ~120 days, or event date is
+    # newer than the indexed call by more than a week.
+    stale = False
+    stale_note = None
+    today = _date.today()
+    latest_d = None
+    if latest_date is not None:
+        try:
+            latest_d = (latest_date if hasattr(latest_date, "year")
+                        else _dt.strptime(str(latest_date)[:10], "%Y-%m-%d").date())
+        except Exception:
+            latest_d = None
+    if latest_d is None and latest_key[0] and latest_key[1]:
+        # Approximate quarter end for staleness when call_date missing
+        try:
+            m = {1: 3, 2: 6, 3: 9, 4: 12}[latest_key[1]]
+            latest_d = _date(latest_key[0], m, 28)
+        except Exception:
+            latest_d = None
+    if latest_d and (today - latest_d).days > 120:
+        stale = True
+        stale_note = (f"Latest indexed call is {latest_q or latest_d} "
+                      f"({(today - latest_d).days}d ago) — "
+                      f"Transcripts → Sync for newer Q&A.")
+    if prefer_event_date:
+        try:
+            ev = _dt.strptime(str(prefer_event_date)[:10], "%Y-%m-%d").date()
+            if latest_d and ev > latest_d + _td(days=7):
+                stale = True
+                stale_note = (f"Earnings event {ev} is newer than indexed call "
+                              f"{latest_q or latest_d} — "
+                              f"Transcripts → Sync earnings calls.")
+            # Event is recent (≤45d) but index is from an older print → do NOT
+            # show year-old Q&A next to today's beat/miss (C 2025-10-15 on a
+            # 2026-07-14 card).
+            if (latest_d and (today - ev).days <= 45
+                    and (ev - latest_d).days > 14):
+                return {
+                    "ok": True,
+                    "highlights": [],
+                    "quarter": latest_q,
+                    "call_date": (
+                        latest_date.isoformat()[:10]
+                        if hasattr(latest_date, "isoformat")
+                        else (str(latest_date or "")[:10] or None)
+                    ),
+                    "note": (f"Indexed call is {latest_q or latest_d}; this "
+                             f"print is {ev}. Sync latest earnings calls "
+                             f"(Transcripts tab) for current Q&A."),
+                    "stale": True,
+                    "source": "call_chunks",
+                    "n_chunks": len(pool),
+                    "n_chunks_all": len(rows),
+                }
+        except Exception:
+            pass
+    # Absolute staleness: never surface Q&A older than ~9 months as "movers"
+    if latest_d and (today - latest_d).days > 270:
+        return {
+            "ok": True,
+            "highlights": [],
+            "quarter": latest_q,
+            "call_date": (
+                latest_date.isoformat()[:10]
+                if hasattr(latest_date, "isoformat")
+                else (str(latest_date or "")[:10] or None)
+            ),
+            "note": (f"Newest indexed call is {latest_q or latest_d} "
+                     f"({(today - latest_d).days}d ago) — too old to show as "
+                     f"stock movers. Transcripts → Sync earnings calls."),
+            "stale": True,
+            "source": "call_chunks",
+            "n_chunks": len(pool),
+            "n_chunks_all": len(rows),
+        }
 
     scored = []
     for r in pool:
@@ -23930,6 +24061,7 @@ def _earnings_call_highlights(ticker: str, limit: int = 5) -> dict:
         sc, themes = _earn_highlight_score(txt)
         if sc < 2.5 or not themes:
             continue
+        # Light recency boost already implicit by pool filter
         scored.append({
             "score": sc,
             "themes": themes[:3],
@@ -23962,16 +24094,19 @@ def _earnings_call_highlights(ticker: str, limit: int = 5) -> dict:
         if len(highlights) >= max(1, min(int(limit or 5), 8)):
             break
 
-    # Light semantic fill if keyword path was thin (uses embeddings when available)
+    # Light semantic fill ONLY within the newest quarter (never reintroduce 2024/25)
     if len(highlights) < 3:
         for q in ("guidance outlook raised lowered",
                   "margin pricing cost",
                   "demand orders backlog AI cloud"):
             try:
-                hits = _search_call_chunks(tk, q, k=3) or []
+                hits = _search_call_chunks(tk, q, k=6) or []
             except Exception:
                 hits = []
             for hit in hits:
+                hq = hit.get("quarter")
+                if hq and _parse_call_quarter_key(hq, hit.get("call_date"))[:2] != latest_key[:2]:
+                    continue  # drop older quarters from semantic fill
                 pas = (hit.get("passage") or "").strip()
                 if len(pas) < 80:
                     continue
@@ -23998,6 +24133,12 @@ def _earnings_call_highlights(ticker: str, limit: int = 5) -> dict:
             if len(highlights) >= max(1, min(int(limit or 5), 8)):
                 break
 
+    note = None
+    if not highlights:
+        note = "Transcript indexed but no high-signal Q&A passages found."
+    elif stale_note:
+        note = stale_note
+
     return {
         "ok": True,
         "highlights": highlights,
@@ -24007,10 +24148,11 @@ def _earnings_call_highlights(ticker: str, limit: int = 5) -> dict:
             if hasattr(latest_date, "isoformat")
             else (str(latest_date or "")[:10] or None)
         ),
-        "note": (None if highlights else
-                 "Transcript indexed but no high-signal Q&A passages found."),
+        "note": note,
+        "stale": stale,
         "source": "call_chunks",
-        "n_chunks": len(rows),
+        "n_chunks": len(pool),
+        "n_chunks_all": len(rows),
     }
 
 

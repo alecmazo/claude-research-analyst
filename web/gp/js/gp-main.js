@@ -1128,7 +1128,7 @@
           '</tbody></table>';
       }
 
-      // Stock-moving Q&A from indexed earnings call (free keyword/semantic)
+      // Stock-moving Q&A from indexed earnings call (newest quarter only)
       const ch = d.call_highlights || {};
       const hl = Array.isArray(ch.highlights) ? ch.highlights : [];
       let qaHtml = '';
@@ -1136,14 +1136,19 @@
         const qLabel = (ch.quarter || hl[0].quarter || '') +
           (ch.call_date || hl[0].call_date
             ? (' · ' + (ch.call_date || hl[0].call_date)) : '');
+        const staleChip = ch.stale
+          ? '<span style="font-size:9px;font-weight:800;color:#92400e;background:#fef3c7;border:1px solid #fde68a;padding:1px 6px;border-radius:3px;">STALE INDEX</span>'
+          : '';
         qaHtml =
           '<details class="earn-qa" open style="margin-top:16px;border:1px solid var(--panel-edge);border-radius:8px;background:#fafbfc;">' +
-            '<summary style="cursor:pointer;padding:8px 10px;font-size:10px;font-weight:800;letter-spacing:0.55px;color:var(--text-secondary);text-transform:uppercase;list-style:none;display:flex;align-items:center;gap:6px;">' +
+            '<summary style="cursor:pointer;padding:8px 10px;font-size:10px;font-weight:800;letter-spacing:0.55px;color:var(--text-secondary);text-transform:uppercase;list-style:none;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
               '<span>📞 Call Q&amp;A · stock movers</span>' +
               (qLabel ? '<span style="font-weight:600;color:var(--dim);text-transform:none;letter-spacing:0;">' + _cfEsc(qLabel) + '</span>' : '') +
+              staleChip +
               '<span style="margin-left:auto;font-size:9px;font-weight:700;color:#166534;background:#dcfce7;padding:1px 6px;border-radius:3px;">' + hl.length + '</span>' +
             '</summary>' +
             '<div style="padding:0 10px 10px;">' +
+              (ch.note ? '<div style="font-size:10.5px;color:#92400e;margin:4px 0 8px;line-height:1.35;">' + _cfEsc(ch.note) + '</div>' : '') +
               hl.map(function (h) {
                 const tags = (h.themes && h.themes.length ? h.themes : [h.theme || 'Call'])
                   .map(function (t) {
@@ -1154,12 +1159,16 @@
                   '<div class="earn-qa-quote">“' + _cfEsc(h.quote || '') + '”</div>' +
                 '</div>';
               }).join('') +
-              '<div style="font-size:9.5px;color:var(--dim);margin-top:6px;">Indexed call passages · guidance / margins / demand · no LLM</div>' +
+              '<div style="font-size:9.5px;color:var(--dim);margin-top:6px;">Newest indexed quarter only · guidance / margins / demand · no LLM</div>' +
             '</div>' +
           '</details>';
       } else if (ch.note) {
         qaHtml =
-          '<div style="margin-top:14px;padding:8px 10px;border-radius:8px;background:#f8fafc;border:1px dashed var(--panel-edge);font-size:11px;color:var(--dim);line-height:1.4;">' +
+          '<div style="margin-top:14px;padding:8px 10px;border-radius:8px;background:' +
+            (ch.stale ? '#fffbeb' : '#f8fafc') + ';border:1px dashed ' +
+            (ch.stale ? '#fde68a' : 'var(--panel-edge)') +
+            ';font-size:11px;color:' + (ch.stale ? '#92400e' : 'var(--dim)') +
+            ';line-height:1.4;">' +
             '📞 ' + _cfEsc(ch.note) +
           '</div>';
       }
