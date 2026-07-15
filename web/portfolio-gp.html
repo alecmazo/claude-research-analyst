@@ -1085,9 +1085,10 @@ End with the sleeve block at this account's real market value so I can push it t
         <div class="panel-body" style="padding:14px 16px;">
           <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.5;margin-bottom:10px;">
             Index earnings calls for <strong>every saved-report ticker</strong> so the AI Analyst retrieves only the relevant passages.
-            Badge shows <em>indexed / universe</em> (not just how many names already have chunks).
-            <strong>Backfill history</strong> is free (Hugging Face + Dropbox backup).
-            <strong>Latest calls</strong> is paid Grok live-search — prioritizes never-indexed names, skips quarters already stored, and shows a running $ counter.
+            Badge shows <em>indexed / universe</em> and chips group by <strong>freshness</strong> (latest call date).
+            <strong>Backfill</strong> = multi-year HF history ($0).
+            <strong>Fill gap</strong> = free Motley Fool (+ optional FMP/Alpha Vantage keys) for mid‑2025 → now.
+            <strong>Latest + Grok</strong> = same cascade, paid Grok only when free sources miss.
           </div>
           <!-- Historical backfill (Hugging Face → Dropbox backup) -->
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
@@ -1099,18 +1100,23 @@ End with the sleeve block at this account's real market value so I can push it t
             <button id="tr-restore-btn" class="btn-secondary" style="font-size:11px;padding:4px 11px;" title="Rebuild the index from your last Dropbox backup (no re-download)">♻ Restore from Dropbox · free</button>
             <span style="font-size:10.5px;color:#166534;background:#dcfce7;border:1px solid #bbf7d0;padding:2px 8px;border-radius:10px;">$0 Grok</span>
           </div>
-          <!-- Latest-quarter top-up via Grok -->
+          <!-- Free gap-fill: Motley Fool / FMP / AV (HF cutoff → now) -->
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px dashed var(--border-subtle);padding-top:8px;margin-bottom:8px;">
+            <button id="tr-gap-btn" class="btn-primary" style="padding:0 14px;font-size:12px;background:#0f766e;">🕳 Fill gap · free (Fool/FMP)</button>
+            <span style="font-size:10.5px;color:var(--text-tertiary);">Motley Fool public transcripts first · optional FMP_API_KEY / ALPHA_VANTAGE_API_KEY · no Grok $</span>
+          </div>
+          <!-- Latest-quarter top-up via cascade (free → Grok) -->
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px dashed var(--border-subtle);padding-top:8px;">
-            <button id="tr-sync-btn" class="btn-secondary" style="padding:0 14px;font-size:12px;">⚡ Latest calls (Grok · paid)</button>
+            <button id="tr-sync-btn" class="btn-secondary" style="padding:0 14px;font-size:12px;">⚡ Latest calls (free→Grok)</button>
             <label style="font-size:11px;color:var(--text-secondary);">quarters:
-              <input id="tr-sync-quarters" type="number" min="1" max="8" value="2"
+              <input id="tr-sync-quarters" type="number" min="1" max="8" value="4"
                 style="width:44px;border:1px solid var(--border-default);border-radius:5px;padding:3px 6px;font-size:12px;margin-left:4px;background:var(--bg-elevated);color:var(--text-primary);">
             </label>
             <label style="font-size:11px;color:var(--text-secondary);">max names:
               <input id="tr-sync-max-names" type="number" min="5" max="120" value="40"
                 style="width:48px;border:1px solid var(--border-default);border-radius:5px;padding:3px 6px;font-size:12px;margin-left:4px;background:var(--bg-elevated);color:var(--text-primary);">
             </label>
-            <span style="font-size:10.5px;color:var(--text-tertiary);">missing first · already-indexed quarters free · re-run for deferred</span>
+            <span style="font-size:10.5px;color:var(--text-tertiary);">stale/missing first · free sources before Grok · re-run for deferred</span>
           </div>
           <div id="tr-cost-hint" style="margin-top:8px;font-size:11px;color:var(--text-tertiary);"></div>
           <div id="tr-sync-status" style="margin-top:10px;"></div>

@@ -1540,7 +1540,9 @@
     const ingestBtn = document.getElementById('tr-ingest-btn');
     if (ingestBtn) ingestBtn.addEventListener('click', _ingestYouTube);
     const syncBtn = document.getElementById('tr-sync-btn');
-    if (syncBtn) syncBtn.addEventListener('click', _syncEarningsCalls);
+    if (syncBtn) syncBtn.addEventListener('click', () => _syncEarningsCalls({ allowGrok: true }));
+    const gapBtn = document.getElementById('tr-gap-btn');
+    if (gapBtn) gapBtn.addEventListener('click', () => _syncEarningsCalls({ allowGrok: false }));
     const backfillBtn = document.getElementById('tr-backfill-btn');
     if (backfillBtn) backfillBtn.addEventListener('click', () => _backfillCalls(false));
     const restoreBtn = document.getElementById('tr-restore-btn');
@@ -1607,120 +1609,159 @@
     }
   }
 
-  // ── Sync earnings calls ──
+  // ── Sync earnings calls (free gap-fill or cascade free→Grok) ──
   let _trSyncPoll = null;
-  const _TR_SYNC_BTN = '⚡ Latest calls (Grok · paid)';
+  const _TR_SYNC_BTN = '⚡ Latest calls (free→Grok)';
+  const _TR_GAP_BTN = '🕳 Fill gap · free (Fool/FMP)';
   function _trFmtUsd(n) {
     const v = Number(n);
     if (!isFinite(v)) return '—';
     return (v < 10 ? v.toFixed(2) : v.toFixed(1));
   }
-  async function _syncEarningsCalls() {
+  async function _syncEarningsCalls(opts) {
+    const allowGrok = !opts || opts.allowGrok !== false;
     const status = document.getElementById('tr-sync-status');
-    const q = parseInt((document.getElementById('tr-sync-quarters') || {}).value || '2', 10);
+    const qDefault = allowGrok ? '4' : '4';
+    const q = parseInt((document.getElementById('tr-sync-quarters') || {}).value || qDefault, 10);
     const maxNames = parseInt((document.getElementById('tr-sync-max-names') || {}).value || '40', 10);
-    const btn = document.getElementById('tr-sync-btn');
+    const btn = document.getElementById(allowGrok ? 'tr-sync-btn' : 'tr-gap-btn')
+      || document.getElementById('tr-sync-btn');
+    const otherBtn = document.getElementById(allowGrok ? 'tr-gap-btn' : 'tr-sync-btn');
+    const btnLabel = allowGrok ? _TR_SYNC_BTN : _TR_GAP_BTN;
     if (!btn) return;
-    // Cost-confirm using last coverage hint (or a quick re-fetch)
-    let hint = null;
     try {
       const cov = await (await window.dgaFetch('/api/transcripts/calls/coverage')).json();
-      hint = (cov && cov.cost_hint) || null;
       const missing = (cov && cov.universe && cov.universe.missing) || 0;
       const uni = (cov && cov.universe && cov.universe.saved_reports) || 0;
       const indexed = (cov && cov.universe && cov.universe.indexed) || 0;
-      const lo = hint ? _trFmtUsd(hint.est_cost_usd_low) : '?';
-      const hi = hint ? _trFmtUsd(hint.est_cost_usd_high) : '?';
-      const okGo = await dgaConfirm({
-        title: 'Latest calls · Grok (paid)',
-        message: 'Index up to ' + maxNames + ' missing names × ' + q + ' quarter(s) via Grok live-search.\n\n'
-          + 'Coverage now: ' + indexed + ' / ' + uni + ' saved-report tickers'
-          + (missing ? ' · ' + missing + ' still missing' : ' · fully covered') + '\n'
-          + 'Est. cost this run: ~$' + lo + '–$' + hi + '\n'
-          + 'Already-indexed quarters are free (skipped).\n'
-          + 'Prefer 📚 Backfill history (free) for multi-year depth first.',
-        confirmLabel: 'Run paid sync',
-        danger: false,
-      });
-      if (!okGo) return;
+      const staleN = (cov && cov.needs_topup_count) || 0;
+      const fs = (cov && cov.freshness_summary) || {};
+      if (allowGrok) {
+        const hint = (cov && cov.cost_hint) || {};
+        const lo = hint.est_cost_usd_low != null ? _trFmtUsd(hint.est_cost_usd_low) : '?';
+        const hi = hint.est_cost_usd_high != null ? _trFmtUsd(hint.est_cost_usd_high) : '?';
+        const okGo = await dgaConfirm({
+          title: 'Latest calls · free cascade → Grok',
+          message: 'Fill up to ' + maxNames + ' names × ' + q + ' quarter(s).\n\n'
+            + 'Order: Motley Fool (free) → FMP/AV (if keys) → Grok only on miss.\n'
+            + 'Coverage: ' + indexed + '/' + uni
+            + (missing ? ' · ' + missing + ' never indexed' : '')
+            + (staleN ? ' · ' + staleN + ' aging/stale' : '') + '\n'
+            + 'Freshness: fresh ' + (fs.fresh||0) + ' · recent ' + (fs.recent||0)
+            + ' · aging ' + (fs.aging||0) + ' · stale ' + (fs.stale||0) + '\n'
+            + 'Worst-case Grok if free fails: ~$' + lo + '–$' + hi + '\n'
+            + 'Already-indexed quarters are skipped.',
+          confirmLabel: 'Run cascade',
+          danger: false,
+        });
+        if (!okGo) return;
+      } else {
+        const okGo = await dgaConfirm({
+          title: 'Fill gap · free only ($0 Grok)',
+          message: 'Pull mid-2025 → now via Motley Fool public transcripts'
+            + ' (and FMP/Alpha Vantage if API keys are set on the server).\n\n'
+            + 'Up to ' + maxNames + ' names × ' + q + ' quarters.\n'
+            + 'Coverage: ' + indexed + '/' + uni
+            + (missing ? ' · ' + missing + ' never indexed' : '')
+            + (staleN ? ' · ' + staleN + ' need top-up' : '') + '\n'
+            + 'Cost: $0 Grok. Very fresh prints may lag 1–2 days on Fool.',
+          confirmLabel: 'Run free gap-fill',
+          danger: false,
+        });
+        if (!okGo) return;
+      }
     } catch (_) {
-      if (!confirm('Run paid Grok Latest-calls sync for up to ' + maxNames + ' names?')) return;
+      if (!confirm(allowGrok
+        ? 'Run free→Grok cascade for up to ' + maxNames + ' names?'
+        : 'Run free-only gap fill for up to ' + maxNames + ' names?')) return;
     }
     btn.disabled = true; btn.textContent = '⏳ Queuing…';
+    if (otherBtn) otherBtn.disabled = true;
     if (_trSyncPoll) { clearInterval(_trSyncPoll); _trSyncPoll=null; }
-    const box = h => { status.innerHTML = h; };
+    const box = h => { if (status) status.innerHTML = h; };
+    const restoreBtns = () => {
+      btn.disabled = false; btn.textContent = btnLabel;
+      if (otherBtn) {
+        otherBtn.disabled = false;
+        otherBtn.textContent = allowGrok ? _TR_GAP_BTN : _TR_SYNC_BTN;
+      }
+    };
     try {
       const r = await window.dgaFetch('/api/transcripts/calls/sync', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ max_quarters: q, max_names: maxNames, missing_only: true }),
+        body: JSON.stringify({
+          max_quarters: q, max_names: maxNames,
+          missing_only: true, prefer_stale: true,
+          allow_grok: allowGrok,
+        }),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
       const jobId = j.job_id;
       const est = j.cost_est || {};
-      const estLine = (est.est_cost_usd_low != null)
-        ? ' · est ~$' + _trFmtUsd(est.est_cost_usd_low) + '–$' + _trFmtUsd(est.est_cost_usd_high)
-        : '';
+      const cascade = (j.cascade || []).join(' → ') || (allowGrok ? 'free→Grok' : 'free');
+      const estLine = allowGrok && est.est_cost_usd_high
+        ? ' · worst-case Grok ~$' + _trFmtUsd(est.est_cost_usd_low) + '–$' + _trFmtUsd(est.est_cost_usd_high)
+        : ' · $0 Grok';
       const deferN = j.deferred_count || 0;
-      box('<div style="font-size:12px;color:var(--text-secondary);">📞 Indexing '+(j.tickers||[]).length
-        +' names (missing-first' + (deferN ? '; ' + deferN + ' deferred' : '') + ')' + estLine
-        + ' · spent <strong id="tr-cost-live">$0.00</strong></div>');
+      box('<div style="font-size:12px;color:var(--text-secondary);">📞 ' + _trEsc(cascade)
+        + ' · ' + (j.tickers||[]).length + ' names'
+        + (deferN ? ' · ' + deferN + ' deferred' : '')
+        + estLine
+        + ' · <strong id="tr-cost-live">' + (allowGrok ? '$0.00' : 'free') + '</strong></div>');
       const t0 = Date.now();
       _trSyncPoll = setInterval(async () => {
         if (Date.now() - t0 > 1500000) {
           clearInterval(_trSyncPoll); _trSyncPoll=null;
           box('<div style="font-size:12px;color:var(--text-secondary);">Still indexing in the background — check coverage in a few minutes.</div>');
-          btn.disabled=false; btn.textContent=_TR_SYNC_BTN; return;
+          restoreBtns(); return;
         }
         try {
           const s = await (await window.dgaFetch('/api/transcripts/calls/sync/' + encodeURIComponent(jobId))).json();
           const spent = (s.cost_usd != null) ? Number(s.cost_usd) : null;
+          const freeHits = s.free_hits != null ? s.free_hits : ((s.result && s.result.free_hits) || 0);
           const live = document.getElementById('tr-cost-live');
-          if (live && spent != null) live.textContent = '$' + _trFmtUsd(spent);
+          if (live) {
+            live.textContent = allowGrok
+              ? ('$' + _trFmtUsd(spent || 0) + (freeHits ? ' · ' + freeHits + ' free' : ''))
+              : ('free · hits ' + freeHits);
+          }
           if (s.status === 'done') {
             clearInterval(_trSyncPoll); _trSyncPoll=null;
             const n = (s.result && s.result.chunks_indexed) || 0;
             const errs = (s.result && s.result.errors) || [];
+            const srcs = ((s.result && s.result.sources) || []).join(', ');
             const costDone = (s.result && s.result.cost_usd_est != null)
-              ? s.result.cost_usd_est
-              : (s.cost_usd != null ? s.cost_usd : null);
-            const costHtml = costDone != null
-              ? ' · spent ~$' + _trFmtUsd(costDone)
-                + ((s.result && s.result.grok_calls) ? ' (' + s.result.grok_calls + ' searches)' : '')
-              : '';
+              ? s.result.cost_usd_est : (s.cost_usd != null ? s.cost_usd : 0);
+            const meta = ' · free hits ' + ((s.result && s.result.free_hits) || freeHits || 0)
+              + (costDone ? ' · ~$' + _trFmtUsd(costDone) + ' Grok' : ' · $0 Grok')
+              + (srcs ? ' · via ' + _trEsc(srcs) : '');
             if (n > 0) {
               box('<div style="background:var(--success-50);border:1px solid #bbf7d0;border-radius:8px;padding:9px 12px;font-size:12px;color:var(--success-700);">✓ '
-                +_trEsc(s.label||'Done')+costHtml+'</div>');
-              window.toast('✓ Earnings calls indexed' + (costDone!=null?' · ~$'+_trFmtUsd(costDone):'') + '.', {type:'success'});
+                +_trEsc(s.label||'Done')+meta+'</div>');
+              window.toast('✓ Calls indexed' + meta, {type:'success'});
             } else {
               const errHtml = errs.length ? '<div style="margin-top:6px;font-family:\'SF Mono\',monospace;font-size:10.5px;color:#92400e;max-height:120px;overflow:auto;">'+errs.map(e=>_trEsc(e)).join('<br>')+'</div>' : '';
               box('<div style="background:var(--warn-50);border:1px solid #fde68a;border-radius:8px;padding:10px 12px;font-size:12px;color:var(--warn-700);"><strong>'
-                +_trEsc(s.label||'Indexed 0')+'</strong>'+costHtml+errHtml
-                +'<div style="margin-top:8px;"><button id="tr-probe-btn" style="font-size:11px;background:#fff;border:1px solid #fde68a;color:#92400e;padding:3px 9px;border-radius:5px;cursor:pointer;">Run diagnostic probe</button></div></div>');
-              const pb = document.getElementById('tr-probe-btn');
-              if (pb) pb.addEventListener('click', _probeApiNinjas);
+                +_trEsc(s.label||'Indexed 0')+'</strong>'+meta+errHtml+'</div>');
             }
-            btn.disabled=false; btn.textContent=_TR_SYNC_BTN;
+            restoreBtns();
             _loadCallCoverage();
           } else if (s.status === 'error') {
             clearInterval(_trSyncPoll); _trSyncPoll=null;
             box('<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:9px 12px;font-size:12px;color:#b91c1c;">❌ '
-              +_trEsc(s.error||s.label||'failed')
-              +(spent!=null?' · spent ~$'+_trFmtUsd(spent):'')+'</div>');
-            btn.disabled=false; btn.textContent=_TR_SYNC_BTN;
+              +_trEsc(s.error||s.label||'failed')+'</div>');
+            restoreBtns();
           } else {
-            const pct = (s.total && s.done != null) ? (' ' + s.done + '/' + s.total) : '';
             box('<div style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
               +'<span style="width:9px;height:9px;border-radius:50%;background:#0ea5e9;animation:spin 1.4s linear infinite;display:inline-block;"></span>'
-              +'<span>'+_trEsc(s.label||'Working…')+pct+'</span>'
-              +(spent!=null?'<span style="font-family:\'SF Mono\',monospace;font-size:11px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;padding:1px 7px;border-radius:9px;">~$'+_trFmtUsd(spent)+' spent</span>':'')
-              +'</div>');
+              +'<span>'+_trEsc(s.label||'Working…')+'</span></div>');
           }
         } catch(_) {}
       }, 2500);
     } catch (e) {
       box('<div style="font-size:12px;color:#b91c1c;">❌ '+_trEsc(e.message)+'</div>');
-      btn.disabled=false; btn.textContent=_TR_SYNC_BTN;
+      restoreBtns();
     }
   }
 

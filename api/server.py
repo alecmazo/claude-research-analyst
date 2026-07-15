@@ -23315,9 +23315,533 @@ def _fetch_api_ninjas_transcript(ticker: str, year: int, quarter: int) -> dict:
     return {"ok": True, "status": 200, "transcript": txt, "date": (j or {}).get("date")}
 
 
-# Default earnings-transcript source. API Ninjas' endpoint is premium-only, so
-# we default to Grok live-search (reuses the existing xAI key, no new signup).
-_CALL_SOURCE = (os.environ.get("CALL_TRANSCRIPT_SOURCE", "").strip().lower() or "grok")
+# Default earnings-transcript source:
+#   cascade  — free sources first (Motley Fool, optional FMP/AV), Grok last
+#   free     — free sources only (no Grok $)
+#   grok     — paid live-search only
+#   api_ninjas — premium API Ninjas
+_CALL_SOURCE = (os.environ.get("CALL_TRANSCRIPT_SOURCE", "").strip().lower() or "cascade")
+
+
+def _http_get_text(url: str, timeout: int = 28, headers: dict | None = None) -> tuple[int, str]:
+    """Simple GET → (status, text). status -1 on network error."""
+    import requests
+    h = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+    }
+    if headers:
+        h.update(headers)
+    try:
+        r = requests.get(url, headers=h, timeout=timeout)
+        return r.status_code, r.text or ""
+    except Exception as e:
+        return -1, str(e)[:200]
+
+
+def _html_to_paragraphs(html: str) -> list[str]:
+    ps = re.findall(r"<p[^>]*>(.*?)</p>", html or "", flags=re.I | re.S)
+    out = []
+    for p in ps:
+        t = re.sub(r"<[^>]+>", "", p)
+        t = (t.replace("&#x27;", "'").replace("&#39;", "'")
+               .replace("&amp;", "&").replace("&nbsp;", " ")
+               .replace("&quot;", '"').replace("&#34;", '"'))
+        t = re.sub(r"\s+", " ", t).strip()
+        if t:
+            out.append(t)
+    return out
+
+
+def _slugify_company(name: str) -> str:
+    s = (name or "").lower()
+    s = re.sub(r"&", " and ", s)
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    s = re.sub(r"-(inc|incorporated|corp|corporation|company|co|ltd|plc|the)$",
+               "", s)
+    s = re.sub(r"-+", "-", s).strip("-")
+    return s
+
+
+def _fool_slug_candidates(ticker: str, year: int, quarter: int,
+                          company_name: str | None = None) -> list[str]:
+    """Likely Motley Fool URL slugs for a ticker/quarter."""
+    tk = (ticker or "").lower().strip()
+    tail = f"{tk}-q{int(quarter)}-{int(year)}-earnings-call-transcript"
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(slug: str) -> None:
+        slug = (slug or "").strip("-")
+        if slug and slug not in seen:
+            seen.add(slug)
+            out.append(slug)
+
+    if company_name:
+        base = _slugify_company(company_name)
+        if base:
+            _add(f"{base}-{tail}")
+            # shorter first token (e.g. wells-fargo from wells-fargo-and-company)
+            parts = base.split("-")
+            if len(parts) >= 2:
+                _add(f"{'-'.join(parts[:2])}-{tail}")
+            if len(parts) >= 1:
+                _add(f"{parts[0]}-{tail}")
+    _add(tail)  # wfc-q1-2026-earnings-call-transcript
+    # Common bank/tech patterns without needing name lookup
+    _KNOWN = {
+        "WFC": ["wells-fargo"], "JPM": ["jpmorgan", "jp-morgan"],
+        "BAC": ["bank-of-america"], "C": ["citigroup", "citi"],
+        "GS": ["goldman-sachs"], "MS": ["morgan-stanley"],
+        "AAPL": ["apple"], "MSFT": ["microsoft"], "GOOGL": ["alphabet"],
+        "GOOG": ["alphabet"], "AMZN": ["amazon"], "META": ["meta"],
+        "NVDA": ["nvidia"], "TSLA": ["tesla"], "NKE": ["nike"],
+        "UBER": ["uber"], "PLTR": ["palantir"], "V": ["visa"],
+        "MA": ["mastercard"], "XOM": ["exxon-mobil", "exxonmobil"],
+        "CVX": ["chevron"], "UNH": ["unitedhealth"], "JNJ": ["johnson-johnson"],
+        "BRK-B": ["berkshire-hathaway"], "BRKB": ["berkshire-hathaway"],
+        "TSM": ["taiwan-semiconductor", "tsmc"], "AVGO": ["broadcom"],
+        "AMD": ["amd", "advanced-micro-devices"], "INTC": ["intel"],
+        "QCOM": ["qualcomm"], "CRM": ["salesforce"], "ORCL": ["oracle"],
+        "NFLX": ["netflix"], "DIS": ["disney", "walt-disney"],
+        "BA": ["boeing"], "CAT": ["caterpillar"], "GE": ["ge", "general-electric"],
+        "WMT": ["walmart"], "COST": ["costco"], "HD": ["home-depot"],
+        "PG": ["procter-gamble"], "KO": ["coca-cola"], "PEP": ["pepsico"],
+        "MRK": ["merck"], "PFE": ["pfizer"], "ABBV": ["abbvie"],
+        "LLY": ["eli-lilly"], "VST": ["vistra"], "VRT": ["vertiv"],
+        "VMC": ["vulcan-materials"], "NET": ["cloudflare"],
+        "MRVL": ["marvell"], "CIEN": ["ciena"], "FLEX": ["flex"],
+        "FLR": ["fluor"], "QSR": ["restaurant-brands"], "CART": ["maplebear", "instacart"],
+        "CAKE": ["cheesecake-factory"], "BN": ["brookfield"],
+        "HHH": ["howard-hughes"], "TLN": ["talen-energy"],
+        "VALE": ["vale"], "POWL": ["powell-industries"],
+        "OKLO": ["oklo"], "SMR": ["nuscale-power"], "RKLB": ["rocket-lab"],
+        "LUNR": ["intuitive-machines"], "IBRX": ["immunitybio"],
+    }
+    for prefix in _KNOWN.get((ticker or "").upper(), []):
+        _add(f"{prefix}-{tail}")
+    return out
+
+
+def _estimate_call_date_window(ticker: str, year: int, quarter: int) -> list:
+    """Likely calendar dates the earnings call occurred (for Fool URL paths)."""
+    from datetime import date, timedelta
+    dates: list = []
+    seen: set = set()
+
+    def _add(d) -> None:
+        if d and d not in seen:
+            seen.add(d)
+            dates.append(d)
+
+    # Typical large-cap print windows by fiscal quarter:
+    # Q1→mid Apr, Q2→mid Jul, Q3→mid Oct, Q4→late Jan next year
+    q = int(quarter)
+    if q == 1:
+        center = date(int(year), 4, 15)
+        months_ok = {4, 5}
+    elif q == 2:
+        center = date(int(year), 7, 15)
+        months_ok = {7, 8}
+    elif q == 3:
+        center = date(int(year), 10, 15)
+        months_ok = {10, 11}
+    else:
+        center = date(int(year) + 1, 1, 25)
+        months_ok = {1, 2}
+
+    # 1) Free earnings history (Nasdaq / yfinance) — real print dates first
+    try:
+        from market_data import nasdaq_earnings_surprise, yfinance_earnings_surprise
+        for src in (nasdaq_earnings_surprise, yfinance_earnings_surprise):
+            try:
+                hist = (src(ticker).get("history") or [])[:16]
+            except Exception:
+                hist = []
+            for row in hist:
+                ds = str(row.get("date_reported") or row.get("date") or "")[:10]
+                if len(ds) < 10:
+                    continue
+                try:
+                    d = date.fromisoformat(ds)
+                except Exception:
+                    continue
+                if d.month in months_ok and abs((d - center).days) <= 45:
+                    _add(d)
+    except Exception:
+        pass
+
+    # 2) Dense window around the typical center (search engines often blocked)
+    for delta in range(-10, 14):
+        _add(center + timedelta(days=delta))
+
+    return dates[:36]
+
+
+def _discover_fool_transcript_urls(ticker: str, year: int, quarter: int) -> list[str]:
+    """Find Motley Fool transcript URLs without paid APIs.
+
+    Strategy:
+      1) DuckDuckGo HTML search (when not blocked)
+      2) Construct URLs from company slug + earnings-date window and probe
+    """
+    from urllib.parse import quote, unquote
+    tk = (ticker or "").upper().strip()
+    qn = int(quarter)
+    yr = int(year)
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def _push(u: str) -> None:
+        u = (u or "").split("&")[0].rstrip(")/'\"")
+        if u and u not in seen and "fool.com/earnings/call-transcripts/" in u:
+            seen.add(u)
+            found.append(u)
+
+    # ── 1) Search engines (best when available) ──
+    queries = [
+        f"site:fool.com/earnings/call-transcripts {tk} Q{qn} {yr} earnings call transcript",
+        f"site:fool.com {tk} Q{qn} {yr} earnings call transcript",
+    ]
+    search_urls = [
+        "https://html.duckduckgo.com/html/?q=",
+        "https://duckduckgo.com/html/?q=",
+    ]
+    for q in queries:
+        for base in search_urls:
+            status, body = _http_get_text(base + quote(q), timeout=15)
+            if status != 200 or not body:
+                continue
+            for raw in re.findall(r"uddg=([^&\"']+)", body):
+                try:
+                    _push(unquote(raw))
+                except Exception:
+                    pass
+            for href in re.findall(
+                    r"https?://(?:www\.)?fool\.com/earnings/call-transcripts/"
+                    r"\d{4}/\d{2}/\d{2}/[a-z0-9\-]+/?",
+                    body, flags=re.I):
+                if tk.lower() in href.lower() or str(yr) in href:
+                    _push(href)
+            for rel in re.findall(
+                    r"/earnings/call-transcripts/\d{4}/\d{2}/\d{2}/[a-z0-9\-]+/?",
+                    body, flags=re.I):
+                if tk.lower() in rel.lower() or str(yr) in rel:
+                    _push("https://www.fool.com" + rel)
+            if found:
+                return found[:6]
+
+    # ── 2) Direct URL construction + probe (works when search is blocked) ──
+    company_name = None
+    try:
+        import yfinance as yf
+        info = yf.Ticker(tk).info or {}
+        company_name = info.get("shortName") or info.get("longName")
+    except Exception:
+        company_name = None
+    slugs = _fool_slug_candidates(tk, yr, qn, company_name)
+    date_window = _estimate_call_date_window(tk, yr, qn)
+    # Probe constructed URLs — stop at first live hit per slug family
+    import requests as _req
+    sess = _req.Session()
+    sess.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        ),
+    })
+    probes = 0
+    max_probes = 48
+    for d in date_window:
+        if found or probes >= max_probes:
+            break
+        for slug in slugs[:4]:
+            if probes >= max_probes:
+                break
+            url = (f"https://www.fool.com/earnings/call-transcripts/"
+                   f"{d.year}/{d.month:02d}/{d.day:02d}/{slug}/")
+            probes += 1
+            try:
+                r = sess.get(url, timeout=8, allow_redirects=True)
+                if r.status_code == 200 and len(r.text or "") > 5000:
+                    # Confirm it's a transcript page, not a soft-404 shell
+                    if "earnings call transcript" in (r.text or "")[:8000].lower() \
+                            or re.search(r"Operator:", r.text or ""):
+                        _push(url)
+                        break  # next date not needed for this slug set
+            except Exception:
+                continue
+    if found:
+        print(f"📞 [fool] {tk} {yr}Q{qn}: discovered via probe ({probes} tries)",
+              flush=True)
+    return found[:6]
+
+
+def _parse_fool_transcript_page(html: str, ticker: str, year: int, quarter: int) -> dict:
+    """Extract speaker-attributed transcript body from a Motley Fool page."""
+    if not html or len(html) < 2000:
+        return {"ok": False, "status": 200, "error": "fool page too short"}
+    paras = _html_to_paragraphs(html)
+    if not paras:
+        return {"ok": False, "status": 200, "error": "no paragraphs on fool page"}
+    speaker_re = re.compile(
+        r"^(Operator|[A-Z][A-Za-z'\-\.]+(?:\s+[A-Z][A-Za-z'\-\.]+){0,4}):\s+\S")
+    starts = [i for i, t in enumerate(paras) if speaker_re.match(t)]
+    if not starts:
+        return {"ok": False, "status": 200, "error": "no speaker lines on fool page"}
+    start = starts[0]
+    end = len(paras)
+    for i in range(start, len(paras)):
+        low = paras[i].lower()
+        if ("the motley fool has a disclosure" in low
+                or "people were interested in these" in low
+                or low.startswith("related articles")
+                or "obligatory capitalized disclaimers" in low):
+            end = i
+            break
+    body = "\n".join(paras[start:end]).strip()
+    if len(body) < 800:
+        return {"ok": False, "status": 200,
+                "error": f"fool transcript too short ({len(body)} chars)"}
+    # Date from schema / URL-ish meta
+    date = None
+    m = re.search(r'"datePublished"\s*:\s*"([0-9]{4}-[0-9]{2}-[0-9]{2})', html)
+    if m:
+        date = m.group(1)
+    if not date:
+        m = re.search(
+            r"fool\.com/earnings/call-transcripts/([0-9]{4})/([0-9]{2})/([0-9]{2})/",
+            html)
+        if m:
+            date = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    qtag = f"{int(year)}Q{int(quarter)}"
+    # Prefer quarter from headline if present
+    m = re.search(r"\b(20[0-9]{2})\s*Q\s*([1-4])\b", html[:4000], re.I)
+    if m:
+        qtag = f"{m.group(1)}Q{m.group(2)}"
+    return {
+        "ok": True, "status": 200, "transcript": body, "date": date,
+        "quarter": qtag, "source": "motley_fool",
+    }
+
+
+def _fetch_motley_fool_transcript(ticker: str, year: int, quarter: int) -> dict:
+    """Free public Motley Fool earnings-call transcripts (HTML scrape).
+
+    Fills the HF-dataset gap (~2025 → now) at $0. Pages usually appear same
+    day or within 1–2 days of the call; very fresh prints may lag.
+    """
+    tk = (ticker or "").upper().strip()
+    urls = _discover_fool_transcript_urls(tk, year, quarter)
+    if not urls:
+        return {"ok": False, "status": 404,
+                "error": "no Motley Fool URL found via search",
+                "source": "motley_fool"}
+    errors = []
+    for url in urls:
+        status, html = _http_get_text(url, timeout=30)
+        if status != 200:
+            errors.append(f"{url[-60:]}:{status}")
+            continue
+        # URL should look like this ticker when possible
+        if tk.lower() not in url.lower() and f"-{tk.lower()}-" not in url.lower():
+            # still try — search may return close matches
+            pass
+        res = _parse_fool_transcript_page(html, tk, year, quarter)
+        if res.get("ok"):
+            res["url"] = url
+            return res
+        errors.append(res.get("error") or "parse fail")
+    return {"ok": False, "status": 200,
+            "error": "fool fetch failed: " + "; ".join(errors)[:220],
+            "source": "motley_fool"}
+
+
+def _fetch_fmp_transcript(ticker: str, year: int, quarter: int) -> dict:
+    """Financial Modeling Prep earnings transcript (needs FMP_API_KEY). Free
+    tier is limited but covers many large-caps through recent quarters."""
+    key = (os.environ.get("FMP_API_KEY")
+           or os.environ.get("FINANCIAL_MODELING_PREP_KEY")
+           or os.environ.get("FMP_KEY")
+           or "").strip()
+    if not key:
+        return {"ok": False, "status": 0, "error": "FMP_API_KEY not set",
+                "source": "fmp"}
+    tk = (ticker or "").upper().strip()
+    urls = [
+        (f"https://financialmodelingprep.com/stable/earning-call-transcript"
+         f"?symbol={tk}&year={int(year)}&quarter={int(quarter)}&apikey={key}"),
+        (f"https://financialmodelingprep.com/api/v3/earning_call_transcript/{tk}"
+         f"?year={int(year)}&quarter={int(quarter)}&apikey={key}"),
+        (f"https://financialmodelingprep.com/api/v4/earning_call_transcript"
+         f"?symbol={tk}&year={int(year)}&quarter={int(quarter)}&apikey={key}"),
+    ]
+    import requests
+    last_err = "no response"
+    for url in urls:
+        try:
+            r = requests.get(url, timeout=25)
+        except Exception as e:
+            last_err = str(e)[:120]
+            continue
+        if r.status_code != 200:
+            last_err = f"HTTP {r.status_code}: {(r.text or '')[:120]}"
+            continue
+        try:
+            j = r.json()
+        except Exception:
+            last_err = "non-JSON"
+            continue
+        row = j[0] if isinstance(j, list) and j else (j if isinstance(j, dict) else {})
+        if isinstance(row, dict) and row.get("Error Message"):
+            last_err = str(row.get("Error Message"))[:160]
+            continue
+        # FMP shapes: content / transcript  or list of {speaker, content}
+        txt = ""
+        if isinstance(row, dict):
+            txt = (row.get("content") or row.get("transcript") or "").strip()
+            if not txt and isinstance(row.get("content"), list):
+                parts = []
+                for seg in row["content"]:
+                    if isinstance(seg, dict):
+                        sp = seg.get("speaker") or ""
+                        ct = seg.get("content") or seg.get("text") or ""
+                        parts.append(f"{sp}: {ct}".strip() if sp else ct)
+                    else:
+                        parts.append(str(seg))
+                txt = "\n".join(p for p in parts if p).strip()
+        if not txt or len(txt) < 400:
+            last_err = f"empty/short ({len(txt)} chars)"
+            continue
+        date = None
+        if isinstance(row, dict):
+            date = (row.get("date") or row.get("publishedDate") or None)
+            if date:
+                date = str(date)[:10]
+        return {
+            "ok": True, "status": 200, "transcript": txt, "date": date,
+            "quarter": f"{int(year)}Q{int(quarter)}", "source": "fmp",
+        }
+    return {"ok": False, "status": 200, "error": f"fmp: {last_err}",
+            "source": "fmp"}
+
+
+def _fetch_alphavantage_transcript(ticker: str, year: int, quarter: int) -> dict:
+    """Alpha Vantage EARNINGS_CALL_TRANSCRIPT (needs ALPHA_VANTAGE_API_KEY).
+    Free tier is rate-limited (~25 req/day) — useful as a secondary free path."""
+    key = (os.environ.get("ALPHA_VANTAGE_API_KEY")
+           or os.environ.get("ALPHAVANTAGE_API_KEY")
+           or os.environ.get("AV_API_KEY")
+           or "").strip()
+    if not key:
+        return {"ok": False, "status": 0, "error": "ALPHA_VANTAGE_API_KEY not set",
+                "source": "alpha_vantage"}
+    # AV uses quarter like 2024Q1
+    qparam = f"{int(year)}Q{int(quarter)}"
+    url = ("https://www.alphavantage.co/query"
+           f"?function=EARNINGS_CALL_TRANSCRIPT&symbol={(ticker or '').upper().strip()}"
+           f"&quarter={qparam}&apikey={key}")
+    import requests
+    try:
+        r = requests.get(url, timeout=30)
+    except Exception as e:
+        return {"ok": False, "status": -1, "error": str(e)[:160],
+                "source": "alpha_vantage"}
+    if r.status_code != 200:
+        return {"ok": False, "status": r.status_code,
+                "error": (r.text or "")[:200], "source": "alpha_vantage"}
+    try:
+        j = r.json()
+    except Exception:
+        return {"ok": False, "status": 200, "error": "non-JSON",
+                "source": "alpha_vantage"}
+    if j.get("Information") or j.get("Note") or j.get("Error Message"):
+        return {"ok": False, "status": 200,
+                "error": str(j.get("Information") or j.get("Note")
+                             or j.get("Error Message"))[:200],
+                "source": "alpha_vantage"}
+    # transcript may be string or list of {speaker, title, content}
+    tr = j.get("transcript") or j.get("content") or ""
+    if isinstance(tr, list):
+        parts = []
+        for seg in tr:
+            if isinstance(seg, dict):
+                sp = seg.get("speaker") or seg.get("title") or ""
+                ct = seg.get("content") or seg.get("text") or ""
+                parts.append(f"{sp}: {ct}".strip() if sp else ct)
+            else:
+                parts.append(str(seg))
+        tr = "\n".join(p for p in parts if p)
+    tr = (tr or "").strip()
+    if len(tr) < 400:
+        return {"ok": False, "status": 200,
+                "error": f"av transcript too short ({len(tr)})",
+                "source": "alpha_vantage"}
+    return {
+        "ok": True, "status": 200, "transcript": tr,
+        "date": str(j.get("date") or "")[:10] or None,
+        "quarter": qparam, "source": "alpha_vantage",
+    }
+
+
+def _fetch_call_transcript_cascade(ticker: str, year: int, quarter: int,
+                                   allow_grok: bool = True) -> dict:
+    """Waterfall for one quarter: free sources first, optional paid Grok last.
+
+    Order:
+      1. Motley Fool public HTML (no key, $0)
+      2. Financial Modeling Prep if FMP_API_KEY set ($0 on free tier)
+      3. Alpha Vantage if ALPHA_VANTAGE_API_KEY set ($0, rate-limited)
+      4. API Ninjas if key set (usually premium)
+      5. Grok live-search if allow_grok (paid ~$0.03–0.08/search)
+    """
+    attempts = []
+    free_fns = [
+        ("motley_fool", _fetch_motley_fool_transcript),
+        ("fmp", _fetch_fmp_transcript),
+        ("alpha_vantage", _fetch_alphavantage_transcript),
+        ("api_ninjas", _fetch_api_ninjas_transcript),
+    ]
+    for name, fn in free_fns:
+        try:
+            res = fn(ticker, year, quarter)
+        except Exception as e:
+            res = {"ok": False, "status": -1, "error": str(e)[:160], "source": name}
+        if res.get("ok") and (res.get("transcript") or ""):
+            res.setdefault("source", name)
+            res["attempts"] = attempts
+            return res
+        attempts.append({
+            "source": name,
+            "error": (res or {}).get("error") or "miss",
+            "status": (res or {}).get("status"),
+        })
+    if allow_grok:
+        try:
+            res = _fetch_grok_call_transcript_for_quarter(ticker, year, quarter)
+        except Exception as e:
+            res = {"ok": False, "status": -1, "error": f"grok: {e!s:.140}"}
+        if res.get("ok"):
+            res["source"] = "grok"
+            res["attempts"] = attempts
+            return res
+        attempts.append({
+            "source": "grok",
+            "error": res.get("error") or "miss",
+            "status": res.get("status"),
+        })
+        res["attempts"] = attempts
+        res.setdefault("source", "grok")
+        return res
+    return {
+        "ok": False, "status": 404,
+        "error": "no free source had this quarter",
+        "source": "cascade_free",
+        "attempts": attempts,
+    }
 
 _GROK_CALL_SYSTEM = (
     "You are an earnings-call transcript retrieval tool. Using live web search, "
@@ -23526,19 +24050,30 @@ def _estimate_call_sync_cost(n_names: int, max_quarters: int, n_already: int = 0
     }
 
 
-def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4) -> dict:
+def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4,
+                           allow_grok: bool = True) -> dict:
     """Index recent earnings calls for one ticker. Returns
-    {indexed, found:[quarters], errors:[str], grok_calls:int}. Source defaults
-    to Grok live-search (API Ninjas transcripts are premium-gated)."""
-    if _CALL_SOURCE == "grok":
-        # Walk recent calendar quarters newest-first, fetching each MISSING one
-        # via Grok live-search. This fills the gap between the Hugging Face
-        # backfill cutoff (~Q1 2025) and the latest reported quarter — the old
-        # behaviour grabbed only the single most-recent call, so 3-4 quarters
-        # stayed perpetually missing. Already-indexed quarters are skipped for
-        # free (no Grok call), so re-running sync just extends forward cheaply.
+    {indexed, found, errors, grok_calls, free_hits, sources}.
+
+    Default path is cascade: Motley Fool / FMP / Alpha Vantage free first,
+    then optional Grok. Fills HF-backfill gap (mid-2025 → now) without
+    burning $ on every quarter.
+    """
+    src_mode = _CALL_SOURCE
+    use_cascade = src_mode in ("", "cascade", "free", "grok", "auto")
+    if use_cascade and src_mode != "api_ninjas":
+        # When CALL_TRANSCRIPT_SOURCE=free, never call Grok.
+        if src_mode == "free":
+            allow_grok = False
+        if src_mode == "grok":
+            # Paid-only path still allowed, but cascade free-first is better
+            # default — only force pure Grok if explicitly requested via flag.
+            pass
         indexed, found, errors = 0, [], []
-        seen, new_count, consec_miss, grok_calls = set(), 0, 0, 0
+        seen, new_count, consec_miss = set(), 0, 0
+        grok_calls, free_hits = 0, 0
+        sources_used: list[str] = []
+        pure_grok = (src_mode == "grok")
         for (y, q) in _recent_quarters(max_quarters + 4):
             if new_count >= max_quarters:
                 break
@@ -23548,21 +24083,33 @@ def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4) -> dict:
                     found.append(qtag)
                 consec_miss = 0
                 continue
-            grok_calls += 1
-            res = _fetch_grok_call_transcript_for_quarter(ticker, y, q)
+            if pure_grok:
+                grok_calls += 1
+                res = _fetch_grok_call_transcript_for_quarter(ticker, y, q)
+                if res.get("ok"):
+                    res["source"] = "grok"
+            else:
+                res = _fetch_call_transcript_cascade(
+                    ticker, y, q, allow_grok=allow_grok)
+                if (res.get("source") or "") == "grok":
+                    grok_calls += 1
+                elif res.get("ok"):
+                    free_hits += 1
             if not res.get("ok"):
-                # The current (not-yet-reported) quarter is an expected miss;
-                # only give up after a couple of consecutive empty quarters
-                # once we've already landed at least one real transcript.
                 consec_miss += 1
                 st = res.get("status")
-                if st not in (200,):
-                    errors.append(f"{qtag}: [{st}] {str(res.get('error'))[:120]}")
+                err = str(res.get("error") or "miss")[:140]
+                # Don't spam expected future-quarter misses
+                if consec_miss <= 2 or st not in (200, 404):
+                    errors.append(f"{qtag}: [{res.get('source') or '?'}] {err}")
                 if consec_miss >= 3 and found:
                     break
                 continue
             consec_miss = 0
-            act = res.get("quarter") or qtag            # trust Grok's detected quarter
+            act = res.get("quarter") or qtag
+            src = res.get("source") or "unknown"
+            if src not in sources_used:
+                sources_used.append(src)
             if act in seen or _already_indexed(ticker, act):
                 if act not in found:
                     found.append(act)
@@ -23572,9 +24119,13 @@ def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4) -> dict:
             if err:
                 errors.append(f"{act}: {err}")
             else:
-                found.append(act); indexed += n; new_count += 1
+                found.append(act)
+                indexed += n
+                new_count += 1
+                print(f"📞 [calls] {ticker} {act}: +{n} via {src}", flush=True)
         return {"indexed": indexed, "found": found, "errors": errors,
-                "grok_calls": grok_calls}
+                "grok_calls": grok_calls, "free_hits": free_hits,
+                "sources": sources_used}
 
     # ── API Ninjas path (premium) — multi-quarter walk-back ──
     from datetime import datetime as _dt
@@ -23627,34 +24178,52 @@ def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4) -> dict:
     return {"indexed": indexed, "found": found, "errors": errors}
 
 
-def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int) -> None:
+def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int,
+                   allow_grok: bool = True) -> None:
     """Background worker: build/refresh the earnings RAG index for tickers."""
     def _set(**kw):
         _call_sync_jobs[job_id] = {**(_call_sync_jobs.get(job_id) or {}), **kw,
                                     "updated_at": time.time()}
-    cost_est = _estimate_call_sync_cost(len(tickers), max_quarters)
+    cost_est = (_estimate_call_sync_cost(len(tickers), max_quarters)
+                if allow_grok else
+                {"names": len(tickers), "names_needing_work": len(tickers),
+                 "est_grok_calls": 0, "est_cost_usd_low": 0.0,
+                 "est_cost_usd_high": 0.0,
+                 "note": "Free sources only (Motley Fool / FMP / AV). $0 Grok."})
     _set(stage="queued", status="running", label="Queued…", started_at=time.time(),
-         total=len(tickers), done=0, indexed=0, grok_calls=0,
-         cost_usd=0.0, cost_est=cost_est)
+         total=len(tickers), done=0, indexed=0, grok_calls=0, free_hits=0,
+         cost_usd=0.0, cost_est=cost_est, allow_grok=allow_grok)
     try:
         _ensure_transcripts_tables()
         total_indexed = 0
         names_with_calls = 0
         grok_calls = 0
+        free_hits = 0
         cost_usd = 0.0
         all_errors = []
+        sources_all: list[str] = []
         # ~$0.05 mid-point per live-search call for running counter
         per_call = 0.05
+        mode = "free cascade" if not allow_grok else "cascade (free→Grok)"
         for i, tk in enumerate(tickers):
+            spent_bit = (f" · free hits {free_hits}"
+                         + (f" · ~${cost_usd:.2f} Grok" if allow_grok else " · $0 Grok"))
             _set(stage="syncing",
-                 label=f"📞 {tk} ({i+1}/{len(tickers)}) · ~${cost_usd:.2f} spent…",
-                 done=i, grok_calls=grok_calls, cost_usd=round(cost_usd, 2))
+                 label=f"📞 {tk} ({i+1}/{len(tickers)}){spent_bit}…",
+                 done=i, grok_calls=grok_calls, free_hits=free_hits,
+                 cost_usd=round(cost_usd, 2))
             try:
-                r = _sync_one_ticker_calls(tk, max_quarters=max_quarters)
+                r = _sync_one_ticker_calls(tk, max_quarters=max_quarters,
+                                           allow_grok=allow_grok)
                 total_indexed += r.get("indexed", 0)
                 gc = int(r.get("grok_calls") or 0)
+                fh = int(r.get("free_hits") or 0)
                 grok_calls += gc
+                free_hits += fh
                 cost_usd += gc * per_call
+                for s in (r.get("sources") or []):
+                    if s not in sources_all:
+                        sources_all.append(s)
                 if r.get("found"):
                     names_with_calls += 1
                 for e in (r.get("errors") or [])[:2]:
@@ -23662,24 +24231,27 @@ def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int) -> None:
             except Exception as e:
                 all_errors.append(f"{tk}: {e!s:.100}")
                 print(f"⚠️ [call sync {tk}] {e!s:.150}", flush=True)
-            _set(indexed=total_indexed, grok_calls=grok_calls,
+            _set(indexed=total_indexed, grok_calls=grok_calls, free_hits=free_hits,
                  cost_usd=round(cost_usd, 2))
-        # Build an honest label: if nothing indexed, surface the dominant reason.
         if total_indexed > 0:
             label = (f"✓ Indexed {total_indexed} passages across {names_with_calls} names"
-                     f" · ~${cost_usd:.2f} ({grok_calls} Grok searches)")
+                     f" · free hits {free_hits}"
+                     + (f" · ~${cost_usd:.2f} ({grok_calls} Grok)" if grok_calls
+                        else " · $0 Grok")
+                     + (f" · via {', '.join(sources_all)}" if sources_all else ""))
         else:
-            src = "Grok" if _CALL_SOURCE == "grok" else "API Ninjas"
-            reason = all_errors[0] if all_errors else f"no transcripts returned by {src}"
+            reason = all_errors[0] if all_errors else f"no transcripts via {mode}"
             label = f"⚠ Indexed 0 passages — {reason[:160]}"
             if grok_calls:
                 label += f" · ~${cost_usd:.2f} spent"
         _set(stage="done", status="done", done=len(tickers), label=label,
-             grok_calls=grok_calls, cost_usd=round(cost_usd, 2),
+             grok_calls=grok_calls, free_hits=free_hits, cost_usd=round(cost_usd, 2),
              result={"tickers": tickers, "chunks_indexed": total_indexed,
                      "names_with_calls": names_with_calls,
-                     "grok_calls": grok_calls,
+                     "grok_calls": grok_calls, "free_hits": free_hits,
+                     "sources": sources_all,
                      "cost_usd_est": round(cost_usd, 2),
+                     "allow_grok": allow_grok,
                      "errors": all_errors[:12]})
     except Exception as e:
         print(f"❌ [call sync {job_id}] {e!s:.300}", flush=True)
@@ -24354,60 +24926,114 @@ def transcripts_delete(transcript_id: str, request: Request):
 
 @app.post("/api/transcripts/calls/sync")
 def transcripts_calls_sync(req: Request, background_tasks: BackgroundTasks):
-    """Build/refresh the earnings-call RAG index via Grok live-search.
+    """Build/refresh the earnings-call RAG index for the HF→now gap.
 
-    Body: {tickers?, max_quarters?, max_names?, missing_only?}.
-    Default universe = ALL saved-report tickers (not the old hard cap of 40).
-    Prioritizes names with zero coverage first to close the 52-vs-92 gap
-    cheaply. Already-indexed quarters are free (skipped).
+    Body: {tickers?, max_quarters?, max_names?, missing_only?, allow_grok?,
+           prefer_stale?}.
+
+    Default cascade: Motley Fool (free HTML) → FMP/AV if keys set → Grok last.
+    Set allow_grok=false for $0 free-only gap fill. prefer_stale=true also
+    prioritizes indexed-but-stale names (latest call >180d old).
     """
     claims = _claims_or_401(req)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
     if _CALL_SOURCE == "api_ninjas" and not os.environ.get("API_NINJAS_KEY"):
         return JSONResponse({"ok": False, "error": "API_NINJAS_KEY not set on server."}, status_code=400)
-    if _CALL_SOURCE == "grok":
-        try:
-            if not analyst.get_grok_api_key():
-                raise ValueError("no key")
-        except Exception:
-            return JSONResponse({"ok": False, "error": "Grok/xAI key not configured on server."}, status_code=400)
     try:
         body = _request_json_sync(req)
     except Exception:
         body = {}
+    allow_grok = bool((body or {}).get("allow_grok", True))
+    if _CALL_SOURCE == "free":
+        allow_grok = False
+    if allow_grok and _CALL_SOURCE in ("grok", "cascade", "auto", ""):
+        try:
+            if not analyst.get_grok_api_key():
+                # Soft-degrade to free-only rather than hard-fail
+                allow_grok = False
+        except Exception:
+            allow_grok = False
     tickers = [t.upper().strip() for t in ((body or {}).get("tickers") or []) if t and t.strip()]
-    # Default 2 quarters — enough to fill the HF gap without burning budget
-    max_quarters = max(1, min(int((body or {}).get("max_quarters") or 2), 6))
-    # Cap paid Grok names per run (user can re-run for the rest)
+    # Default 4 quarters for free gap-fill; 2 when paid (cost control)
+    default_q = 4 if not allow_grok else 2
+    max_quarters = max(1, min(int((body or {}).get("max_quarters") or default_q), 8))
     max_names = max(5, min(int((body or {}).get("max_names") or 40), 120))
     missing_only = bool((body or {}).get("missing_only", True))
+    prefer_stale = bool((body or {}).get("prefer_stale", True))
     if not tickers:
         tickers = _call_index_universe()
-    # Prioritize: never-indexed first, then rest (stable alpha within groups)
     covered = _call_indexed_tickers()
     missing = [t for t in tickers if t not in covered]
     have = [t for t in tickers if t in covered]
-    ordered = (missing + have) if missing_only else (missing + have)
-    if missing_only:
-        # Only burn Grok on gaps; re-run with missing_only=false to extend all
-        ordered = missing if missing else have[:max_names]
+    # Optionally put aging/stale indexed names ahead of fully-fresh ones
+    stale_first: list[str] = []
+    if prefer_stale and have:
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT ticker, MAX(call_date) AS latest
+                      FROM call_chunks
+                     WHERE ticker = ANY(%s)
+                     GROUP BY ticker
+                """, (have,))
+                rows = cur.fetchall() or []
+            from datetime import date as _date, datetime as _dt
+            today = _date.today()
+            scored = []
+            for row in rows:
+                tk = (row[0] if not isinstance(row, dict) else row.get("ticker") or "")
+                latest = row[1] if not isinstance(row, dict) else row.get("latest")
+                days = 9999
+                if latest is not None:
+                    try:
+                        if hasattr(latest, "date"):
+                            d = latest.date() if hasattr(latest, "hour") else latest
+                        else:
+                            d = _dt.strptime(str(latest)[:10], "%Y-%m-%d").date()
+                        days = (today - d).days
+                    except Exception:
+                        days = 9999
+                scored.append((days, tk))
+            scored.sort(reverse=True)  # oldest latest_call first
+            stale_first = [tk for _, tk in scored if tk]
+        except Exception as e:
+            print(f"[calls] prefer_stale: {e!s:.100}", flush=True)
+            stale_first = have
+    else:
+        stale_first = have
+    if missing_only and missing:
+        ordered = missing + stale_first
+    elif missing_only and not missing:
+        ordered = stale_first  # top-up oldest first
+    else:
+        ordered = missing + stale_first
     selected = ordered[:max_names]
     deferred = ordered[max_names:]
     if not selected:
         return JSONResponse({"ok": False, "error": "No tickers to sync."}, status_code=400)
-    cost_est = _estimate_call_sync_cost(
-        len(selected), max_quarters,
-        n_already=sum(1 for t in selected if t in covered))
+    if allow_grok:
+        # Worst-case if every free source misses; real $ usually far lower.
+        cost_est = _estimate_call_sync_cost(len(selected), max_quarters, n_already=0)
+        cost_est["note"] = ("Cascade tries Motley Fool/FMP/AV free first; Grok only "
+                            "on miss. Est is worst-case if free sources fail.")
+    else:
+        cost_est = {
+            "names": len(selected), "names_needing_work": len(selected),
+            "est_grok_calls": 0, "est_cost_usd_low": 0.0, "est_cost_usd_high": 0.0,
+            "note": "Free-only gap fill: Motley Fool + optional FMP/AV keys. $0 Grok.",
+        }
     import uuid as _uuid
     job_id = "CALLSYNC_" + _uuid.uuid4().hex[:12]
     _call_sync_jobs[job_id] = {"stage": "queued", "status": "running", "label": "Queued…",
                                 "started_at": time.time(), "updated_at": time.time(),
                                 "total": len(selected), "done": 0, "indexed": 0,
-                                "grok_calls": 0, "cost_usd": 0.0, "cost_est": cost_est}
-    background_tasks.add_task(_run_call_sync, job_id, selected, max_quarters)
+                                "grok_calls": 0, "free_hits": 0, "cost_usd": 0.0,
+                                "cost_est": cost_est, "allow_grok": allow_grok}
+    background_tasks.add_task(_run_call_sync, job_id, selected, max_quarters, allow_grok)
     print(f"📞 [call sync] queued {job_id}  {len(selected)} tickers  q={max_quarters}  "
-          f"missing={len(missing)} deferred={len(deferred)}", flush=True)
+          f"missing={len(missing)} deferred={len(deferred)} allow_grok={allow_grok}",
+          flush=True)
     return {
         "ok": True, "job_id": job_id, "tickers": selected,
         "universe_size": len(tickers),
@@ -24415,11 +25041,16 @@ def transcripts_calls_sync(req: Request, background_tasks: BackgroundTasks):
         "deferred": deferred[:40],
         "deferred_count": len(deferred),
         "max_quarters": max_quarters,
+        "allow_grok": allow_grok,
         "cost_est": cost_est,
         "source": _CALL_SOURCE,
-        "note": ("Prioritized never-indexed names. Already-indexed quarters free. "
-                 "Re-run to pick up deferred names." if deferred else
-                 "Already-indexed quarters free."),
+        "cascade": ["motley_fool", "fmp", "alpha_vantage", "api_ninjas"]
+                   + (["grok"] if allow_grok else []),
+        "note": (("Free-only: Motley Fool HTML (+ FMP/AV if keys). $0 Grok. "
+                  if not allow_grok else
+                  "Cascade: free sources first, Grok only on miss. ")
+                 + ("Re-run for deferred names." if deferred else
+                    "Already-indexed quarters skipped.")),
     }
 
 
