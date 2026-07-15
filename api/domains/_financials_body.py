@@ -1831,7 +1831,7 @@ threading.Thread(target=_auto_fin_monthly_worker, daemon=True,
 # ════════════════════════ Persistent market-data store ════════════════════════
 # Quotes + security meta + option chains persisted to Postgres so user-facing
 # reads are instant DB lookups, decoupled from the slow/rate-limited live calls
-# (the cloud-IP yfinance problem). Source is Tradier→yfinance via market_data.py.
+# (the cloud-IP yfinance problem). Source is Yahoo chart → yfinance via market_data.py (free).
 # Every reader falls back to a live call when a row is missing, so this is safe
 # to deploy before the first sync and degrades gracefully per-symbol.
 _market_sync_jobs: dict[str, dict] = {}
@@ -2016,7 +2016,7 @@ def _warm_quotes_for_comps(symbols: list, cap: int = 16) -> dict:
     Cascade (stop on first hit per ticker):
       1. market_quotes store (any age)
       2. batch_quotes (Yahoo download + Tiingo + store)
-      3. market_data.get_quotes (Tradier → yfinance)
+      3. market_data.get_quotes (Yahoo chart → optional Tiingo)
       4. yfinance Ticker.fast_info / .info per symbol
       5. Yahoo chart HTTP API
 
@@ -2053,7 +2053,7 @@ def _warm_quotes_for_comps(symbols: list, cap: int = 16) -> dict:
     except Exception as e:
         print(f"[fin-comps] batch_quotes warm failed: {e!s:.140}", flush=True)
 
-    # 2) market_data (Tradier first, then yfinance fill)
+    # 2) market_data (Yahoo chart + optional Tiingo)
     if miss:
         try:
             import market_data as _md
@@ -2138,7 +2138,7 @@ def _db_meta(symbols) -> dict:
 def _run_market_sync(job_id: str, universe: list) -> None:
     """Background worker: refresh QUOTES + SECTORS (+ analyst targets) into the
     persistent store. Sectors come from the SEC SIC code (EDGAR — un-throttled,
-    works when Yahoo blocks the cloud IP); quotes from Tradier→yfinance. Option
+    works when Yahoo is slow); quotes from Yahoo chart. Option
     chains and realized-vol are NOT synced — the Options wheel scans those live."""
     import market_data as _md
 
@@ -2346,7 +2346,7 @@ def _market_autosync_loop():
             if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
                 continue
             # Idle gate: when nobody's used the app recently, do nothing — no
-            # universe pull, no yfinance/Tradier churn, no memory growth. The
+            # universe pull, no yfinance churn, no memory growth. The
             # bootstrap is deferred to the first activity too, so a deployed-but-
             # unopened instance stays at near-zero. Resumes within ≤60s of use.
             if not _app_active():
@@ -4206,7 +4206,7 @@ def financials_valueline_pdf(ticker: str, request: Request):
     )
 
 
-# ── Interactive price chart (GuruFocus-style) — Tradier history, durable cache ─
+# ── Interactive price chart (GuruFocus-style) — Yahoo history, durable cache ─
 # Daily bars persist in price_history so range clicks are instant DB reads.
 # Intraday (5D) is fetched live with a short in-memory TTL (not worth persisting
 # at minute granularity). All pure market data — ZERO LLM tokens.
@@ -4217,7 +4217,7 @@ _INTRADAY_TTL_S = 120                     # 5D intraday cache lifetime
 
 
 def _sync_price_history(tk: str) -> None:
-    """Fetch the missing daily-bar tail for tk from Tradier and upsert it.
+    """Fetch the missing daily-bar tail for tk from Yahoo/free sources and upsert it.
     Throttled per-symbol; first call backfills ~11 years. Best-effort: any
     failure leaves whatever is already stored intact (still served below)."""
     from datetime import date as _date, timedelta as _td
@@ -4244,7 +4244,7 @@ def _sync_price_history(tk: str) -> None:
                                      start=start, end=today.isoformat())
         if not bars:
             return
-        src = "tradier" if _md.tradier_available() else "yahoo"
+        src = "yahoo"
         with _fund_conn() as conn, conn.cursor() as cur:
             for b in bars:
                 if not b.get("date") or b.get("close") is None:
@@ -4281,7 +4281,7 @@ def _price_stats(pts: list, range_label: str) -> dict:
 @app.get("/api/financials/{ticker}/price-history")
 def financials_price_history(ticker: str, request: Request, range: str = "YTD"):
     """Interactive-chart price series for one ticker. Daily bars from the durable
-    price_history store (Tradier-synced); 5D from live intraday. Pure market
+    price_history store (Yahoo-synced); 5D from live intraday. Pure market
     data — no LLM. Returns {ok, ticker, range, points:[{t,c}], stats{...}}."""
     from datetime import date as _date, timedelta as _td, datetime as _dt
     claims = _claims_or_401(request)
@@ -4299,7 +4299,7 @@ def financials_price_history(ticker: str, request: Request, range: str = "YTD"):
             pts = []
             try:
                 import market_data as _md
-                bars = _md.get_intraday(tk)            # Tradier (if paid) → Yahoo v8 chart
+                bars = _md.get_intraday(tk)            # Yahoo v8 chart (free)
                 pts = [{"t": b["time"], "c": b["close"]}
                        for b in (bars or []) if b.get("close") is not None]
                 _INTRADAY_CACHE[tk] = (time.time(), pts)
@@ -4353,7 +4353,7 @@ def financials_price_history(ticker: str, request: Request, range: str = "YTD"):
 
     if not pts:
         return {"ok": False, "error": f"No price history stored for {tk} yet — "
-                                      f"Tradier may be unavailable or the symbol is unsupported."}
+                                      f"Yahoo/history unavailable or the symbol is unsupported."}
     return {"ok": True, "ticker": tk, "range": rng, "points": pts,
             "stats": _price_stats(pts, rng)}
 

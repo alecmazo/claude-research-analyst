@@ -2477,11 +2477,11 @@
       notesEl.style.display = 'block';
     }
 
-    // Interactive price chart (Tradier/Yahoo history) — defaults to YTD on each load.
+    // Interactive price chart (Yahoo history) — defaults to YTD on each load.
     _finPriceLoad(d.ticker, _finPriceRange);
   }
 
-  // ══ Interactive price chart (GuruFocus-style — SVG, Tradier history) ══
+  // ══ Interactive price chart (GuruFocus-style — SVG, Yahoo history) ══
   const _FIN_PRICE_RANGES = ['5D','1M','3M','YTD','1Y','3Y','5Y','10Y','All'];
   let _finPriceRange = 'YTD';
   let _finPriceTk = null;

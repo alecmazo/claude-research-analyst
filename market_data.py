@@ -1,27 +1,17 @@
 """
-market_data.py — Server-grade market data with a Tradier primary + yfinance
-fallback, returning NORMALIZED rows the rest of the app (and options_engine)
-can consume regardless of source.
+market_data.py — Free market-data layer for DGA Capital (no Tradier).
 
-Why this exists
----------------
-The app runs on a cloud IP that Yahoo rate-limits, so live yfinance scrapes are
-slow / hang (the Builder freeze, slow Options sweeps) and yfinance's bid/ask is
-delayed and thin on illiquid names. Tradier is a REST API built for servers (no
-Yahoo-style IP blocking) and returns real bid/ask + greeks. We prefer Tradier
-when a token is configured and fall back to yfinance otherwise, so nothing
-breaks when the token is absent.
+Primary sources (no paid brokerage account required):
+  • Yahoo Finance v8 chart API — quotes, daily history, intraday (free, no key)
+  • yfinance library — option chains / expirations fallback (free, no key)
+  • Tiingo (optional) — if TIINGO_API_KEY is set in Railway env
 
-Config (env):
-  TRADIER_TOKEN     — bearer token. Sandbox token works (delayed ~15m but
-                      reliable + has greeks); a funded brokerage token is
-                      real-time. If unset, everything falls back to yfinance.
-  TRADIER_BASE_URL  — default https://api.tradier.com (use
-                      https://sandbox.tradier.com for the sandbox token).
+Tradier was removed: free/sandbox accounts are no longer practical. Call sites
+that checked tradier_available() still work — it always returns False.
 
 Normalized shapes
 -----------------
-quote:  {symbol, price, prev_close, pct_change, source}
+quote:  {price, prev_close, pct_change, source}
 option row: {strike, option_type('call'|'put'), bid, ask, last, iv, delta,
              open_interest, volume, source}
 """
@@ -31,38 +21,21 @@ from __future__ import annotations
 import os
 
 
-# ── Tradier transport ────────────────────────────────────────────────────────
+# ── Legacy Tradier stubs (disabled — always unavailable) ─────────────────────
 def _tradier_cfg():
-    token = (os.environ.get("TRADIER_TOKEN", "") or "").strip()
-    base = (os.environ.get("TRADIER_BASE_URL", "https://api.tradier.com") or "").rstrip("/")
-    return token, base
+    return "", ""
 
 
 def tradier_available() -> bool:
-    return bool(_tradier_cfg()[0])
+    """Always False — Tradier is not used. Kept so older call sites stay safe."""
+    return False
 
 
 def _tradier_get(path: str, params: dict):
-    """GET a Tradier endpoint → parsed JSON, or None on any failure / no token."""
-    token, base = _tradier_cfg()
-    if not token:
-        return None
-    try:
-        import requests
-        r = requests.get(base + path, params=params, timeout=15,
-                         headers={"Authorization": f"Bearer {token}",
-                                  "Accept": "application/json"})
-        if r.status_code != 200:
-            print(f"[market_data] tradier {path} -> HTTP {r.status_code}", flush=True)
-            return None
-        return r.json()
-    except Exception as e:
-        print(f"[market_data] tradier {path} failed: {e!s:.120}", flush=True)
-        return None
+    return None
 
 
 def _as_list(x):
-    """Tradier returns a dict for 1 item, a list for many, None for none."""
     if x is None:
         return []
     return x if isinstance(x, list) else [x]
@@ -71,14 +44,12 @@ def _as_list(x):
 def _f(v):
     try:
         v = float(v)
-        return v if v == v else None      # NaN (v != v) → None
+        return v if v == v else None
     except (TypeError, ValueError):
         return None
 
 
 def _i(v):
-    """Safe int: handles NaN/None (e.g. weekend volume/OI). int(NaN or 0) RAISES
-    because NaN is truthy — that one error used to wipe an entire chain."""
     try:
         v = float(v)
         return int(v) if v == v else 0
@@ -86,101 +57,117 @@ def _i(v):
         return 0
 
 
-# ── Tradier: quotes ──────────────────────────────────────────────────────────
 def tradier_quotes(symbols: list) -> dict | None:
-    """{SYM: {price, prev_close, pct_change, source}} or None if unavailable."""
-    if not symbols:
-        return {}
-    data = _tradier_get("/v1/markets/quotes",
-                        {"symbols": ",".join(symbols), "greeks": "false"})
-    if data is None:
-        return None
-    out = {}
-    for it in _as_list((data.get("quotes") or {}).get("quote")):
-        sym = (it.get("symbol") or "").upper()
-        if not sym:
-            continue
-        out[sym] = {"price": _f(it.get("last")),
-                    "prev_close": _f(it.get("prevclose")),
-                    "pct_change": _f(it.get("change_percentage")),
-                    "source": "tradier"}
-    return out
+    """Disabled — use get_quotes()."""
+    return None
 
 
-# ── Tradier: option expirations + chains ─────────────────────────────────────
 def tradier_expirations(symbol: str) -> list | None:
-    data = _tradier_get("/v1/markets/options/expirations",
-                        {"symbol": symbol, "includeAllRoots": "true"})
-    if data is None:
-        return None
-    return [str(d) for d in _as_list((data.get("expirations") or {}).get("date"))]
+    return None
 
 
 def _norm_tradier_option(o: dict) -> dict:
-    g = o.get("greeks") or {}
-    return {
-        "strike": _f(o.get("strike")),
-        "option_type": o.get("option_type"),          # 'call' | 'put'
-        "bid": _f(o.get("bid")) or 0.0,
-        "ask": _f(o.get("ask")) or 0.0,
-        "last": _f(o.get("last")),
-        "iv": _f(g.get("mid_iv")) or _f(g.get("smv_vol")),
-        "delta": _f(g.get("delta")),
-        "open_interest": _i(o.get("open_interest")),
-        "volume": _i(o.get("volume")),
-        "source": "tradier",
-    }
+    return {}
 
 
 def tradier_chain(symbol: str, expiration: str) -> list | None:
-    """Normalized option rows for one expiration (with greeks), or None."""
-    data = _tradier_get("/v1/markets/options/chains",
-                        {"symbol": symbol, "expiration": expiration, "greeks": "true"})
-    if data is None:
+    return None
+
+
+# ── Yahoo chart quotes (free primary) ────────────────────────────────────────
+def _yahoo_chart_quote(symbol: str) -> dict | None:
+    """One symbol via Yahoo v8 chart meta — regularMarketPrice + previousClose."""
+    import requests
+    sym = (symbol or "").strip().upper()
+    if not sym:
         return None
-    rows = [_norm_tradier_option(o)
-            for o in _as_list((data.get("options") or {}).get("option"))]
-    return [r for r in rows if r["strike"] is not None]
-
-
-# ── yfinance fallback (normalized to the same shape) ─────────────────────────
-def _yf_quotes(symbols: list) -> dict:
-    """Per-symbol Yahoo chart quotes (avoids multi-ticker frame mixups)."""
-    out = {}
-    if not symbols:
-        return out
-    try:
-        import json as _json
-        import urllib.request as _urlreq
-        for sym in symbols:
-            try:
-                url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
-                       f"?range=5d&interval=1d")
-                req = _urlreq.Request(
-                    url, headers={"User-Agent": "Mozilla/5.0 DGACapital/1.0"})
-                with _urlreq.urlopen(req, timeout=6) as resp:
-                    data = _json.loads(resp.read().decode("utf-8", "replace"))
-                res0 = ((data.get("chart") or {}).get("result") or [None])[0]
-                if not res0:
-                    continue
-                meta = res0.get("meta") or {}
-                px = meta.get("regularMarketPrice") or meta.get("previousClose")
-                prev = meta.get("chartPreviousClose") or meta.get("previousClose")
-                if px is None:
-                    continue
-                pct = None
-                if prev not in (None, 0):
-                    pct = (float(px) - float(prev)) / float(prev) * 100.0
-                out[sym] = {
-                    "price": float(px),
-                    "prev_close": float(prev) if prev is not None else None,
-                    "pct_change": pct,
-                    "source": "yahoo-chart",
-                }
-            except Exception:
+    for host in ("query1", "query2"):
+        try:
+            r = requests.get(
+                f"https://{host}.finance.yahoo.com/v8/finance/chart/{sym}",
+                params={"range": "5d", "interval": "1d", "includePrePost": "false"},
+                timeout=8,
+                headers={"User-Agent": "Mozilla/5.0 DGACapital/1.0"},
+            )
+            if r.status_code != 200:
                 continue
+            res0 = (((r.json().get("chart") or {}).get("result")) or [None])[0]
+            if not res0:
+                continue
+            meta = res0.get("meta") or {}
+            px = meta.get("regularMarketPrice") or meta.get("previousClose")
+            prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+            if px is None:
+                closes = ((res0.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
+                closes = [c for c in closes if c is not None]
+                if closes:
+                    px = closes[-1]
+                    if prev is None and len(closes) >= 2:
+                        prev = closes[-2]
+            if px is None:
+                continue
+            pct = None
+            if prev not in (None, 0):
+                pct = (float(px) - float(prev)) / float(prev) * 100.0
+            return {
+                "price": float(px),
+                "prev_close": float(prev) if prev is not None else None,
+                "pct_change": pct,
+                "source": "yahoo-chart",
+            }
+        except Exception as e:
+            print(f"[market_data] yahoo quote {sym} {host}: {e!s:.100}", flush=True)
+    return None
+
+
+def _tiingo_quotes(symbols: list) -> dict:
+    """Optional Tiingo IEX batch (free tier with TIINGO_API_KEY)."""
+    key = (os.environ.get("TIINGO_API_KEY") or "").strip()
+    if not key or not symbols:
+        return {}
+    out = {}
+    try:
+        import requests
+        # Tiingo allows comma-separated tickers
+        r = requests.get(
+            "https://api.tiingo.com/iex",
+            params={"tickers": ",".join(symbols), "token": key},
+            timeout=10,
+            headers={"Content-Type": "application/json"},
+        )
+        if r.status_code != 200:
+            return {}
+        rows = r.json()
+        if isinstance(rows, dict):
+            rows = [rows]
+        for it in rows or []:
+            sym = (it.get("ticker") or "").upper()
+            if not sym:
+                continue
+            px = _f(it.get("tngoLast") or it.get("last") or it.get("close"))
+            prev = _f(it.get("prevClose") or it.get("previousClose"))
+            pct = None
+            if px is not None and prev not in (None, 0):
+                pct = (px - prev) / prev * 100.0
+            if px is not None:
+                out[sym] = {
+                    "price": px,
+                    "prev_close": prev,
+                    "pct_change": pct,
+                    "source": "tiingo",
+                }
     except Exception as e:
-        print(f"[market_data] yfinance/yahoo-chart quotes failed: {e!s:.120}", flush=True)
+        print(f"[market_data] tiingo quotes failed: {e!s:.120}", flush=True)
+    return out
+
+
+def _yf_quotes(symbols: list) -> dict:
+    """Yahoo chart per-symbol (same as primary; kept for get_quotes fill)."""
+    out = {}
+    for sym in symbols or []:
+        q = _yahoo_chart_quote(sym)
+        if q:
+            out[sym.upper()] = q
     return out
 
 
@@ -193,7 +180,7 @@ def _norm_yf_option(row, opt_type: str) -> dict:
         "ask": _f(g("ask")) or 0.0,
         "last": _f(g("lastPrice")),
         "iv": _f(g("impliedVolatility")),
-        "delta": None,                                 # yfinance has no greeks
+        "delta": None,
         "open_interest": _i(g("openInterest")),
         "volume": _i(g("volume")),
         "source": "yfinance",
@@ -223,102 +210,38 @@ def _yf_expirations(symbol: str) -> list:
         return []
 
 
-# ── Unified public API (Tradier → yfinance) ──────────────────────────────────
+# ── Unified public API (Yahoo + optional Tiingo; no Tradier) ─────────────────
 def get_quotes(symbols: list) -> dict:
-    """{SYM: quote}. Tradier first; yfinance fills any symbols Tradier missed."""
+    """{SYM: quote}. Yahoo chart first; Tiingo fills gaps when key is set."""
     symbols = [s.strip().upper() for s in symbols if s and s.strip()]
     if not symbols:
         return {}
     out = {}
-    t = tradier_quotes(symbols)
-    if t:
-        out.update(t)
+    # Parallel-friendly sequential Yahoo (reliable, free)
+    for sym in symbols:
+        q = _yahoo_chart_quote(sym)
+        if q:
+            out[sym] = q
     missing = [s for s in symbols if s not in out or out[s].get("price") is None]
     if missing:
-        out.update(_yf_quotes(missing))
+        tq = _tiingo_quotes(missing)
+        out.update(tq)
     return out
 
 
 def get_expirations(symbol: str) -> list:
-    return tradier_expirations(symbol) or _yf_expirations(symbol) or []
+    return _yf_expirations(symbol) or []
 
 
 def get_chain(symbol: str, expiration: str) -> list:
-    """Normalized option rows for one expiration. Tradier first, yfinance fallback."""
-    rows = tradier_chain(symbol, expiration)
-    if rows is None:
-        rows = _yf_chain(symbol, expiration)
-    return rows or []
+    """Normalized option rows — yfinance only (free)."""
+    return _yf_chain(symbol, expiration) or []
 
 
 def source_label() -> str:
-    return "tradier+yfinance" if tradier_available() else "yfinance"
-
-
-# ── Tradier: historical price bars ───────────────────────────────────────────
-def tradier_history(symbol: str, interval: str = "daily",
-                    start: str = None, end: str = None) -> list | None:
-    """Daily/weekly/monthly OHLC bars from Tradier.
-    interval: 'daily' | 'weekly' | 'monthly'. start/end are 'YYYY-MM-DD'.
-    Returns [{date, open, high, low, close, volume}] (chronological) or None."""
-    params = {"symbol": symbol, "interval": interval}
-    if start:
-        params["start"] = start
-    if end:
-        params["end"] = end
-    data = _tradier_get("/v1/markets/history", params)
-    if data is None:
-        return None
-    days = _as_list((data.get("history") or {}).get("day"))
-    out = []
-    for d in days:
-        c = _f(d.get("close"))
-        if c is None:
-            continue
-        out.append({"date": d.get("date"), "open": _f(d.get("open")),
-                    "high": _f(d.get("high")), "low": _f(d.get("low")),
-                    "close": c, "volume": _i(d.get("volume"))})
-    return out
-
-
-def tradier_timesales(symbol: str, interval: str = "15min",
-                      start: str = None, end: str = None) -> list | None:
-    """Intraday bars from Tradier. interval: '1min'|'5min'|'15min'.
-    start/end are 'YYYY-MM-DD HH:MM'. Returns [{time, close, volume}] or None."""
-    params = {"symbol": symbol, "interval": interval, "session_filter": "open"}
-    if start:
-        params["start"] = start
-    if end:
-        params["end"] = end
-    data = _tradier_get("/v1/markets/timesales", params)
-    if data is None:
-        return None
-    pts = _as_list((data.get("series") or {}).get("data"))
-    out = []
-    for p in pts:
-        c = _f(p.get("close")) or _f(p.get("price"))
-        if c is None:
-            continue
-        out.append({"time": p.get("time"), "close": c,
-                    "volume": _i(p.get("volume"))})
-    return out
-
-
-def _yf_history(symbol: str, period: str = "max",
-                interval: str = "1d") -> list | None:
-    """yfinance fallback for daily bars (used only when Tradier is unavailable).
-    Returns [{date, close}] or None. Subject to the cloud-IP block — best effort."""
-    try:
-        import yfinance as yf
-        df = yf.Ticker(symbol).history(period=period, interval=interval,
-                                       auto_adjust=True)
-        out = []
-        for idx, row in df["Close"].dropna().items():
-            out.append({"date": idx.strftime("%Y-%m-%d"), "close": float(row)})
-        return out or None
-    except Exception as e:
-        print(f"[market_data] yf history {symbol} failed: {e!s:.120}", flush=True)
-        return None
+    if (os.environ.get("TIINGO_API_KEY") or "").strip():
+        return "yahoo+tiingo"
+    return "yahoo"
 
 
 # ── Yahoo v8 chart API (free, no key) ────────────────────────────────────────
@@ -385,6 +308,23 @@ def yahoo_intraday(symbol: str, rng: str = "5d", interval: str = "15m") -> list 
     return out or None
 
 
+
+def _yf_history(symbol: str, period: str = "max",
+                interval: str = "1d") -> list | None:
+    """yfinance daily bars fallback. [{date, close}] or None."""
+    try:
+        import yfinance as yf
+        df = yf.Ticker(symbol).history(period=period, interval=interval,
+                                       auto_adjust=True)
+        out = []
+        for idx, row in df["Close"].dropna().items():
+            out.append({"date": idx.strftime("%Y-%m-%d"), "close": float(row)})
+        return out or None
+    except Exception as e:
+        print(f"[market_data] yf history {symbol} failed: {e!s:.120}", flush=True)
+        return None
+
+
 def _yahoo_range_for(start: str) -> str:
     """Smallest Yahoo range token that still covers `start` → today."""
     if not start:
@@ -405,34 +345,18 @@ def _yahoo_range_for(start: str) -> str:
 def get_price_history(symbol: str, interval: str = "daily",
                       start: str = None, end: str = None,
                       adjusted: bool = False) -> list:
-    """Daily bars. Tradier (only if a paid token is configured) → free Yahoo v8
-    chart → yfinance library fallback. [{date, ...close}] chronological.
+    """Daily bars via free Yahoo v8 chart → yfinance fallback.
 
-    adjusted=True prefers the Yahoo v8 chart (adjclose = SPLIT-ADJUSTED) over
-    Tradier, whose bars are raw trade prices. Historical closes used for
-    return math (e.g. the Jan-1 rewind in attribution) MUST be adjusted — a
-    raw pre-split close doubles the apparent starting value (the BSX −$124K
-    incident)."""
-    rows = None
-    if adjusted:
-        rows = yahoo_history(symbol, rng=_yahoo_range_for(start))
-    if not rows and tradier_available():
-        rows = tradier_history(symbol, interval=interval, start=start, end=end)
-    if not rows and not adjusted:
-        rows = yahoo_history(symbol, rng=_yahoo_range_for(start))
+    Prefer adjusted Yahoo closes for return math (split-adjusted).
+    """
+    rows = yahoo_history(symbol, rng=_yahoo_range_for(start))
     if not rows:
-        rows = _yf_history(symbol)         # last-ditch: may be cloud-IP blocked
+        rows = _yf_history(symbol)
     return rows or []
 
 
 def get_intraday(symbol: str) -> list:
-    """5-day intraday closes (15-min). Tradier if available, else Yahoo v8 chart."""
-    if tradier_available():
-        from datetime import datetime as _dt2, timedelta as _td2
-        t = tradier_timesales(symbol, interval="15min",
-                              start=(_dt2.now() - _td2(days=6)).strftime("%Y-%m-%d %H:%M"))
-        if t:
-            return [{"time": x["time"], "close": x["close"]} for x in t]
+    """5-day intraday closes (15-min) from free Yahoo v8 chart."""
     return yahoo_intraday(symbol) or []
 
 

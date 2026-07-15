@@ -29,7 +29,7 @@ from __future__ import annotations
 import math
 from datetime import datetime, timezone
 
-import market_data as _market   # Tradier primary + yfinance fallback (normalized rows)
+import market_data as _market   # Yahoo chart + yfinance (free; no Tradier)
 
 # ── Tunable defaults ─────────────────────────────────────────────────────────
 DEFAULT_RISK_FREE = 0.043       # ~13-week T-bill; override per call if desired
@@ -137,7 +137,7 @@ def _row_oi(row) -> int:
 
 
 def _row_delta(row):
-    """Real delta straight from the feed (Tradier provides greeks), or None so
+    """Real delta from the option feed when available, or None so
     the caller can fall back to a Black-Scholes estimate."""
     d = row.get("delta")
     try:
@@ -310,7 +310,7 @@ def scan_ticker(ticker: str,
                 side: str = "both",
                 risk_free: float = DEFAULT_RISK_FREE,
                 min_oi: int = MIN_OPEN_INTEREST) -> dict:
-    """Scan one ticker LIVE (Tradier chains → yfinance fallback). For EACH tenor
+    """Scan one ticker LIVE (yfinance option chains, free). For EACH tenor
     bucket returns the best sellable strike within [MIN_DELTA, delta_max]."""
     ticker = ticker.strip().upper()
     out = {"ticker": ticker, "ok": False}

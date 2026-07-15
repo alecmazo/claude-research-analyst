@@ -10617,16 +10617,15 @@ def _tiingo_single(sym: str) -> dict:
 def batch_quotes(tickers: str = ""):
     """Return {symbol: {price, pct_change}} for a comma-separated ticker list.
 
-    Cascade (cache-miss only):
+    Cascade (cache-miss only) — free sources only (no Tradier):
       1. In-process cache (short TTL)
-      2. market_data.get_quotes — Tradier last + official day % when configured
-      3. Yahoo chart HTTP (per symbol) — correct regularMarketPrice / previousClose
+      2. market_data.get_quotes — Yahoo chart (+ optional Tiingo)
+      3. Yahoo chart HTTP (per symbol) — regularMarketPrice / previousClose
       4. yfinance download with safe multi-index extraction
-      5. Tiingo
-      6. Any-age market_quotes store (as_of stamped)
+      5. Tiingo (if TIINGO_API_KEY set)
+      6. market_quotes store (as_of stamped)
 
-    Day % always prefers official previous_close vs last, never a random prior
-    bar from a multi-ticker frame (that path mixed symbols and wrong %).
+    Day % uses official previous_close vs last when the source provides it.
     """
     originals = [t.strip().upper().rstrip("*") for t in tickers.split(",") if t.strip()][:100]
     if not originals:
@@ -10680,7 +10679,7 @@ def batch_quotes(tickers: str = ""):
         result[sym] = row
         _QUOTE_CACHE[sym] = {**row, "_ts": now}
 
-    # ── 1) Tradier / market_data (authoritative day % when available) ─────────
+    # ── 1) market_data (Yahoo chart + optional Tiingo) ────────────────────────
     try:
         import market_data as _md
         ymap = {orig: _resolve_ticker_alias(orig) for orig in misses}
@@ -10696,7 +10695,7 @@ def batch_quotes(tickers: str = ""):
                 pct = _pct_from(px, prev)
             for orig in rev.get(ysym, [ysym]):
                 if orig in misses:
-                    _accept(orig, px, pct, prev, source=q.get("source") or "market_data")
+                    _accept(orig, px, pct, prev, source=q.get("source") or "yahoo-chart")
         misses = [s for s in misses if s not in result or result[s].get("price") is None]
     except Exception as e:
         print(f"[batch_quotes] market_data failed: {e!s:.140}", flush=True)
@@ -23742,7 +23741,7 @@ def _saved_report_tickers() -> list:
         return []
 
 
-# Each name costs option-chain fetches (Tradier primary = fast; yfinance fallback
+# Each name costs option-chain fetches (yfinance free chains
 # is slower on the cloud IP), so cap the sweep. Raised 60 → 120 so the WHOLE
 # saved-report universe is scanned — at 60, alphabetically-late names (e.g. TSLA,
 # the 66th-ish report) were silently truncated. Per-name calls are 25s-timeout-
@@ -23826,7 +23825,7 @@ def _run_options_scan(job_id: str, universe: list, held_set: list,
         rows = []
         for i, tk in enumerate(universe):
             _set(label=f"⚙ {tk} ({i+1}/{total})…", done=i)
-            # ALWAYS scan LIVE (Tradier → yfinance) for fresh, COMPLETE chains
+            # ALWAYS scan LIVE (yfinance) for fresh, COMPLETE chains
             # (incl. weekly expiries) across every name. The persisted store is
             # sparse/stale for options, so reading it first produced a degraded
             # pool (a few held names, no weeklies). Live is what worked.
@@ -27332,7 +27331,7 @@ def _sync_jan1_close(sym: str, year: int) -> None:
                                      start=start, end=end, adjusted=True)
         if not bars:
             return
-        src = "tradier" if _md.tradier_available() else "yahoo"
+        src = "yahoo"
         with _fund_conn() as conn, conn.cursor() as cur:
             for b in bars:
                 if not b.get("date") or b.get("close") is None:
