@@ -30,6 +30,13 @@ function fmtPx(p) {
     ? n.toLocaleString('en-US', { maximumFractionDigits: 0 })
     : n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+function _wireAge(pubTs) {
+  if (pubTs == null) return '';
+  const sec = Math.max(0, Date.now() / 1000 - Number(pubTs));
+  if (sec < 3600) return Math.max(1, Math.floor(sec / 60)) + 'm ago';
+  if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
+  return Math.floor(sec / 86400) + 'd ago';
+}
 
 function PctPill({ p, size = 12, t }) {
   const up = p == null ? null : p >= 0;
@@ -108,6 +115,10 @@ export default function MarketsScreen() {
   const [pulseBusy, setPulseBusy]   = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const moversRef = useRef([]);
+  // Market Wire (free macro RSS — same as desktop Desk / Research)
+  const [wireItems, setWireItems]   = useState([]);
+  const [wireAsOf, setWireAsOf]     = useState('');
+  const [wireErr, setWireErr]       = useState('');
 
   const loadAll = useCallback(async () => {
     await Promise.all([
@@ -123,6 +134,15 @@ export default function MarketsScreen() {
       // Free, read-only: last completed scan from the server's kv store.
       api.getLatestScan().then(d => setPulse(d && d.exists && d.results ? d : null))
         .catch(() => setPulse(null)),
+      api.getMarketWire(8).then(d => {
+        const items = Array.isArray(d?.items) ? d.items
+          : (Array.isArray(d?.market_wire?.items) ? d.market_wire.items : []);
+        setWireItems(items);
+        setWireAsOf(d?.as_of || d?.market_wire?.as_of || '');
+        setWireErr(items.length ? '' : (d?.error || d?.detail || ''));
+      }).catch(e => {
+        setWireErr(e?.message || 'Wire unavailable');
+      }),
     ]);
   }, []);
 
@@ -227,6 +247,42 @@ export default function MarketsScreen() {
             ))}
           </ScrollView>
         )}
+
+        {/* ── 1b. Market Wire (free macro RSS, no LLM) ───────────────── */}
+        <SectionHeader
+          icon="newspaper"
+          t={t}
+          s={s}
+          right={wireAsOf ? <Text style={s.asOf}>{wireAsOf}</Text> : null}
+        >Market Wire</SectionHeader>
+        <Card style={[cardStyle, { marginBottom: spacing.md }]}>
+          {wireItems.length === 0 ? (
+            <Text style={s.muted}>
+              {wireErr ? `Wire: ${wireErr}` : 'Loading macro wire… pull to refresh.'}
+            </Text>
+          ) : (
+            wireItems.slice(0, 8).map((it, i) => (
+              <TouchableOpacity
+                key={(it.url || it.title || '') + i}
+                style={[s.wireRow, i > 0 && s.wireRowBorder]}
+                activeOpacity={0.7}
+                onPress={() => {
+                  if (it.url) {
+                    haptics.onPressPrimary?.();
+                    Linking.openURL(it.url).catch(() => {});
+                  }
+                }}
+              >
+                <Text style={s.wireTitle} numberOfLines={2}>{it.title || '—'}</Text>
+                <Text style={s.wireMeta}>
+                  {(it.feed || it.publisher || 'Wire')}
+                  {it.pub_ts ? ` · ${_wireAge(it.pub_ts)}` : ''}
+                </Text>
+              </TouchableOpacity>
+            ))
+          )}
+          <Text style={[s.muted, { marginTop: 8, fontSize: 10 }]}>Macro / policy RSS · FREE · no AI</Text>
+        </Card>
 
         {/* ── 2. Idea Generator ──────────────────────────────────────── */}
         <SectionHeader icon="lightbulb-on-outline" t={t} s={s}
@@ -442,6 +498,11 @@ function makeStyles(t) {
     },
     idxLabel: { fontSize: 10, color: t.textSecondary, fontWeight: '700', marginBottom: 4, letterSpacing: 0.3 },
     idxPx: { fontSize: 16, color: t.textPrimary, fontWeight: '800', fontVariant: ['tabular-nums'] },
+
+    wireRow: { paddingVertical: 8 },
+    wireRowBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.border },
+    wireTitle: { fontSize: 13, fontWeight: '600', color: t.textPrimary, lineHeight: 17 },
+    wireMeta: { fontSize: 10, color: t.textDim, fontWeight: '600', marginTop: 3 },
 
     moverWrap: { paddingHorizontal: 14 },
     divider: { borderBottomWidth: 1, borderBottomColor: t.border },

@@ -1174,6 +1174,9 @@ app.add_middleware(
 _PUBLIC_PATHS = {
     "/health", "/info", "/api/auth", "/api/build", "/api/diagnostics", "/",
     "/api/auth/v2/login",   # email+password login is unauthenticated by design
+    # Free macro RSS wire — no PII, no LLM. Public so mobile never blanks
+    # the Research card on a missing/expired JWT (common with v2-only sessions).
+    "/api/v2/news/market-wire",
 }
 
 def _portfolio_password() -> str:

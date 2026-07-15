@@ -218,14 +218,16 @@ export async function logoutV2() {
   await AsyncStorage.multiRemove([V2_TOKEN_KEY, V2_USER_KEY]);
 }
 
-/** Wrapped fetch that auto-attaches the v2 token. Use for any /api/v2/*
- *  call. Returns the raw Response object. */
+/** Wrapped fetch that auto-attaches the v2 token (and v1 HMAC when present).
+ *  Use for any /api/v2/* call. Returns the raw Response object. */
 export async function v2Fetch(path, options = {}) {
-  const [base, tok] = await Promise.all([getBaseUrl(), getV2Token()]);
+  const [base, tok, v1] = await Promise.all([getBaseUrl(), getV2Token(), getToken()]);
   const url = `${base}${path}`;
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
   if (tok) headers['x-auth-v2-token'] = tok;
-  return fetch(url, { ...options, headers });
+  // Always piggyback v1 so free endpoints still work if v2 JWT is missing/expired
+  if (v1) headers['x-auth-token'] = v1;
+  return fetch(url, { ...options, headers, cache: 'no-store' });
 }
 
 // ── Fund token ────────────────────────────────────────────────────────────────
@@ -361,25 +363,34 @@ export const api = {
   // Live index ribbon (S&P, Nasdaq, Dow, VIX, …)
   getMarketIndices: () => request('/api/market/indices'),
   // Desk Market Wire — free macro RSS (no LLM). Used on Research tab.
-  // Prefer v2 JWT when present; fall back to request() (v1+v2 headers) so
-  // legacy password-only sessions still load the wire.
+  // Server path is public; still send tokens when present. Multiple
+  // fallbacks so a single auth mode never blanks the card.
   getMarketWire: async (limit = 10) => {
-    const path = `/api/v2/news/market-wire?limit=${limit}`;
+    const path = `/api/v2/news/market-wire?limit=${Math.max(1, Math.min(Number(limit) || 10, 25))}`;
+    const base = await getBaseUrl();
+    // 1) Unauthenticated first (endpoint is on _PUBLIC_PATHS — free RSS)
     try {
-      const r = await v2Fetch(path);
-      if (r.ok) return r.json();
-      // 401/403 on v2-only → try combined request() path
-      if (r.status === 401 || r.status === 403) {
-        return request(path);
+      const r = await fetch(`${base}${path}`, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+      });
+      if (r.ok) {
+        const d = await r.json();
+        if (d && (Array.isArray(d.items) || d.ok)) return d;
       }
-      const text = await r.text();
-      throw new Error(`${r.status}: ${text}`);
-    } catch (e) {
-      // Last resort: shared request helper
+    } catch (_) { /* fall through */ }
+    // 2) Dual-token request helper
+    try {
+      return await request(path);
+    } catch (e1) {
+      // 3) v2Fetch (v2 + v1 piggyback)
       try {
-        return await request(path);
+        const r = await v2Fetch(path);
+        if (r.ok) return r.json();
+        const text = await r.text();
+        throw new Error(`${r.status}: ${text}`);
       } catch (e2) {
-        throw e2;
+        throw e1;
       }
     }
   },

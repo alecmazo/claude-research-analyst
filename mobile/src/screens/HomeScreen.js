@@ -91,11 +91,18 @@ export default function HomeScreen({ navigation, route }) {
     setWireError('');
     try {
       const d = await api.getMarketWire(10);
-      const items = Array.isArray(d?.items) ? d.items : [];
-      setWireItems(items);
-      setWireAsOf(d?.as_of || '');
-      if (!items.length && d && d.ok === false) {
-        setWireError(d.error || d.detail || 'Wire unavailable');
+      // Accept items at top level or nested under market_wire (desk-feeds shape)
+      const raw = Array.isArray(d?.items)
+        ? d.items
+        : (Array.isArray(d?.market_wire?.items) ? d.market_wire.items : []);
+      setWireItems(raw);
+      setWireAsOf(d?.as_of || d?.market_wire?.as_of || '');
+      if (!raw.length) {
+        if (d && d.ok === false) {
+          setWireError(d.error || d.detail || 'Wire unavailable');
+        } else if (Array.isArray(d?.errors) && d.errors.length && !raw.length) {
+          setWireError('Feeds unreachable — tap ↻');
+        }
       }
     } catch (err) {
       console.warn('getMarketWire:', err.message);
@@ -703,11 +710,10 @@ export default function HomeScreen({ navigation, route }) {
             </View>
           )
         }
-        contentContainerStyle={
-          reports.length > 0
-            ? { paddingBottom: 24 }
-            : s.emptyContainer
-        }
+        // Never justifyContent:center here — that vertically centered the
+        // ListHeader (Analyze + Market Wire) and made the wire look "gone"
+        // on phones with no saved reports.
+        contentContainerStyle={{ paddingBottom: 24, flexGrow: 1 }}
       />
     </View>
   );
