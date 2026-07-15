@@ -15420,20 +15420,46 @@
   // ══════════════════════════════════════════════════════════════
   // RIGHT COLUMN — Trending Tickers (live watchlist)
   // ══════════════════════════════════════════════════════════════
-  async function loadTrendingTickers() {
+  // force=true on first paint / tab-focus so we never show yesterday's list
+  // after an overnight idle. Poll path uses cache (server TTL ~90s).
+  async function loadTrendingTickers(force) {
     const el    = document.getElementById('trending-rows');
     const badge = document.getElementById('trending-count');
     if (!el) return;
     try {
       // The biggest BROAD-MARKET movers today (Yahoo gainers/losers), regardless
       // of whether DGA tracks them — ranked by absolute % move.
-      const r = await window.dgaFetch('/api/market/movers?limit=12');
+      const q = '/api/market/movers?limit=12' + (force ? '&force=true' : '')
+        + '&_t=' + Date.now();
+      const r = await window.dgaFetch(q, { cache: 'no-store' });
       if (!r.ok) throw new Error('movers ' + r.status);
       const d = await r.json();
       const movers = d.movers || [];
-      if (badge) badge.textContent = movers.length ? 'LIVE' : '—';
+      // Badge: session date + clock so "yesterday freeze" is obvious
+      if (badge) {
+        if (!movers.length) {
+          badge.textContent = '—';
+          badge.title = d.error || 'No movers';
+        } else {
+          const sess = (d.session_date || '').slice(5); // MM-DD
+          const asof = d.as_of || '';
+          badge.textContent = sess
+            ? (asof ? (sess + ' · ' + asof.replace(' PT', '')) : sess)
+            : (asof || 'LIVE');
+          badge.title = 'Session ' + (d.session_date || '—')
+            + (asof ? ' · as of ' + asof : '')
+            + (d.stale ? ' (stale snapshot)' : ' · live Yahoo screeners');
+        }
+      }
+      const act = document.getElementById('trending-action');
+      if (act) {
+        act.textContent = force ? '⟳ LIVE' : '⟳ AUTO';
+        act.title = 'Click to force-refresh Today\'s Movers';
+      }
       if (!movers.length) {
-        el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">No market movers right now.</div>';
+        el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">'
+          + (d.error ? 'Movers feed unavailable.' : 'No market movers right now.')
+          + '</div>';
         return;
       }
       const _safe = s => String(s || '').replace(/[<>&]/g, '');
@@ -15457,8 +15483,17 @@
     } catch (e) {
       console.warn('[movers]', e);
       if (el) el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);">Market movers unavailable.</div>';
+      if (badge) badge.textContent = 'ERR';
     }
   }
+  // Click AUTO → hard refresh
+  (function wireTrendingRefresh() {
+    const act = document.getElementById('trending-action');
+    if (!act || act.dataset.wired) return;
+    act.dataset.wired = '1';
+    act.style.cursor = 'pointer';
+    act.addEventListener('click', () => loadTrendingTickers(true));
+  })();
 
   // ══════════════════════════════════════════════════════════════
   // RIGHT COLUMN — Market Pulse (scan results as news)
@@ -16830,7 +16865,7 @@
   loadIndices();
   loadWatchlist();
   loadReports();
-  loadTrendingTickers();
+  loadTrendingTickers(true);   // force — never paint overnight cache as "today"
   // Desk (research shell) is the default landing tab
   initLiveMarkets();
   showTab('research');
@@ -17572,14 +17607,27 @@
   const _visGated = (fn) => () => { if (document.hidden) return; fn(); };
   setInterval(_visGated(loadIndices),          60_000);   // ribbon: every 60s
   setInterval(_visGated(loadWatchlist),        60_000);   // watchlist: every 60s
-  setInterval(_visGated(loadTrendingTickers),  60_000);   // trending: every 60s
+  setInterval(_visGated(() => loadTrendingTickers(false)), 60_000);  // movers: 60s
   // Market Pulse polling removed — see init block above.
   setInterval(_visGated(loadNewsForReports),  900_000);   // saved-report headlines: every 15 min
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
     loadIndices();
     loadWatchlist();
+    // Hard refresh movers on tab focus — was missing, so overnight idle
+    // left yesterday's Yahoo screener list painted until the next poll.
+    loadTrendingTickers(true);
   });
+  // Midnight PT / session roll: force again shortly after 4am ET-ish via
+  // a cheap day-key check every 5 min while visible.
+  let _moversDayKey = '';
+  setInterval(_visGated(() => {
+    const d = new Date();
+    // Pacific-ish day key (UTC-7/-8 approx is fine for "new day" nudge)
+    const key = d.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+    if (_moversDayKey && _moversDayKey !== key) loadTrendingTickers(true);
+    _moversDayKey = key;
+  }), 300_000);
 
   // ── Dashboard drag-and-drop ──────────────────────────────────────
   (function _initDashboard() {

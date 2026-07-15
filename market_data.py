@@ -369,16 +369,48 @@ def get_intraday(symbol: str) -> list:
     return yahoo_intraday(symbol) or []
 
 
+def _us_equity_session_date():
+    """US equity session date (America/New_York calendar date).
+
+    Before ~4am ET we still treat the prior calendar day as the active
+    session date (Yahoo day_gainers often freezes on last close overnight).
+    After that, today's date — pre-market / RTH / after-hours all count as
+    the current session once Yahoo starts publishing it.
+    """
+    from datetime import datetime, timedelta
+    try:
+        from zoneinfo import ZoneInfo
+        et = ZoneInfo("America/New_York")
+    except Exception:
+        et = None
+    now = datetime.now(et) if et else datetime.utcnow()
+    # Yahoo often keeps prior-session screeners until early morning ET.
+    # After 04:00 ET we expect "today" (premarket) or last completed session.
+    if now.hour < 4:
+        return (now.date() - timedelta(days=1)).isoformat()
+    return now.date().isoformat()
+
+
 def yahoo_market_movers(min_price: float = 3.0, min_market_cap: float = 2e9,
                         per_list: int = 30) -> list:
     """Biggest BROAD-MARKET movers from Yahoo's free predefined screeners
     (day_gainers + day_losers + most_actives) — the day's real movers market-wide,
     not just a given universe. No API key; same cloud-tolerant Yahoo host family
     as the price-chart endpoint. Returns [{ticker, price, pct_change, name,
-    market_cap}], deduped to the largest move. Filters out penny stocks
-    (< min_price) and micro/small caps (known marketCap < min_market_cap, default
-    $2B) so speculative names don't clutter the list."""
+    market_cap, market_time, session_date}], deduped to the largest move.
+    Filters out penny stocks (< min_price), micro/small caps (known marketCap
+    < min_market_cap, default $2B), and quotes whose regularMarketTime is older
+    than the active US session (drops weekend / multi-day-stale names that
+    sometimes leak into most_actives)."""
     import requests
+    from datetime import datetime, timezone
+    try:
+        from zoneinfo import ZoneInfo
+        _ET = ZoneInfo("America/New_York")
+    except Exception:
+        _ET = timezone.utc
+
+    session_date = _us_equity_session_date()
     out: dict = {}
     for scr in ("day_gainers", "day_losers", "most_actives"):
         got = False
@@ -402,18 +434,56 @@ def yahoo_market_movers(min_price: float = 3.0, min_market_cap: float = 2e9,
                         continue
                     if mc is not None and mc < min_market_cap:
                         continue   # drop micro / small caps
+                    # Skip flat names from most_actives (noise, often multi-day stale)
+                    if abs(pct) < 0.05 and scr == "most_actives":
+                        continue
+                    mkt_ts = q.get("regularMarketTime")
+                    mkt_iso = None
+                    quote_session = None
+                    if mkt_ts:
+                        try:
+                            dt = datetime.fromtimestamp(int(mkt_ts), tz=timezone.utc)
+                            mkt_iso = dt.isoformat()
+                            quote_session = dt.astimezone(_ET).date().isoformat()
+                        except Exception:
+                            quote_session = None
+                    # Drop multi-day-stale quotes (e.g. most_actives from last week)
+                    if quote_session:
+                        try:
+                            from datetime import date as _date
+                            age = (_date.fromisoformat(session_date)
+                                   - _date.fromisoformat(quote_session)).days
+                            if age > 1:
+                                continue
+                        except Exception:
+                            pass
+                    row = {
+                        "ticker": sym,
+                        "price": px,
+                        "pct_change": round(pct, 4),
+                        "market_cap": mc,
+                        "name": q.get("shortName") or q.get("longName")
+                                or q.get("displayName") or "",
+                        "market_time": mkt_iso,
+                        "session_date": quote_session or session_date,
+                        "screener": scr,
+                    }
                     if sym not in out or abs(pct) > abs(out[sym]["pct_change"]):
-                        out[sym] = {"ticker": sym, "price": px,
-                                    "pct_change": round(pct, 4),
-                                    "market_cap": mc,
-                                    "name": q.get("shortName") or q.get("longName") or ""}
+                        out[sym] = row
                 got = True
                 break
             except Exception as e:
                 print(f"[market_data] yahoo movers {scr} {host} failed: {e!s:.120}", flush=True)
         if not got:
             print(f"[market_data] yahoo movers {scr}: no data", flush=True)
-    return list(out.values())
+    rows = list(out.values())
+    # Keep only the freshest session Yahoo is actually publishing (today once
+    # premarket/RTH ticks; otherwise last completed session — not a mix).
+    dated = [r.get("session_date") for r in rows if r.get("session_date")]
+    if dated:
+        newest = max(dated)
+        rows = [r for r in rows if (r.get("session_date") or newest) >= newest]
+    return rows
 
 
 # ── Nasdaq earnings calendar (free, no key) ──────────────────────────────────

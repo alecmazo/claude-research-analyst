@@ -7497,29 +7497,73 @@ def research_prioritize(request: Request, top_n: int = 5):
     }
 
 
-_MARKET_MOVERS_CACHE: dict = {"ts": 0.0, "data": None}
-_MARKET_MOVERS_TTL = 180   # 3 min — Yahoo screeners, bounds the request rate
+_MARKET_MOVERS_CACHE: dict = {
+    "ts": 0.0, "data": None, "session_date": None, "fetched_for": None,
+}
+_MARKET_MOVERS_TTL = 90   # 90s — short enough that a new session is obvious
 
 
 @app.get("/api/market/movers")
-def market_movers(request: Request, limit: int = 12, min_price: float = 3.0):
+def market_movers(request: Request, limit: int = 12, min_price: float = 3.0,
+                  force: bool = False):
     """The biggest BROAD-MARKET movers today (Yahoo gainers/losers/most-active
     screeners) — ranked by absolute % move, penny stocks filtered. Powers the
-    'Today's Movers' card. Cached 3 min. No LLM, no key."""
+    'Today's Movers' card. Cached ~90s, keyed by US session date so overnight
+    process uptime never serves a prior calendar day. ?force=true bypasses
+    cache. No LLM, no key."""
     _claims_or_401(request)
     now = time.time()
     c = _MARKET_MOVERS_CACHE
-    if c["data"] is None or (now - c["ts"]) >= _MARKET_MOVERS_TTL:
+    try:
+        import market_data as _md
+        session_date = _md._us_equity_session_date()
+    except Exception:
+        session_date = _now_pacific().strftime("%Y-%m-%d")
+        _md = None
+
+    # Invalidate when our expected US session date rolls (process left up overnight)
+    day_stale = (c.get("fetched_for") or "") != session_date
+    ttl_stale = c["data"] is None or (now - c["ts"]) >= _MARKET_MOVERS_TTL
+    if force or day_stale or ttl_stale:
         try:
-            import market_data as _md
+            if _md is None:
+                import market_data as _md
             rows = _md.yahoo_market_movers(min_price=min_price) or []
         except Exception as e:
-            return {"ok": False, "movers": [], "error": f"{e!s:.160}"}
+            # Never hand back a prior-calendar-day cache after a failed refresh —
+            # better empty + error than "yesterday's movers" looking live.
+            if day_stale or c["data"] is None:
+                return {"ok": False, "movers": [], "session_date": session_date,
+                        "as_of": _pacific_time_str(), "error": f"{e!s:.160}"}
+            # Same-session soft failure: serve last good snapshot briefly
+            return {"ok": True, "as_of": _pacific_time_str(),
+                    "session_date": c.get("session_date") or session_date,
+                    "stale": True, "error": f"{e!s:.160}",
+                    "movers": (c["data"] or [])[: int(limit)]}
         rows.sort(key=lambda m: abs(m.get("pct_change") or 0.0), reverse=True)
-        c["data"] = rows
-        c["ts"] = now
-    return {"ok": True, "as_of": _pacific_time_str(),
-            "movers": (c["data"] or [])[: int(limit)]}
+        # Report the session Yahoo actually printed (pre-open = last close)
+        dated = [m.get("session_date") for m in rows if m.get("session_date")]
+        data_sess = max(dated) if dated else session_date
+        # Don't lock in an empty list for the full TTL (Yahoo blips)
+        if rows or c["data"] is None or day_stale:
+            c["data"] = rows
+            c["ts"] = now
+            c["session_date"] = data_sess
+            c["fetched_for"] = session_date
+            if not rows:
+                print(f"[market/movers] empty Yahoo screeners for {session_date}",
+                      flush=True)
+        elif not rows and c["data"] is not None and not day_stale:
+            # Keep prior same-session snapshot; bump ts so we don't hammer Yahoo
+            c["ts"] = now
+
+    return {
+        "ok": True,
+        "as_of": _pacific_time_str(),
+        "session_date": c.get("session_date") or session_date,
+        "stale": False,
+        "movers": (c["data"] or [])[: int(limit)],
+    }
 
 
 @app.get("/api/v2/research/idea-feed")
