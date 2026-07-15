@@ -5406,7 +5406,14 @@
     if (!list) return;
     const movers = data && data.movers || [];
     if (badge) badge.textContent = movers.length;
-    if (asof)  asof.textContent  = data && data.as_of ? data.as_of : '—';
+    if (asof) {
+      const sess = (data && data.session_date) ? String(data.session_date).slice(5) : '';
+      const t = data && data.as_of ? data.as_of : '—';
+      asof.textContent = sess ? (sess + ' · ' + t) : t;
+      asof.title = data && data.session_date
+        ? ('Session ' + data.session_date + (data.as_of ? ' · ' + data.as_of : ''))
+        : (data && data.as_of) || '';
+    }
     if (note) {
       if (data && data.note) { note.style.display = 'block'; note.textContent = data.note; }
       else if (data && data.error) { note.style.display = 'block'; note.textContent = 'Error: ' + data.error; }
@@ -5465,17 +5472,17 @@
   }
 
   async function loadIdeaFeed(force) {
-    // Cache-aware: skip refetch if last successful fetch was < 5 min ago
-    // (unless `force` is true). Server-side caching duplicates this but
-    // avoids a needless round-trip too.
+    // Client throttle is short — phantom day-% (IBM −29% from bad prev) must
+    // not sit on screen for 5–15 min. Server re-verifies bar prev-close.
     const now = Date.now();
-    if (!force && (now - _ideaFeedLastFetch) < 5 * 60 * 1000 && document.getElementById('idea-gen-count')?.textContent !== '—') {
+    if (!force && (now - _ideaFeedLastFetch) < 60 * 1000 && document.getElementById('idea-gen-count')?.textContent !== '—') {
       return;
     }
     try {
       const url = '/api/v2/research/idea-feed?threshold=' + encodeURIComponent(_ideaFeedThreshold)
-        + '&limit=60' + (force ? '&force=true' : '');
-      const r = await window.dgaFetch(url);
+        + '&limit=60' + (force ? '&force=true' : '')
+        + '&_t=' + Date.now();
+      const r = await window.dgaFetch(url, { cache: 'no-store' });
       if (!r.ok) throw new Error('idea-feed ' + r.status);
       const data = await r.json();
       _ideaFeedLastFetch = now;
@@ -5601,14 +5608,21 @@
     // Initial fetch on page load (Research is the default tab)
     // Delay slightly so auth token is ready
     setTimeout(function() { loadIdeaFeed(true); }, 500);
-    // Auto-refresh every 15 min
+    // Auto-refresh every 2 min while Research is active (force — bust server cache)
     if (!_ideaFeedTimer) {
       _ideaFeedTimer = setInterval(function() {
+        if (document.hidden) return;
         if (document.getElementById('tab-research')?.classList.contains('active')) {
           loadIdeaFeed(true);
         }
-      }, 15 * 60 * 1000);
+      }, 2 * 60 * 1000);
     }
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) return;
+      if (document.getElementById('tab-research')?.classList.contains('active')) {
+        loadIdeaFeed(true);
+      }
+    });
   });
 
   // ── Builder ───────────────────────────────────────────────────────────────

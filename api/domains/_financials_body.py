@@ -1949,7 +1949,7 @@ def _quote_one_yahoo_chart(sym: str) -> dict | None:
         import urllib.request
         ysym = _resolve_ticker_alias(sym)
         url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{ysym}"
-               f"?range=5d&interval=1d")
+               f"?range=10d&interval=1d")
         req = urllib.request.Request(
             url, headers={"User-Agent": "Mozilla/5.0 DGACapital/1.0"})
         with urllib.request.urlopen(req, timeout=8) as resp:
@@ -1958,18 +1958,19 @@ def _quote_one_yahoo_chart(sym: str) -> dict | None:
         if not result:
             return None
         meta = result.get("meta") or {}
-        px = meta.get("regularMarketPrice") or meta.get("previousClose")
-        prev = meta.get("chartPreviousClose") or meta.get("previousClose")
-        if px is None:
-            closes = ((result.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
-            closes = [c for c in closes if c is not None]
-            if closes:
-                px = closes[-1]
-                prev = closes[-2] if len(closes) >= 2 else None
+        closes = ((result.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
+        closes = [float(c) for c in closes if c is not None]
+        px = meta.get("regularMarketPrice") or meta.get("postMarketPrice")
+        if px is None and closes:
+            px = closes[-1]
+        # Never chartPreviousClose — range-start close (IBM −29% phantom).
+        prev = meta.get("previousClose") or meta.get("regularMarketPreviousClose")
+        if prev is None and len(closes) >= 2:
+            prev = closes[-2]
         if px is None:
             return None
-        pct = None
-        if prev not in (None, 0):
+        pct = meta.get("regularMarketChangePercent")
+        if pct is None and prev not in (None, 0):
             pct = (float(px) - float(prev)) / float(prev) * 100.0
         return {"price": float(px), "pct_change": pct, "source": "yahoo-chart"}
     except Exception as e:

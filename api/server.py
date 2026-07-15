@@ -7366,14 +7366,17 @@ def get_ticker_meta(ticker: str):
 # Sources: watchlist ∪ open positions ∪ saved-report tickers.
 # Classifies each mover into earnings_today | sector_move | news | unknown.
 # Caches per-(user, threshold) for 5 min so repeated tab visits don't refetch.
-_IDEA_FEED_CACHE: dict[tuple, dict] = {}   # (lp_id, threshold, limit) → {data, ts}
+_IDEA_FEED_CACHE: dict[tuple, dict] = {}   # (lp_id, threshold, limit, session) → {data, ts}
 # Keep short — movers use batch_quotes; long TTL served phantom ±% after quote bugs.
-_IDEA_FEED_TTL    = 90                     # seconds
+_IDEA_FEED_TTL    = 60                     # seconds
 # Show ALL movers, but only EAGERLY enrich (sector + news) the top N by magnitude
 # so a big-move day can't fire dozens of slow per-ticker news fetches in the
 # request path (the cloud-IP hang trap). Movers beyond the cap still appear;
 # their news loads lazily on row-expand via /api/news.
 _IDEA_ENRICH_CAP  = 25
+# Day-move above this without bar re-verify is almost always bad prev-close
+# (Yahoo chartPreviousClose on 5d = range-start close, e.g. IBM −29%).
+_IDEA_SANITY_PCT  = 12.0
 
 _SECTOR_ETF_MAP = {
     "Technology":             "XLK",
@@ -7605,24 +7608,34 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
       • headline news items (up to 5 from Yahoo via yfinance)
       • reason_class: 'sector_move' | 'news' | 'unknown'
       • source labels: where it came from in the universe
+
+    Day % is re-verified with market_data bar prev-close for every threshold
+    candidate so chartPreviousClose phantoms (IBM −29% vs real −1%) never stick.
     """
     claims = _claims_or_401(request)
     lp_id   = claims.get("lp_id") or claims.get("email") or "anon"
     role    = claims.get("role", "lp")
     is_priv = role in ("gp", "admin")
 
-    # Cache key includes the request shape; user-scoped to be safe.
-    cache_key = (str(lp_id), float(threshold), int(limit), is_priv)
+    try:
+        import market_data as _md_sess
+        _idea_session = _md_sess._us_equity_session_date()
+    except Exception:
+        _idea_session = _now_pacific().strftime("%Y-%m-%d")
+
+    # Cache key includes session date so overnight process uptime never serves
+    # yesterday's phantom movers list.
+    cache_key = (str(lp_id), float(threshold), int(limit), is_priv, _idea_session)
     cached = _IDEA_FEED_CACHE.get(cache_key)
-    # ?force=true bypasses the in-memory TTL cache so the user's manual
-    # refresh button actually pulls fresh quotes + news.
+    # Drop any legacy keys without session component
     if not force and cached and (time.time() - cached["ts"]) < _IDEA_FEED_TTL:
         return cached["data"]
     if force:
         # Drop stale idea + quote cache so refresh re-pulls live prices
-        _IDEA_FEED_CACHE.pop(cache_key, None)
+        for k in list(_IDEA_FEED_CACHE.keys()):
+            if k[0] == str(lp_id):
+                _IDEA_FEED_CACHE.pop(k, None)
         try:
-            # Clear in-process quote cache for a clean re-fetch
             for k in list(_QUOTE_CACHE.keys()):
                 _QUOTE_CACHE.pop(k, None)
         except Exception:
@@ -7700,17 +7713,27 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
         return out
 
     # ── 2. Batch live quotes (price + pct_change) ─────────────────────────────
+    # Bust quote cache for universe so we never paint idea-feed from a
+    # price-only / chartPreviousClose row left over from earlier in the process.
+    try:
+        for tk in universe:
+            _QUOTE_CACHE.pop(tk, None)
+    except Exception:
+        pass
     try:
         quotes = batch_quotes(",".join(sorted(universe))) or {}
     except Exception as _e:
         return {"movers": [], "universe_size": len(universe),
-                "as_of": _pacific_time_str(),
+                "as_of": _pacific_time_str(), "session_date": _idea_session,
                 "error": f"quote fetch failed: {_e}"}
 
     # ── 3. Movers ≥ |threshold|% — YOUR universe only (watchlist / saved reports
     # / positions). The broad-market biggest movers live on the 'Today's Movers'
     # card instead, so the Idea Generator stays focused on names DGA cares about. ─
-    raw_movers: list[dict] = []
+    # Soft-pass first (slightly below threshold) then bar-reverify every candidate
+    # so a −29% IBM phantom cannot rank as a "mover".
+    soft_thr = max(1.0, float(threshold) * 0.75)
+    soft: list[dict] = []
     for tk in universe:
         q = quotes.get(tk) or {}
         pct = q.get("pct_change")
@@ -7719,16 +7742,54 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
             continue
         try:
             pct_f = float(pct)
+            prc_f = float(prc)
+        except Exception:
+            continue
+        if abs(pct_f) < soft_thr:
+            continue
+        soft.append({
+            "ticker": tk, "price": prc_f, "pct_change": pct_f,
+            "sources": sorted(sources.get(tk, ())),
+        })
+
+    # Authoritative re-verify with market_data bar prev-close (never chartPreviousClose)
+    if soft:
+        try:
+            import market_data as _md
+            vmap = _md.get_quotes([m["ticker"] for m in soft]) or {}
+            for m in soft:
+                v = vmap.get(m["ticker"]) or {}
+                if v.get("price") is not None:
+                    m["price"] = float(v["price"])
+                if v.get("pct_change") is not None:
+                    m["pct_change"] = float(v["pct_change"])
+                    m["quote_source"] = v.get("source") or "yahoo-chart"
+                # Drop absurd unconfirmed day moves (bad prev-close residue)
+                if abs(m["pct_change"]) >= _IDEA_SANITY_PCT and v.get("pct_change") is None:
+                    m["pct_change"] = 0.0  # force drop below threshold
+        except Exception as _e:
+            print(f"[idea-feed] bar re-verify failed: {_e!s:.140}", flush=True)
+
+    raw_movers: list[dict] = []
+    for m in soft:
+        try:
+            pct_f = float(m["pct_change"])
+            prc_f = float(m["price"])
         except Exception:
             continue
         if abs(pct_f) < float(threshold):
             continue
+        # Final sanity: still > sanity and not re-verified → skip
+        if abs(pct_f) >= _IDEA_SANITY_PCT and not m.get("quote_source"):
+            print(f"[idea-feed] drop unverified extreme {m['ticker']} {pct_f:+.2f}%",
+                  flush=True)
+            continue
         raw_movers.append({
-            "ticker":     tk,
-            "price":      float(prc),
+            "ticker":     m["ticker"],
+            "price":      prc_f,
             "pct_change": round(pct_f, 4),
-            "abs_change": round(float(prc) * pct_f / 100.0, 2) if prc else None,
-            "sources":    sorted(sources.get(tk, ())),
+            "abs_change": round(prc_f * pct_f / 100.0, 2),
+            "sources":    m.get("sources") or [],
         })
 
     raw_movers.sort(key=lambda m: abs(m["pct_change"]), reverse=True)
@@ -7736,7 +7797,8 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
 
     if not movers:
         out = {"movers": [], "universe_size": len(universe),
-               "as_of": _pacific_time_str(), "threshold": threshold,
+               "as_of": _pacific_time_str(), "session_date": _idea_session,
+               "threshold": threshold,
                "note": f"No tickers moved ≥ ±{threshold}% today in your universe of "
                        f"{len(universe)} symbols."}
         _IDEA_FEED_CACHE[cache_key] = {"data": out, "ts": time.time()}
@@ -7804,6 +7866,7 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
         "movers":        movers,
         "universe_size": len(universe),
         "as_of":         _pacific_time_str(),
+        "session_date":  _idea_session,
         "threshold":     threshold,
         "ttl_seconds":   _IDEA_FEED_TTL,
     }
