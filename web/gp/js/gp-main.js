@@ -1803,11 +1803,20 @@
       const total = (uni.saved_reports != null) ? uni.saved_reports : cov.length;
       const missing = (uni.missing != null) ? uni.missing : Math.max(0, total - indexed);
       if (badge) {
-        badge.textContent = total
+        const fs = d.freshness_summary || {};
+        const freshN = fs.fresh || 0;
+        const base = total
           ? (indexed + '/' + total + (missing ? ' · ' + missing + ' missing' : ' · complete'))
           : (cov.length ? cov.length + ' names' : 'empty');
-        badge.style.background = missing ? '#fef3c7' : '#dcfce7';
-        badge.style.color = missing ? '#92400e' : '#166534';
+        badge.textContent = base + (freshN ? ' · ' + freshN + ' fresh' : '');
+        // Prefer green only when coverage is full AND something is actually fresh
+        if (missing) {
+          badge.style.background = '#fef3c7'; badge.style.color = '#92400e';
+        } else if (freshN > 0) {
+          badge.style.background = '#dcfce7'; badge.style.color = '#166534';
+        } else {
+          badge.style.background = '#e0f2fe'; badge.style.color = '#075985';
+        }
       }
       if (hintEl) {
         const ch = d.cost_hint || {};
@@ -1826,17 +1835,71 @@
       if (el) {
         const missList = (uni.missing_tickers || []).slice(0, 40);
         const missHtml = missList.length
-          ? '<div style="margin-bottom:8px;"><span style="font-size:10.5px;font-weight:700;color:#92400e;">Missing (' + missing + '):</span> '
+          ? '<div style="margin-bottom:10px;"><span style="font-size:10.5px;font-weight:700;color:#92400e;">Missing — not indexed at all (' + missing + '):</span> '
             + missList.map(t => '<span style="display:inline-block;margin:0 4px 3px 0;font-family:\'SF Mono\',monospace;font-size:10px;background:#fef3c7;border:1px solid #fde68a;color:#92400e;padding:1px 6px;border-radius:9px;">'
               + _trEsc(t) + '</span>').join('')
             + (missing > missList.length ? ' <span style="font-size:10px;color:var(--text-tertiary);">+' + (missing - missList.length) + ' more</span>' : '')
             + '</div>'
           : '';
-        const chips = cov.length
-          ? cov.map(c => '<span style="display:inline-block;margin:0 6px 4px 0;font-family:\'SF Mono\',monospace;font-size:10.5px;background:var(--gray-100);border:1px solid var(--border-subtle);padding:1px 7px;border-radius:9px;">'
-            + _trEsc(c.ticker) + ' · ' + c.quarters + 'q</span>').join('')
-          : '<span style="color:var(--text-tertiary);">No earnings calls indexed yet — run free Backfill first.</span>';
-        el.innerHTML = missHtml + (cov.length ? '<div style="margin-bottom:4px;font-size:10.5px;font-weight:700;color:var(--text-secondary);">Indexed (' + cov.length + '):</div>' : '') + chips;
+        // Freshness buckets: latest call age — answers "is this yesterday's earnings?"
+        const BUCKETS = [
+          { key: 'fresh',  title: 'Fresh · latest call ≤7 days',  tip: 'Current earnings cycle (e.g. yesterday’s print)', bg: '#dcfce7', bd: '#bbf7d0', fg: '#166534' },
+          { key: 'recent', title: 'Recent · ≤45 days',            tip: 'This cycle / prior few weeks', bg: '#e0f2fe', bd: '#bae6fd', fg: '#075985' },
+          { key: 'aging',  title: 'Aging · ≤180 days',            tip: 'History present; likely missing newest print — use Latest calls (Grok)', bg: '#fef3c7', bd: '#fde68a', fg: '#92400e' },
+          { key: 'stale',  title: 'Stale / history-only · >180 days', tip: 'HF multi-year backfill only — not the latest earnings', bg: '#f3f4f6', bd: '#e5e7eb', fg: '#4b5563' },
+        ];
+        const byB = {};
+        cov.forEach(c => {
+          const b = c.freshness || 'stale';
+          (byB[b] = byB[b] || []).push(c);
+        });
+        // Within each bucket: newest latest_call first
+        Object.keys(byB).forEach(k => {
+          byB[k].sort((a, b) => String(b.latest_call || '').localeCompare(String(a.latest_call || '')));
+        });
+        const sum = d.freshness_summary || {};
+        const legend = '<div style="margin-bottom:8px;font-size:10.5px;color:var(--text-tertiary);line-height:1.45;">'
+          + 'Each chip: <strong>TICKER · latest quarter · call date · #quarters</strong>. '
+          + 'Hover for oldest. Sorted newest→oldest inside each band. '
+          + (sum.fresh != null
+            ? ('Counts: fresh ' + (sum.fresh || 0)
+              + ' · recent ' + (sum.recent || 0)
+              + ' · aging ' + (sum.aging || 0)
+              + ' · stale ' + (sum.stale || 0)
+              + ((d.needs_topup_count) ? (' · <span style="color:#92400e;">' + d.needs_topup_count + ' need Grok top-up</span>') : ''))
+            : '')
+          + '</div>';
+        const chip = (c, bg, bd, fg) => {
+          const lq = c.latest_quarter || '?';
+          const ld = c.latest_call || '—';
+          const oq = c.oldest_quarter || '';
+          const od = c.oldest_call || '';
+          const days = (c.days_since_latest != null) ? (c.days_since_latest + 'd ago') : '';
+          const title = _trEsc(c.ticker) + ' latest ' + _trEsc(lq) + ' on ' + _trEsc(ld)
+            + (days ? ' (' + days + ')' : '')
+            + (oq || od ? ' · oldest ' + _trEsc(oq) + (od ? ' ' + _trEsc(od) : '') : '')
+            + ' · ' + (c.quarters || 0) + ' quarters · ' + (c.chunks || 0) + ' passages';
+          return '<span title="' + title + '" style="display:inline-block;margin:0 5px 4px 0;font-family:\'SF Mono\',monospace;font-size:10.5px;background:'
+            + bg + ';border:1px solid ' + bd + ';color:' + fg + ';padding:2px 7px;border-radius:9px;cursor:default;">'
+            + '<strong>' + _trEsc(c.ticker) + '</strong>'
+            + ' · ' + _trEsc(lq)
+            + ' · ' + _trEsc(ld)
+            + ' · ' + (c.quarters || 0) + 'q</span>';
+        };
+        let bands = '';
+        BUCKETS.forEach(B => {
+          const list = byB[B.key] || [];
+          if (!list.length) return;
+          bands += '<div style="margin-bottom:10px;">'
+            + '<div style="font-size:10.5px;font-weight:700;color:' + B.fg + ';margin-bottom:4px;" title="' + _trEsc(B.tip) + '">'
+            + B.title + ' <span style="font-weight:500;opacity:0.8;">(' + list.length + ')</span></div>'
+            + list.map(c => chip(c, B.bg, B.bd, B.fg)).join('')
+            + '</div>';
+        });
+        if (!cov.length) {
+          bands = '<span style="color:var(--text-tertiary);">No earnings calls indexed yet — run free Backfill first.</span>';
+        }
+        el.innerHTML = missHtml + legend + bands;
       }
     } catch(_) {}
   }

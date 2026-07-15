@@ -24466,40 +24466,113 @@ def transcripts_calls_sync_status(job_id: str, request: Request):
     return {"ok": True, **job}
 
 
+def _call_date_str(v) -> str | None:
+    if v is None:
+        return None
+    if hasattr(v, "isoformat"):
+        try:
+            return v.isoformat()[:10]
+        except Exception:
+            pass
+    s = str(v or "").strip()[:10]
+    return s or None
+
+
+def _call_freshness(latest_iso: str | None, today=None) -> dict:
+    """Bucket indexed calls so GP can see latest vs historical at a glance.
+
+    - fresh: latest call ≤ 7 days (e.g. yesterday's earnings)
+    - recent: ≤ 45 days (this earnings cycle)
+    - aging: ≤ 180 days
+    - stale: older than 180 days or no date
+    """
+    from datetime import date as _date, datetime as _dt
+    today = today or _date.today()
+    if not latest_iso:
+        return {"bucket": "stale", "days_since_latest": None, "label": "no date"}
+    try:
+        d = _dt.strptime(latest_iso[:10], "%Y-%m-%d").date()
+    except Exception:
+        return {"bucket": "stale", "days_since_latest": None, "label": "bad date"}
+    days = (today - d).days
+    if days < 0:
+        days = 0
+    if days <= 7:
+        bucket, label = "fresh", "≤7d · current cycle"
+    elif days <= 45:
+        bucket, label = "recent", "≤45d · this cycle"
+    elif days <= 180:
+        bucket, label = "aging", "≤180d · needs top-up?"
+    else:
+        bucket, label = "stale", f">{days}d old · history only"
+    return {"bucket": bucket, "days_since_latest": days, "label": label}
+
+
 @app.get("/api/transcripts/calls/coverage")
 def transcripts_calls_coverage(request: Request):
-    """Which tickers/quarters are indexed vs the saved-report universe."""
+    """Which tickers/quarters are indexed vs the saved-report universe.
+
+    Each row includes latest/oldest call dates + quarters and a freshness
+    bucket (fresh/recent/aging/stale) so you can tell if WFC is yesterday's
+    print vs multi-year HF history.
+    """
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
     _ensure_transcripts_tables()
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            cur.execute("""SELECT ticker, COUNT(DISTINCT quarter) AS quarters,
-                                  COUNT(*) AS chunks,
-                                  MAX(call_date) AS latest_call
-                             FROM call_chunks GROUP BY ticker ORDER BY ticker""")
+            # Quarter tags are YYYYQn — lexical min/max = chronological.
+            cur.execute("""
+                SELECT ticker,
+                       COUNT(DISTINCT quarter) AS quarters,
+                       COUNT(*) AS chunks,
+                       MAX(call_date) AS latest_call,
+                       MIN(call_date) AS oldest_call,
+                       MAX(quarter) AS latest_quarter,
+                       MIN(quarter) AS oldest_quarter
+                  FROM call_chunks
+                 GROUP BY ticker
+                 ORDER BY MAX(call_date) DESC NULLS LAST, ticker
+            """)
             rows = cur.fetchall() or []
         coverage = []
+        by_bucket = {"fresh": 0, "recent": 0, "aging": 0, "stale": 0}
         for r in rows:
-            latest = r.get("latest_call")
+            latest = _call_date_str(r.get("latest_call"))
+            oldest = _call_date_str(r.get("oldest_call"))
+            fr = _call_freshness(latest)
+            by_bucket[fr["bucket"]] = by_bucket.get(fr["bucket"], 0) + 1
             coverage.append({
                 "ticker": r["ticker"],
                 "quarters": int(r["quarters"] or 0),
                 "chunks": int(r["chunks"] or 0),
-                "latest_call": (latest.isoformat()[:10]
-                                if hasattr(latest, "isoformat")
-                                else (str(latest or "")[:10] or None)),
+                "latest_call": latest,
+                "oldest_call": oldest,
+                "latest_quarter": (r.get("latest_quarter") or None),
+                "oldest_quarter": (r.get("oldest_quarter") or None),
+                "freshness": fr["bucket"],
+                "days_since_latest": fr["days_since_latest"],
+                "freshness_label": fr["label"],
             })
         universe = _call_index_universe()
         covered = {c["ticker"].upper() for c in coverage}
         missing = [t for t in universe if t not in covered]
+        # Names that are indexed but latest call is aging/stale → Grok top-up candidates
+        needs_topup = [c["ticker"] for c in coverage
+                       if c.get("freshness") in ("aging", "stale")
+                       and c["ticker"].upper() in set(universe)]
+        n_work = len(missing) + min(20, len(needs_topup))
         cost_hint = _estimate_call_sync_cost(
-            min(40, len(missing) or len(universe)), max_quarters=2,
-            n_already=0 if missing else len(universe))
+            min(40, n_work if n_work > 0 else len(universe)),
+            max_quarters=2,
+            n_already=0 if n_work else len(universe))
         return {
             "ok": True,
             "coverage": coverage,
+            "freshness_summary": by_bucket,
+            "needs_topup": needs_topup[:60],
+            "needs_topup_count": len(needs_topup),
             "universe": {
                 "saved_reports": len(universe),
                 "indexed": len(covered & set(universe)),
@@ -24509,8 +24582,9 @@ def transcripts_calls_coverage(request: Request):
             },
             "source": _CALL_SOURCE,
             "cost_hint": cost_hint,
-            "note": ("Backfill history = free HF dataset. Latest calls (Grok) = "
-                     "paid live-search; skips quarters already indexed."),
+            "note": ("Badge = indexed/universe. Chips show latest quarter + date + "
+                     "freshness. HF Backfill = multi-year history ($0). Latest calls "
+                     "(Grok) fills forward to the newest reported print."),
         }
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
