@@ -2720,8 +2720,12 @@ def _cross_dedupe_market_vs_filings(market: dict, filings: dict) -> dict:
 
 @app.get("/api/v2/news/market-wire")
 def news_market_wire(request: Request, limit: int = 14):
-    """Free macro Market Wire (RSS). No LLM. No paid news API."""
-    _claims_or_401(request)
+    """Free macro Market Wire (RSS). No LLM. No paid news API.
+
+    Auth: any session that passed middleware (v1 HMAC or v2 JWT). Do NOT use
+    _claims_or_401 here — that rejects mobile clients that only carry a v1
+    password token, which left the Research-tab Market Wire empty.
+    """
     return _build_market_wire(limit=limit)
 
 

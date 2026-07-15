@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, FlatList, ScrollView,
+  View, Text, TextInput, TouchableOpacity, FlatList,
   StyleSheet, ActivityIndicator, RefreshControl, Alert, Switch,
   Linking, Platform,
 } from 'react-native';
@@ -45,7 +45,8 @@ export default function HomeScreen({ navigation, route }) {
   // Market Wire (free macro RSS — same source as desktop Desk)
   const [wireItems, setWireItems]       = useState([]);
   const [wireAsOf, setWireAsOf]         = useState('');
-  const [wireLoading, setWireLoading]   = useState(false);
+  const [wireLoading, setWireLoading]   = useState(true);
+  const [wireError, setWireError]       = useState('');
 
   const checkServer = async () => {
     const t0 = Date.now();
@@ -87,12 +88,18 @@ export default function HomeScreen({ navigation, route }) {
 
   const loadMarketWire = async () => {
     setWireLoading(true);
+    setWireError('');
     try {
       const d = await api.getMarketWire(10);
-      setWireItems(Array.isArray(d?.items) ? d.items : []);
+      const items = Array.isArray(d?.items) ? d.items : [];
+      setWireItems(items);
       setWireAsOf(d?.as_of || '');
+      if (!items.length && d && d.ok === false) {
+        setWireError(d.error || d.detail || 'Wire unavailable');
+      }
     } catch (err) {
       console.warn('getMarketWire:', err.message);
+      setWireError(err.message || 'Could not load Market Wire');
       // Keep prior items if refresh fails
     } finally {
       setWireLoading(false);
@@ -478,209 +485,210 @@ export default function HomeScreen({ navigation, route }) {
         }
       />
 
-      {/* Ticker input card */}
-      <View style={s.inputSection}>
-        <Text style={s.label}>ANALYZE TICKER</Text>
-        <View style={s.inputRow}>
-          <TextInput
-            style={s.input}
-            placeholder="e.g. AAPL"
-            placeholderTextColor={t.textDim}
-            value={ticker}
-            onChangeText={t => setTicker(t.toUpperCase())}
-            autoCapitalize="characters"
-            autoCorrect={false}
-            returnKeyType="go"
-            onSubmitEditing={handleAnalyze}
-          />
-          <TouchableOpacity
-            style={[s.analyzeBtn, loading && s.analyzeBtnDisabled]}
-            onPress={handleAnalyze}
-            disabled={loading || !ticker.trim()}
-          >
-            {loading ? (
-              <View style={s.analyzeBtnInner}>
-                <ActivityIndicator color={t.chromeNavy} size="small" />
-                {runningTicker ? (
-                  <Text style={s.analyzeBtnLoadingText}>{runningTicker}…</Text>
-                ) : null}
-              </View>
-            ) : (
-              <Text style={s.analyzeBtnText}>RUN ▶</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-        {/* Options — engine chips (Grok / Claude / Both) + presentation toggle */}
-        <View style={s.optionsRow}>
-          <View style={s.llmPicker}>
-            {[
-              { v: 'grok',   label: 'Grok' },
-              { v: 'claude', label: 'Claude' },
-              { v: 'both',   label: 'Both' },
-            ].map(opt => (
-              <TouchableOpacity
-                key={opt.v}
-                onPress={() => setLlmProvider(opt.v)}
-                style={[
-                  s.llmPickerOpt,
-                  llmProvider === opt.v && (
-                    opt.v === 'claude' ? s.llmPickerOptActiveClaude :
-                    opt.v === 'both'   ? s.llmPickerOptActiveBoth   :
-                                          s.llmPickerOptActiveGrok
-                  ),
-                ]}
-                activeOpacity={0.7}
-              >
-                <Text style={[
-                  s.llmPickerOptText,
-                  llmProvider === opt.v && s.llmPickerOptTextActive,
-                ]}>{opt.label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <View style={{ flex: 1 }} />
-          <Text style={s.gammaLabel}>Presentation</Text>
-          <Switch
-            value={gammaEnabled}
-            onValueChange={v => { setGammaEnabled(v); saveGamma(v); }}
-            trackColor={{ false: t.border, true: t.primary }}
-            thumbColor={t.onChrome}
-            style={s.gammaSwitch}
-          />
-        </View>
-
-        {/* AI Analyst entry — merged into this card as a slim bottom row */}
-        <TouchableOpacity
-          style={s.analystRow}
-          onPress={() => { haptics.onPressPrimary(); navigation.navigate('Analyst'); }}
-          activeOpacity={0.7}
-        >
-          <Text style={s.analystRowEmoji}>🤖</Text>
-          <Text style={s.analystRowText} numberOfLines={1}>
-            <Text style={s.analystRowTitle}>AI Analyst</Text> — ask anything across your coverage
-          </Text>
-          <Text style={s.analystRowArrow}>›</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Market Wire — free macro RSS (same desk feed as desktop), under Analyze */}
-      <View style={s.wireCard}>
-        <View style={s.wireHead}>
-          <Text style={s.wireTitle}>📡 MARKET WIRE</Text>
-          <Text style={s.wireBadge}>FREE · NO AI</Text>
-          <View style={{ flex: 1 }} />
-          {wireAsOf ? <Text style={s.wireAsOf}>{wireAsOf}</Text> : null}
-          {wireLoading ? <ActivityIndicator size="small" color={t.primary} style={{ marginLeft: 6 }} /> : null}
-        </View>
-        {wireItems.length === 0 && !wireLoading ? (
-          <Text style={s.wireEmpty}>
-            No high-signal macro items in the last 48h (or RSS was quiet). Pull to refresh.
-          </Text>
-        ) : (
-          <ScrollView
-            style={s.wireScroll}
-            nestedScrollEnabled
-            showsVerticalScrollIndicator={false}
-          >
-            {wireItems.slice(0, 10).map((it, i) => {
-              const age = _wireRelAge(it.pub_ts);
-              const feed = it.feed || it.publisher || 'Wire';
-              return (
-                <TouchableOpacity
-                  key={(it.url || it.title || '') + i}
-                  style={[s.wireRow, i === 0 && s.wireRowFirst]}
-                  activeOpacity={0.7}
-                  onPress={() => {
-                    if (it.url) {
-                      haptics.onPressTab?.();
-                      Linking.openURL(it.url).catch(() => {});
-                    }
-                  }}
-                >
-                  <Text style={s.wireRowTitle} numberOfLines={2}>{it.title || '—'}</Text>
-                  <View style={s.wireRowMeta}>
-                    <Text style={s.wireChip}>{feed}</Text>
-                    {age ? <Text style={s.wireAge}>{age} ago</Text> : null}
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        )}
-        <Text style={s.wireFoot}>Macro / policy RSS · zero tokens</Text>
-      </View>
-
-      {/* Reports section header */}
-      <View style={s.listHeaderRow}>
-        <Text style={s.sectionTitle}>SAVED REPORTS</Text>
-        {reports.length > 0 && (
-          <Text style={s.countBadge}>{reports.length}</Text>
-        )}
-        <View style={{ flex: 1 }} />
-        {reports.length > 0 && (
-          <TouchableOpacity
-            style={s.reanalyzeAllBtn}
-            onPress={handleReanalyzeAll}
-            disabled={bulkPolling}
-            activeOpacity={0.8}
-          >
-            <Text style={s.reanalyzeAllBtnText}>
-              {bulkPolling ? '⏳ Re-analyzing…' : '🔄 Re-analyze All'}
-            </Text>
-          </TouchableOpacity>
-        )}
-        <TouchableOpacity style={s.scanAllBtn} onPress={handleScanAll} activeOpacity={0.8}>
-          <Text style={s.scanAllBtnText}>⚡ Scan All</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Bulk re-analyze progress banner */}
-      {bulkJob && (bulkJob.status === 'running' || bulkJob.status === 'queued' ||
-                   bulkJob.status === 'done' || bulkJob.status === 'cancelled') && (
-        <View style={s.reanalyzeBanner}>
-          <View style={s.reanalyzeBannerRow}>
-            <Text style={s.reanalyzeBannerText}>
-              {bulkJob.status === 'done'
-                ? `✓ Done · ${(bulkJob.completed||[]).length}/${bulkJob.total} succeeded · ${(bulkJob.failed||[]).length} failed`
-                : bulkJob.status === 'cancelled'
-                ? `⊘ Cancelled · ${(bulkJob.completed||[]).length}/${bulkJob.total} done before cancel`
-                : `Re-analyzing ${bulkJob.current_ticker || '…'} (${(bulkJob.current_index||0)+1}/${bulkJob.total})`}
-            </Text>
-            {(bulkJob.status === 'running' || bulkJob.status === 'queued') && (
-              <TouchableOpacity style={s.reanalyzeCancelBtn} onPress={handleCancelReanalyze}>
-                <Text style={s.reanalyzeCancelText}>CANCEL</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-          <View style={s.reanalyzeBarTrack}>
-            <View style={[s.reanalyzeBarFill,
-                          { width: `${Math.min(100, Math.max(0, bulkJob.progress_pct || 0))}%` }]} />
-          </View>
-        </View>
-      )}
-      {lastLoadedStr ? (
-        <View style={{ marginHorizontal: 16, marginBottom: 4 }}>
-          <Text style={s.lastLoadedText}>{lastLoadedStr}</Text>
-        </View>
-      ) : null}
-
-      {/* Reports list — always a single FlatList for smooth, freeze-free scrolling.
-          SkeletonList is shown via ListEmptyComponent during initial load so there
-          is never a competing scroll container above the list. */}
+      {/* Single scroll surface: Analyze → Market Wire → Saved Reports.
+          Wire must live inside FlatList header so it is never clipped by the
+          list flex layout on small phones. */}
       <FlatList
+        style={{ flex: 1 }}
         data={reports}
         keyExtractor={item => item.ticker}
         renderItem={renderReport}
         ItemSeparatorComponent={() => <View style={s.sep} />}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.primary} />}
         ListHeaderComponent={
-          reports.length > 0 ? (
-            <View style={s.colHeader}>
-              <Text style={[s.colHeaderText, { flex: 1 }]}>TICKER</Text>
-              <Text style={[s.colHeaderText, s.colHeaderPrice]}>PRICE</Text>
-              <Text style={[s.colHeaderText, s.colHeaderTarget]}>TGT / UPSIDE</Text>
+          <View>
+            {/* Ticker input card */}
+            <View style={s.inputSection}>
+              <Text style={s.label}>ANALYZE TICKER</Text>
+              <View style={s.inputRow}>
+                <TextInput
+                  style={s.input}
+                  placeholder="e.g. AAPL"
+                  placeholderTextColor={t.textDim}
+                  value={ticker}
+                  onChangeText={txt => setTicker(txt.toUpperCase())}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  returnKeyType="go"
+                  onSubmitEditing={handleAnalyze}
+                />
+                <TouchableOpacity
+                  style={[s.analyzeBtn, loading && s.analyzeBtnDisabled]}
+                  onPress={handleAnalyze}
+                  disabled={loading || !ticker.trim()}
+                >
+                  {loading ? (
+                    <View style={s.analyzeBtnInner}>
+                      <ActivityIndicator color={t.chromeNavy} size="small" />
+                      {runningTicker ? (
+                        <Text style={s.analyzeBtnLoadingText}>{runningTicker}…</Text>
+                      ) : null}
+                    </View>
+                  ) : (
+                    <Text style={s.analyzeBtnText}>RUN ▶</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+              <View style={s.optionsRow}>
+                <View style={s.llmPicker}>
+                  {[
+                    { v: 'grok',   label: 'Grok' },
+                    { v: 'claude', label: 'Claude' },
+                    { v: 'both',   label: 'Both' },
+                  ].map(opt => (
+                    <TouchableOpacity
+                      key={opt.v}
+                      onPress={() => setLlmProvider(opt.v)}
+                      style={[
+                        s.llmPickerOpt,
+                        llmProvider === opt.v && (
+                          opt.v === 'claude' ? s.llmPickerOptActiveClaude :
+                          opt.v === 'both'   ? s.llmPickerOptActiveBoth   :
+                                                s.llmPickerOptActiveGrok
+                        ),
+                      ]}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[
+                        s.llmPickerOptText,
+                        llmProvider === opt.v && s.llmPickerOptTextActive,
+                      ]}>{opt.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <View style={{ flex: 1 }} />
+                <Text style={s.gammaLabel}>Presentation</Text>
+                <Switch
+                  value={gammaEnabled}
+                  onValueChange={v => { setGammaEnabled(v); saveGamma(v); }}
+                  trackColor={{ false: t.border, true: t.primary }}
+                  thumbColor={t.onChrome}
+                  style={s.gammaSwitch}
+                />
+              </View>
+              <TouchableOpacity
+                style={s.analystRow}
+                onPress={() => { haptics.onPressPrimary(); navigation.navigate('Analyst'); }}
+                activeOpacity={0.7}
+              >
+                <Text style={s.analystRowEmoji}>🤖</Text>
+                <Text style={s.analystRowText} numberOfLines={1}>
+                  <Text style={s.analystRowTitle}>AI Analyst</Text> — ask anything across your coverage
+                </Text>
+                <Text style={s.analystRowArrow}>›</Text>
+              </TouchableOpacity>
             </View>
-          ) : null
+
+            {/* Market Wire — always visible under Analyze */}
+            <View style={s.wireCard}>
+              <View style={s.wireHead}>
+                <Text style={s.wireTitle}>📡 MARKET WIRE</Text>
+                <Text style={s.wireBadge}>FREE · NO AI</Text>
+                <View style={{ flex: 1 }} />
+                {wireAsOf ? <Text style={s.wireAsOf}>{wireAsOf}</Text> : null}
+                {wireLoading ? (
+                  <ActivityIndicator size="small" color={t.primary} style={{ marginLeft: 6 }} />
+                ) : (
+                  <TouchableOpacity onPress={loadMarketWire} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Text style={s.wireRefresh}>↻</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+              {wireError && wireItems.length === 0 ? (
+                <Text style={s.wireEmpty}>Could not load wire: {wireError}</Text>
+              ) : wireItems.length === 0 && !wireLoading ? (
+                <Text style={s.wireEmpty}>
+                  No high-signal macro items right now. Tap ↻ or pull to refresh.
+                </Text>
+              ) : (
+                wireItems.slice(0, 8).map((it, i) => {
+                  const age = _wireRelAge(it.pub_ts);
+                  const feed = it.feed || it.publisher || 'Wire';
+                  return (
+                    <TouchableOpacity
+                      key={(it.url || it.title || '') + i}
+                      style={[s.wireRow, i === 0 && s.wireRowFirst]}
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        if (it.url) {
+                          haptics.onPressTab?.();
+                          Linking.openURL(it.url).catch(() => {});
+                        }
+                      }}
+                    >
+                      <Text style={s.wireRowTitle} numberOfLines={2}>{it.title || '—'}</Text>
+                      <View style={s.wireRowMeta}>
+                        <Text style={s.wireChip}>{feed}</Text>
+                        {age ? <Text style={s.wireAge}>{age} ago</Text> : null}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })
+              )}
+              <Text style={s.wireFoot}>Macro / policy RSS · zero tokens</Text>
+            </View>
+
+            {/* Reports section header */}
+            <View style={s.listHeaderRow}>
+              <Text style={s.sectionTitle}>SAVED REPORTS</Text>
+              {reports.length > 0 && (
+                <Text style={s.countBadge}>{reports.length}</Text>
+              )}
+              <View style={{ flex: 1 }} />
+              {reports.length > 0 && (
+                <TouchableOpacity
+                  style={s.reanalyzeAllBtn}
+                  onPress={handleReanalyzeAll}
+                  disabled={bulkPolling}
+                  activeOpacity={0.8}
+                >
+                  <Text style={s.reanalyzeAllBtnText}>
+                    {bulkPolling ? '⏳ Re-analyzing…' : '🔄 Re-analyze All'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity style={s.scanAllBtn} onPress={handleScanAll} activeOpacity={0.8}>
+                <Text style={s.scanAllBtnText}>⚡ Scan All</Text>
+              </TouchableOpacity>
+            </View>
+
+            {bulkJob && (bulkJob.status === 'running' || bulkJob.status === 'queued' ||
+                         bulkJob.status === 'done' || bulkJob.status === 'cancelled') && (
+              <View style={s.reanalyzeBanner}>
+                <View style={s.reanalyzeBannerRow}>
+                  <Text style={s.reanalyzeBannerText}>
+                    {bulkJob.status === 'done'
+                      ? `✓ Done · ${(bulkJob.completed||[]).length}/${bulkJob.total} succeeded · ${(bulkJob.failed||[]).length} failed`
+                      : bulkJob.status === 'cancelled'
+                      ? `⊘ Cancelled · ${(bulkJob.completed||[]).length}/${bulkJob.total} done before cancel`
+                      : `Re-analyzing ${bulkJob.current_ticker || '…'} (${(bulkJob.current_index||0)+1}/${bulkJob.total})`}
+                  </Text>
+                  {(bulkJob.status === 'running' || bulkJob.status === 'queued') && (
+                    <TouchableOpacity style={s.reanalyzeCancelBtn} onPress={handleCancelReanalyze}>
+                      <Text style={s.reanalyzeCancelText}>CANCEL</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+                <View style={s.reanalyzeBarTrack}>
+                  <View style={[s.reanalyzeBarFill,
+                                { width: `${Math.min(100, Math.max(0, bulkJob.progress_pct || 0))}%` }]} />
+                </View>
+              </View>
+            )}
+            {lastLoadedStr ? (
+              <View style={{ marginHorizontal: 16, marginBottom: 4 }}>
+                <Text style={s.lastLoadedText}>{lastLoadedStr}</Text>
+              </View>
+            ) : null}
+
+            {reports.length > 0 ? (
+              <View style={[s.colHeader, s.listContent, { marginBottom: 0, borderBottomLeftRadius: 0, borderBottomRightRadius: 0 }]}>
+                <Text style={[s.colHeaderText, { flex: 1 }]}>TICKER</Text>
+                <Text style={[s.colHeaderText, s.colHeaderPrice]}>PRICE</Text>
+                <Text style={[s.colHeaderText, s.colHeaderTarget]}>TGT / UPSIDE</Text>
+              </View>
+            ) : null}
+          </View>
         }
         ListEmptyComponent={
           initialLoading ? (
@@ -696,8 +704,9 @@ export default function HomeScreen({ navigation, route }) {
           )
         }
         contentContainerStyle={
-          initialLoading ? undefined :
-          reports.length > 0 ? s.listContent : s.emptyContainer
+          reports.length > 0
+            ? { paddingBottom: 24 }
+            : s.emptyContainer
         }
       />
     </View>
@@ -815,7 +824,6 @@ function makeStyles(t) {
     borderWidth: 1,
     borderColor: t.border,
   },
-  wireScroll: { maxHeight: 168 },
   wireHead: {
     flexDirection: 'row', alignItems: 'center', marginBottom: 6, gap: 6,
   },
@@ -828,6 +836,7 @@ function makeStyles(t) {
     paddingHorizontal: 5, paddingVertical: 1, borderRadius: 3, overflow: 'hidden',
   },
   wireAsOf: { fontSize: 9, color: t.textDim, fontWeight: '600' },
+  wireRefresh: { fontSize: 14, color: t.primary, fontWeight: '700', paddingHorizontal: 4 },
   wireEmpty: {
     fontSize: 11, color: t.textDim, lineHeight: 15, paddingVertical: 6,
   },

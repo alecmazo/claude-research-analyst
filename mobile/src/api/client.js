@@ -361,8 +361,28 @@ export const api = {
   // Live index ribbon (S&P, Nasdaq, Dow, VIX, …)
   getMarketIndices: () => request('/api/market/indices'),
   // Desk Market Wire — free macro RSS (no LLM). Used on Research tab.
-  getMarketWire: (limit = 10) =>
-    request(`/api/v2/news/market-wire?limit=${limit}`),
+  // Prefer v2 JWT when present; fall back to request() (v1+v2 headers) so
+  // legacy password-only sessions still load the wire.
+  getMarketWire: async (limit = 10) => {
+    const path = `/api/v2/news/market-wire?limit=${limit}`;
+    try {
+      const r = await v2Fetch(path);
+      if (r.ok) return r.json();
+      // 401/403 on v2-only → try combined request() path
+      if (r.status === 401 || r.status === 403) {
+        return request(path);
+      }
+      const text = await r.text();
+      throw new Error(`${r.status}: ${text}`);
+    } catch (e) {
+      // Last resort: shared request helper
+      try {
+        return await request(path);
+      } catch (e2) {
+        throw e2;
+      }
+    }
+  },
   // Idea Generator — today's movers ≥ threshold% from the user's universe
   getIdeaFeed: (threshold = 4, limit = 60) =>
     request(`/api/v2/research/idea-feed?threshold=${threshold}&limit=${limit}`),
