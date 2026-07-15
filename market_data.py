@@ -95,13 +95,22 @@ def _yahoo_chart_quote(symbol: str) -> dict | None:
             if not res0:
                 continue
             meta = res0.get("meta") or {}
-            px = meta.get("regularMarketPrice") or meta.get("previousClose")
-            prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+            # Live last trade / session price
+            px = (meta.get("regularMarketPrice")
+                  or meta.get("postMarketPrice")
+                  or meta.get("preMarketPrice"))
+            # Official prior-session close for day-change. NEVER prefer
+            # chartPreviousClose first — it is often an older bar in the
+            # chart range and inflates day % (e.g. C at −2.4% vs real −0.2%).
+            prev = (meta.get("previousClose")
+                    or meta.get("regularMarketPreviousClose")
+                    or meta.get("chartPreviousClose"))
             if px is None:
                 closes = ((res0.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
                 closes = [c for c in closes if c is not None]
                 if closes:
                     px = closes[-1]
+                    # Only use prior bar if meta did not give an official prev close
                     if prev is None and len(closes) >= 2:
                         prev = closes[-2]
             if px is None:

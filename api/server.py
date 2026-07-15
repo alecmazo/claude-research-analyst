@@ -7335,7 +7335,8 @@ def get_ticker_meta(ticker: str):
 # Classifies each mover into earnings_today | sector_move | news | unknown.
 # Caches per-(user, threshold) for 5 min so repeated tab visits don't refetch.
 _IDEA_FEED_CACHE: dict[tuple, dict] = {}   # (lp_id, threshold, limit) → {data, ts}
-_IDEA_FEED_TTL    = 300                    # 5 minutes
+# Keep short — movers use batch_quotes; long TTL served phantom ±% after quote bugs.
+_IDEA_FEED_TTL    = 90                     # seconds
 # Show ALL movers, but only EAGERLY enrich (sector + news) the top N by magnitude
 # so a big-move day can't fire dozens of slow per-ticker news fetches in the
 # request path (the cloud-IP hang trap). Movers beyond the cap still appear;
@@ -7541,8 +7542,16 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
     # refresh button actually pulls fresh quotes + news.
     if not force and cached and (time.time() - cached["ts"]) < _IDEA_FEED_TTL:
         return cached["data"]
-    if force and cached:
-        print(f"[idea-feed] force=true → bypassing cache for {lp_id}", flush=True)
+    if force:
+        # Drop stale idea + quote cache so refresh re-pulls live prices
+        _IDEA_FEED_CACHE.pop(cache_key, None)
+        try:
+            # Clear in-process quote cache for a clean re-fetch
+            for k in list(_QUOTE_CACHE.keys()):
+                _QUOTE_CACHE.pop(k, None)
+        except Exception:
+            pass
+        print(f"[idea-feed] force=true → bypassing caches for {lp_id}", flush=True)
 
     # ── 1. Build universe ─────────────────────────────────────────────────────
     universe: set[str] = set()
@@ -10679,28 +10688,61 @@ def batch_quotes(tickers: str = ""):
         result[sym] = row
         _QUOTE_CACHE[sym] = {**row, "_ts": now}
 
-    # ── 1) market_data (Yahoo chart + optional Tiingo) ────────────────────────
-    try:
-        import market_data as _md
-        ymap = {orig: _resolve_ticker_alias(orig) for orig in misses}
-        rev: dict = {}
-        for orig, ysym in ymap.items():
-            rev.setdefault(ysym, []).append(orig)
-        mdq = _md.get_quotes(list(rev.keys())) or {}
-        for ysym, q in mdq.items():
-            px = q.get("price")
-            prev = q.get("prev_close")
-            pct = q.get("pct_change")
-            if pct is None:
-                pct = _pct_from(px, prev)
-            for orig in rev.get(ysym, [ysym]):
-                if orig in misses:
-                    _accept(orig, px, pct, prev, source=q.get("source") or "yahoo-chart")
-        misses = [s for s in misses if s not in result or result[s].get("price") is None]
-    except Exception as e:
-        print(f"[batch_quotes] market_data failed: {e!s:.140}", flush=True)
+    # ── 1) Same path as /api/quote/{ticker}: yfinance fast_info (correct prev) ─
+    # Parallelized; this is what the report header uses and matches Yahoo Finance.
+    if misses and _YFINANCE_OK:
+        try:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            def _snap_one(orig: str):
+                ysym = _resolve_ticker_alias(orig)
+                try:
+                    snap = analyst.fetch_market_snapshot(ysym) or {}
+                    return orig, snap
+                except Exception as e:
+                    return orig, {"error": str(e)[:80]}
 
-    # ── 2) Yahoo chart HTTP — last / previousClose (avoids multi-ticker mixups) ─
+            with ThreadPoolExecutor(max_workers=min(12, max(2, len(misses)))) as pool:
+                futs = {pool.submit(_snap_one, o): o for o in misses}
+                for fut in as_completed(futs, timeout=14):
+                    try:
+                        orig, snap = fut.result()
+                    except Exception:
+                        continue
+                    px = snap.get("price")
+                    prev = snap.get("previous_close")
+                    pct = snap.get("pct_change")
+                    if pct is None:
+                        pct = _pct_from(px, prev)
+                    if px is not None:
+                        _accept(orig, px, pct, prev,
+                                source=snap.get("source") or "fast_info")
+            misses = [s for s in misses if s not in result or result[s].get("price") is None]
+        except Exception as e:
+            print(f"[batch_quotes] fast_info batch failed: {e!s:.140}", flush=True)
+
+    # ── 2) market_data Yahoo chart / Tiingo (fixed prev-close priority) ───────
+    if misses:
+        try:
+            import market_data as _md
+            ymap = {orig: _resolve_ticker_alias(orig) for orig in misses}
+            rev: dict = {}
+            for orig, ysym in ymap.items():
+                rev.setdefault(ysym, []).append(orig)
+            mdq = _md.get_quotes(list(rev.keys())) or {}
+            for ysym, q in mdq.items():
+                px = q.get("price")
+                prev = q.get("prev_close")
+                pct = q.get("pct_change")
+                if pct is None:
+                    pct = _pct_from(px, prev)
+                for orig in rev.get(ysym, [ysym]):
+                    if orig in misses:
+                        _accept(orig, px, pct, prev, source=q.get("source") or "yahoo-chart")
+            misses = [s for s in misses if s not in result or result[s].get("price") is None]
+        except Exception as e:
+            print(f"[batch_quotes] market_data failed: {e!s:.140}", flush=True)
+
+    # ── 3) Yahoo chart HTTP fallback ──────────────────────────────────────────
     if misses:
         try:
             import urllib.request as _urlreq
@@ -10719,8 +10761,13 @@ def batch_quotes(tickers: str = ""):
                         still.append(orig)
                         continue
                     meta = res0.get("meta") or {}
-                    px = meta.get("regularMarketPrice") or meta.get("previousClose")
-                    prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+                    px = (meta.get("regularMarketPrice")
+                          or meta.get("postMarketPrice")
+                          or meta.get("preMarketPrice"))
+                    # Official prev close first — chartPreviousClose is often wrong
+                    prev = (meta.get("previousClose")
+                            or meta.get("regularMarketPreviousClose")
+                            or meta.get("chartPreviousClose"))
                     if px is None:
                         closes = ((res0.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
                         closes = [c for c in closes if c is not None]
@@ -10738,7 +10785,7 @@ def batch_quotes(tickers: str = ""):
         except Exception as e:
             print(f"[batch_quotes] yahoo-chart path failed: {e!s:.120}", flush=True)
 
-    # ── 3) yfinance batch (safe multi-index) ──────────────────────────────────
+    # ── 4) yfinance download (last resort for multi) ──────────────────────────
     if misses and _YFINANCE_OK:
         ymap = {}
         yahoo_syms = []
@@ -10785,7 +10832,7 @@ def batch_quotes(tickers: str = ""):
         except Exception as _e:
             print(f"[batch_quotes] yf.download failed: {_e}", flush=True)
 
-    # ── 4) Tiingo ─────────────────────────────────────────────────────────────
+    # ── 5) Tiingo ─────────────────────────────────────────────────────────────
     if misses:
         try:
             tiingo_data = _tiingo_batch(misses) or {}
@@ -10797,7 +10844,7 @@ def batch_quotes(tickers: str = ""):
         except Exception as e:
             print(f"[batch_quotes] tiingo failed: {e!s:.120}", flush=True)
 
-    # ── 5) Fresh store (≤90s) then any-age store ──────────────────────────────
+    # ── 6) Fresh store (≤90s) then any-age store ──────────────────────────────
     if misses:
         try:
             db_fn = globals().get("_db_quotes")
