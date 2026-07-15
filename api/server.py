@@ -23330,8 +23330,24 @@ def _fetch_api_ninjas_transcript(ticker: str, year: int, quarter: int) -> dict:
 _CALL_SOURCE = (os.environ.get("CALL_TRANSCRIPT_SOURCE", "").strip().lower() or "cascade")
 
 
+def _redact_secrets(s: str) -> str:
+    """Strip API keys / long tokens from errors shown in the UI."""
+    s = str(s or "")
+    s = re.sub(r"(apikey=)[^&\s\"']+", r"\1***", s, flags=re.I)
+    s = re.sub(r"(api[_-]?key[\"']?\s*[:=]\s*[\"']?)[^\"'\s&]+",
+               r"\1***", s, flags=re.I)
+    s = re.sub(r"(API key as )\S+", r"\1***", s, flags=re.I)
+    s = re.sub(r"(detected your API key as )\S+", r"\1***", s, flags=re.I)
+    # Long alnum tokens that look like keys (keep short tickers)
+    s = re.sub(r"\b[A-Z0-9]{16,}\b", "***", s)
+    return s[:300]
+
+
 def _http_get_text(url: str, timeout: int = 28, headers: dict | None = None) -> tuple[int, str]:
-    """Simple GET → (status, text). status -1 on network error."""
+    """Simple GET → (status, text). status -1 on network error.
+
+    Always returns exactly 2 values (never raises).
+    """
     import requests
     h = {
         "User-Agent": (
@@ -23344,9 +23360,16 @@ def _http_get_text(url: str, timeout: int = 28, headers: dict | None = None) -> 
         h.update(headers)
     try:
         r = requests.get(url, headers=h, timeout=timeout)
-        return r.status_code, r.text or ""
+        code = int(getattr(r, "status_code", 0) or 0)
+        text = getattr(r, "text", None)
+        if text is None:
+            try:
+                text = (r.content or b"").decode("utf-8", "replace")
+            except Exception:
+                text = ""
+        return code, (text or "")
     except Exception as e:
-        return -1, str(e)[:200]
+        return -1, _redact_secrets(str(e)[:200])
 
 
 def _html_to_paragraphs(html: str) -> list[str]:
@@ -23491,9 +23514,9 @@ def _estimate_call_date_window(ticker: str, year: int, quarter: int) -> list:
 def _discover_fool_transcript_urls(ticker: str, year: int, quarter: int) -> list[str]:
     """Find Motley Fool transcript URLs without paid APIs.
 
-    Strategy:
-      1) DuckDuckGo HTML search (when not blocked)
-      2) Construct URLs from company slug + earnings-date window and probe
+    Strategy (search engines are often blocked from cloud IPs):
+      1) Construct URLs from company slug + earnings-date window and probe
+      2) Optional DuckDuckGo HTML search as a secondary hint
     """
     from urllib.parse import quote, unquote
     tk = (ticker or "").upper().strip()
@@ -23503,55 +23526,43 @@ def _discover_fool_transcript_urls(ticker: str, year: int, quarter: int) -> list
     seen: set[str] = set()
 
     def _push(u: str) -> None:
-        u = (u or "").split("&")[0].rstrip(")/'\"")
+        if not isinstance(u, str):
+            return
+        u = u.split("&")[0].rstrip(")/'\"")
         if u and u not in seen and "fool.com/earnings/call-transcripts/" in u:
             seen.add(u)
             found.append(u)
 
-    # ── 1) Search engines (best when available) ──
-    queries = [
-        f"site:fool.com/earnings/call-transcripts {tk} Q{qn} {yr} earnings call transcript",
-        f"site:fool.com {tk} Q{qn} {yr} earnings call transcript",
-    ]
-    search_urls = [
-        "https://html.duckduckgo.com/html/?q=",
-        "https://duckduckgo.com/html/?q=",
-    ]
-    for q in queries:
-        for base in search_urls:
-            status, body = _http_get_text(base + quote(q), timeout=15)
-            if status != 200 or not body:
-                continue
-            for raw in re.findall(r"uddg=([^&\"']+)", body):
-                try:
-                    _push(unquote(raw))
-                except Exception:
-                    pass
-            for href in re.findall(
-                    r"https?://(?:www\.)?fool\.com/earnings/call-transcripts/"
-                    r"\d{4}/\d{2}/\d{2}/[a-z0-9\-]+/?",
-                    body, flags=re.I):
-                if tk.lower() in href.lower() or str(yr) in href:
-                    _push(href)
-            for rel in re.findall(
-                    r"/earnings/call-transcripts/\d{4}/\d{2}/\d{2}/[a-z0-9\-]+/?",
-                    body, flags=re.I):
-                if tk.lower() in rel.lower() or str(yr) in rel:
-                    _push("https://www.fool.com" + rel)
-            if found:
-                return found[:6]
-
-    # ── 2) Direct URL construction + probe (works when search is blocked) ──
+    # ── 1) Direct URL construction + probe (primary — works when DDG blocked) ──
     company_name = None
     try:
         import yfinance as yf
         info = yf.Ticker(tk).info or {}
-        company_name = info.get("shortName") or info.get("longName")
+        if isinstance(info, dict):
+            company_name = info.get("shortName") or info.get("longName")
     except Exception:
         company_name = None
-    slugs = _fool_slug_candidates(tk, yr, qn, company_name)
-    date_window = _estimate_call_date_window(tk, yr, qn)
-    # Probe constructed URLs — stop at first live hit per slug family
+    try:
+        slugs = _fool_slug_candidates(tk, yr, qn, company_name)
+    except Exception as e:
+        print(f"[fool] slug candidates: {e!s:.100}", flush=True)
+        slugs = [f"{tk.lower()}-q{qn}-{yr}-earnings-call-transcript"]
+    try:
+        date_window = _estimate_call_date_window(tk, yr, qn)
+    except Exception as e:
+        print(f"[fool] date window: {e!s:.100}", flush=True)
+        from datetime import date as _date, timedelta as _td
+        # Fall back to mid-quarter window
+        if qn == 1:
+            c = _date(yr, 4, 15)
+        elif qn == 2:
+            c = _date(yr, 7, 15)
+        elif qn == 3:
+            c = _date(yr, 10, 15)
+        else:
+            c = _date(yr + 1, 1, 25)
+        date_window = [c + _td(days=d) for d in range(-10, 14)]
+
     import requests as _req
     sess = _req.Session()
     sess.headers.update({
@@ -23559,9 +23570,10 @@ def _discover_fool_transcript_urls(ticker: str, year: int, quarter: int) -> list
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         ),
+        "Accept": "text/html,application/xhtml+xml",
     })
     probes = 0
-    max_probes = 48
+    max_probes = 36
     for d in date_window:
         if found or probes >= max_probes:
             break
@@ -23572,18 +23584,51 @@ def _discover_fool_transcript_urls(ticker: str, year: int, quarter: int) -> list
                    f"{d.year}/{d.month:02d}/{d.day:02d}/{slug}/")
             probes += 1
             try:
-                r = sess.get(url, timeout=8, allow_redirects=True)
-                if r.status_code == 200 and len(r.text or "") > 5000:
-                    # Confirm it's a transcript page, not a soft-404 shell
-                    if "earnings call transcript" in (r.text or "")[:8000].lower() \
-                            or re.search(r"Operator:", r.text or ""):
+                r = sess.get(url, timeout=10, allow_redirects=True)
+                code = int(getattr(r, "status_code", 0) or 0)
+                body = getattr(r, "text", "") or ""
+                if code == 200 and len(body) > 5000:
+                    head = body[:12000].lower()
+                    if ("earnings call transcript" in head
+                            or "operator:" in head
+                            or re.search(r"[A-Z][a-z]+ [A-Z][a-z]+:\s", body[:20000])):
                         _push(url)
-                        break  # next date not needed for this slug set
+                        break
             except Exception:
                 continue
     if found:
         print(f"📞 [fool] {tk} {yr}Q{qn}: discovered via probe ({probes} tries)",
               flush=True)
+        return found[:6]
+
+    # ── 2) Search engines (secondary — often blocked from Railway) ──
+    queries = [
+        f"site:fool.com/earnings/call-transcripts {tk} Q{qn} {yr} earnings call transcript",
+        f"site:fool.com {tk} Q{qn} {yr} earnings call transcript",
+    ]
+    for q in queries:
+        try:
+            got = _http_get_text(
+                "https://html.duckduckgo.com/html/?q=" + quote(q), timeout=12)
+            status = got[0] if isinstance(got, (tuple, list)) and len(got) >= 1 else -1
+            body = got[1] if isinstance(got, (tuple, list)) and len(got) >= 2 else ""
+        except Exception:
+            continue
+        if status != 200 or not body:
+            continue
+        for raw in re.findall(r"uddg=([^&\"']+)", body):
+            try:
+                _push(unquote(raw if isinstance(raw, str) else raw[0]))
+            except Exception:
+                pass
+        for href in re.findall(
+                r"https?://(?:www\.)?fool\.com/earnings/call-transcripts/"
+                r"\d{4}/\d{2}/\d{2}/[a-z0-9\-]+/?",
+                body, flags=re.I):
+            if tk.lower() in href.lower() or str(yr) in href:
+                _push(href)
+        if found:
+            break
     return found[:6]
 
 
@@ -23642,34 +23687,70 @@ def _fetch_motley_fool_transcript(ticker: str, year: int, quarter: int) -> dict:
     day or within 1–2 days of the call; very fresh prints may lag.
     """
     tk = (ticker or "").upper().strip()
-    urls = _discover_fool_transcript_urls(tk, year, quarter)
+    try:
+        urls = _discover_fool_transcript_urls(tk, year, quarter)
+    except Exception as e:
+        return {"ok": False, "status": -1,
+                "error": _redact_secrets(f"discover failed: {e!s:.160}"),
+                "source": "motley_fool"}
     if not urls:
         return {"ok": False, "status": 404,
-                "error": "no Motley Fool URL found via search",
+                "error": "no Motley Fool URL found (probe + search)",
                 "source": "motley_fool"}
     errors = []
     for url in urls:
-        status, html = _http_get_text(url, timeout=30)
-        if status != 200:
-            errors.append(f"{url[-60:]}:{status}")
+        try:
+            got = _http_get_text(url, timeout=30)
+            if not isinstance(got, (tuple, list)) or len(got) < 2:
+                errors.append(f"bad http response type for {url[-40:]}")
+                continue
+            status, html = int(got[0]), got[1]
+        except Exception as e:
+            errors.append(_redact_secrets(str(e)[:80]))
             continue
-        # URL should look like this ticker when possible
-        if tk.lower() not in url.lower() and f"-{tk.lower()}-" not in url.lower():
-            # still try — search may return close matches
-            pass
+        if status != 200:
+            errors.append(f"{url[-50:]}:{status}")
+            continue
         res = _parse_fool_transcript_page(html, tk, year, quarter)
         if res.get("ok"):
             res["url"] = url
             return res
         errors.append(res.get("error") or "parse fail")
     return {"ok": False, "status": 200,
-            "error": "fool fetch failed: " + "; ".join(errors)[:220],
+            "error": "fool fetch failed: " + _redact_secrets("; ".join(errors)[:220]),
             "source": "motley_fool"}
 
 
+def _fmp_row_to_transcript(row) -> tuple[str, str | None]:
+    """Normalize FMP transcript JSON → (text, date)."""
+    if isinstance(row, list):
+        # list of speaker segments
+        parts = []
+        for seg in row:
+            if isinstance(seg, dict):
+                sp = seg.get("speaker") or seg.get("name") or ""
+                ct = seg.get("content") or seg.get("text") or seg.get("speech") or ""
+                parts.append(f"{sp}: {ct}".strip() if sp else str(ct))
+            else:
+                parts.append(str(seg))
+        return "\n".join(p for p in parts if p).strip(), None
+    if not isinstance(row, dict):
+        return "", None
+    txt = (row.get("content") or row.get("transcript") or row.get("text") or "")
+    if isinstance(txt, list):
+        txt, _ = _fmp_row_to_transcript(txt)
+    else:
+        txt = (txt or "").strip()
+    date = row.get("date") or row.get("publishedDate") or row.get("fiscalDateEnding")
+    return txt, (str(date)[:10] if date else None)
+
+
 def _fetch_fmp_transcript(ticker: str, year: int, quarter: int) -> dict:
-    """Financial Modeling Prep earnings transcript (needs FMP_API_KEY). Free
-    tier is limited but covers many large-caps through recent quarters."""
+    """Financial Modeling Prep earnings transcript (needs FMP_API_KEY).
+
+    Uses only /stable/ endpoints (v3/v4 return Legacy 403). Free tier may
+    still gate transcripts — we surface a clear upgrade message if so.
+    """
     key = (os.environ.get("FMP_API_KEY")
            or os.environ.get("FINANCIAL_MODELING_PREP_KEY")
            or os.environ.get("FMP_KEY")
@@ -23678,62 +23759,58 @@ def _fetch_fmp_transcript(ticker: str, year: int, quarter: int) -> dict:
         return {"ok": False, "status": 0, "error": "FMP_API_KEY not set",
                 "source": "fmp"}
     tk = (ticker or "").upper().strip()
+    y, q = int(year), int(quarter)
+    # Stable only — legacy /api/v3 and /api/v4 return 403 Legacy Endpoint
     urls = [
         (f"https://financialmodelingprep.com/stable/earning-call-transcript"
-         f"?symbol={tk}&year={int(year)}&quarter={int(quarter)}&apikey={key}"),
-        (f"https://financialmodelingprep.com/api/v3/earning_call_transcript/{tk}"
-         f"?year={int(year)}&quarter={int(quarter)}&apikey={key}"),
-        (f"https://financialmodelingprep.com/api/v4/earning_call_transcript"
-         f"?symbol={tk}&year={int(year)}&quarter={int(quarter)}&apikey={key}"),
+         f"?symbol={tk}&year={y}&quarter={q}&apikey={key}"),
+        # Some accounts still use the plural path
+        (f"https://financialmodelingprep.com/stable/earning-call-transcripts"
+         f"?symbol={tk}&year={y}&quarter={q}&apikey={key}"),
     ]
     import requests
     last_err = "no response"
     for url in urls:
         try:
-            r = requests.get(url, timeout=25)
+            r = requests.get(url, timeout=25,
+                             headers={"User-Agent": "DGA-Capital-GP/1.0"})
         except Exception as e:
-            last_err = str(e)[:120]
+            last_err = _redact_secrets(str(e)[:120])
             continue
+        body = (r.text or "")[:400]
         if r.status_code != 200:
-            last_err = f"HTTP {r.status_code}: {(r.text or '')[:120]}"
+            last_err = _redact_secrets(f"HTTP {r.status_code}: {body[:160]}")
+            # Friendly message for plan gating
+            if r.status_code in (401, 403) or "Legacy" in body or "Premium" in body \
+                    or "upgrade" in body.lower() or "not available" in body.lower():
+                last_err = (
+                    f"HTTP {r.status_code}: FMP rejected transcript request — "
+                    "key is set but this endpoint may require a paid FMP plan "
+                    f"({_redact_secrets(body[:100])})"
+                )
             continue
         try:
             j = r.json()
         except Exception:
-            last_err = "non-JSON"
+            last_err = "non-JSON body"
             continue
-        row = j[0] if isinstance(j, list) and j else (j if isinstance(j, dict) else {})
-        if isinstance(row, dict) and row.get("Error Message"):
-            last_err = str(row.get("Error Message"))[:160]
+        # Error object
+        if isinstance(j, dict) and (j.get("Error Message") or j.get("error")):
+            last_err = _redact_secrets(
+                str(j.get("Error Message") or j.get("error"))[:160])
             continue
-        # FMP shapes: content / transcript  or list of {speaker, content}
-        txt = ""
-        if isinstance(row, dict):
-            txt = (row.get("content") or row.get("transcript") or "").strip()
-            if not txt and isinstance(row.get("content"), list):
-                parts = []
-                for seg in row["content"]:
-                    if isinstance(seg, dict):
-                        sp = seg.get("speaker") or ""
-                        ct = seg.get("content") or seg.get("text") or ""
-                        parts.append(f"{sp}: {ct}".strip() if sp else ct)
-                    else:
-                        parts.append(str(seg))
-                txt = "\n".join(p for p in parts if p).strip()
-        if not txt or len(txt) < 400:
-            last_err = f"empty/short ({len(txt)} chars)"
-            continue
-        date = None
-        if isinstance(row, dict):
-            date = (row.get("date") or row.get("publishedDate") or None)
-            if date:
-                date = str(date)[:10]
-        return {
-            "ok": True, "status": 200, "transcript": txt, "date": date,
-            "quarter": f"{int(year)}Q{int(quarter)}", "source": "fmp",
-        }
-    return {"ok": False, "status": 200, "error": f"fmp: {last_err}",
-            "source": "fmp"}
+        # List of transcripts or single object
+        candidates = j if isinstance(j, list) else [j]
+        for row in candidates:
+            txt, date = _fmp_row_to_transcript(row)
+            if txt and len(txt) >= 400:
+                return {
+                    "ok": True, "status": 200, "transcript": txt, "date": date,
+                    "quarter": f"{y}Q{q}", "source": "fmp",
+                }
+        last_err = f"empty/short payload ({type(j).__name__})"
+    return {"ok": False, "status": 200,
+            "error": f"fmp: {_redact_secrets(last_err)}", "source": "fmp"}
 
 
 def _fetch_alphavantage_transcript(ticker: str, year: int, quarter: int) -> dict:
@@ -23755,21 +23832,29 @@ def _fetch_alphavantage_transcript(ticker: str, year: int, quarter: int) -> dict
     try:
         r = requests.get(url, timeout=30)
     except Exception as e:
-        return {"ok": False, "status": -1, "error": str(e)[:160],
+        return {"ok": False, "status": -1,
+                "error": _redact_secrets(str(e)[:160]),
                 "source": "alpha_vantage"}
     if r.status_code != 200:
         return {"ok": False, "status": r.status_code,
-                "error": (r.text or "")[:200], "source": "alpha_vantage"}
+                "error": _redact_secrets((r.text or "")[:200]),
+                "source": "alpha_vantage"}
     try:
         j = r.json()
     except Exception:
         return {"ok": False, "status": 200, "error": "non-JSON",
                 "source": "alpha_vantage"}
     if j.get("Information") or j.get("Note") or j.get("Error Message"):
-        return {"ok": False, "status": 200,
-                "error": str(j.get("Information") or j.get("Note")
-                             or j.get("Error Message"))[:200],
-                "source": "alpha_vantage"}
+        raw = str(j.get("Information") or j.get("Note")
+                  or j.get("Error Message") or "")
+        # Rate-limit is still a valid key
+        if "rate limit" in raw.lower() or "25 requests" in raw.lower():
+            err = ("Alpha Vantage rate limit hit (free ≈25 req/day). "
+                   "Key is valid — wait and retry, or upgrade AV plan.")
+        else:
+            err = _redact_secrets(raw)[:200]
+        return {"ok": False, "status": 200, "error": err,
+                "source": "alpha_vantage", "key_valid": True}
     # transcript may be string or list of {speaker, title, content}
     tr = j.get("transcript") or j.get("content") or ""
     if isinstance(tr, list):
@@ -23823,25 +23908,28 @@ def _fetch_call_transcript_cascade(ticker: str, year: int, quarter: int,
             return res
         attempts.append({
             "source": name,
-            "error": (res or {}).get("error") or "miss",
+            "error": _redact_secrets((res or {}).get("error") or "miss"),
             "status": (res or {}).get("status"),
         })
     if allow_grok:
         try:
             res = _fetch_grok_call_transcript_for_quarter(ticker, year, quarter)
         except Exception as e:
-            res = {"ok": False, "status": -1, "error": f"grok: {e!s:.140}"}
+            res = {"ok": False, "status": -1,
+                   "error": _redact_secrets(f"grok: {e!s:.140}")}
         if res.get("ok"):
             res["source"] = "grok"
             res["attempts"] = attempts
             return res
         attempts.append({
             "source": "grok",
-            "error": res.get("error") or "miss",
+            "error": _redact_secrets(res.get("error") or "miss"),
             "status": res.get("status"),
         })
         res["attempts"] = attempts
         res.setdefault("source", "grok")
+        if res.get("error"):
+            res["error"] = _redact_secrets(res["error"])
         return res
     return {
         "ok": False, "status": 404,
@@ -25428,21 +25516,22 @@ def transcripts_calls_probe(request: Request, ticker: str = "AAPL",
             "transcript_chars": len(res.get("transcript") or "") if res.get("ok") else 0,
             "date": res.get("date"),
             "quarter": res.get("quarter") or qtag,
-            "error": None if res.get("ok") else (res.get("error") or "miss")[:220],
+            "error": (None if res.get("ok")
+                      else _redact_secrets((res.get("error") or "miss")[:220])),
             "ms": ms,
             "url": res.get("url"),
         }
         steps.append(step)
         if res.get("ok") and winner is None:
             winner = name
-            # Still run remaining free steps? No — show full track: keep testing
-            # all free sources so user sees which keys work independently.
+            # Keep testing remaining free sources so the key-status track is complete.
     if int(allow_grok or 0) and keys.get("grok"):
         t0 = time.time()
         try:
             res = _fetch_grok_call_transcript_for_quarter(tk, y, q)
         except Exception as e:
-            res = {"ok": False, "status": -1, "error": str(e)[:200]}
+            res = {"ok": False, "status": -1,
+                   "error": _redact_secrets(str(e)[:200])}
         steps.append({
             "source": "grok",
             "key_configured": True,
@@ -25451,7 +25540,8 @@ def transcripts_calls_probe(request: Request, ticker: str = "AAPL",
             "transcript_chars": len(res.get("transcript") or "") if res.get("ok") else 0,
             "date": res.get("date"),
             "quarter": res.get("quarter") or qtag,
-            "error": None if res.get("ok") else (res.get("error") or "miss")[:220],
+            "error": (None if res.get("ok")
+                      else _redact_secrets((res.get("error") or "miss")[:220])),
             "ms": int((time.time() - t0) * 1000),
         })
         if res.get("ok") and winner is None:
