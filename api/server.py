@@ -7098,33 +7098,83 @@ _STOCK_INFO_CACHE: dict[str, tuple[float, dict]] = {}
 
 @app.get("/api/stock-info/{ticker}")
 def get_stock_info(ticker: str):
-    """FREE (zero-LLM) one-stop stock snapshot for the positions expander:
-    quote + meta + 52-week stats + latest-fiscal-year fundamentals + derived
-    valuation ratios + saved-report pointer. Everything comes from the local
-    market-data store and company_financials — no external calls, no tokens.
-    Cached 120s per ticker."""
+    """FREE (zero-LLM) one-stop stock snapshot for the positions expander /
+    Today's Movers click / top-bar peek:
+    live quote (Yahoo chart bar prev-close) + local meta/financials/report.
+    Quote is always live — market_quotes store can hold chartPreviousClose
+    phantoms and must not override the card/watchlist day %. Cached 45s."""
     tk = (ticker or "").strip().upper()
     if not tk or len(tk) > 12:
         raise HTTPException(status_code=422, detail="Invalid ticker")
     hit = _STOCK_INFO_CACHE.get(tk)
-    if hit and time.time() - hit[0] < 120:
+    if hit and time.time() - hit[0] < 45:
         return hit[1]
     out: dict = {"ticker": tk}
+    # ── Always live quote first (same path as watchlist / report hero) ─────
+    # Do this before DB so click-through prices match Today's Movers card.
+    alias = _resolve_ticker_alias(tk)
+    try:
+        import market_data as _md
+        mq = (_md.get_quotes([alias]) or {}).get(alias) or (_md.get_quotes([tk]) or {}).get(tk)
+        if mq and mq.get("price") is not None:
+            out["quote"] = {
+                "price": mq.get("price"),
+                "prev_close": mq.get("prev_close"),
+                "pct_change": mq.get("pct_change"),
+                "realized_vol": None,
+                "as_of": _pacific_time_str(),
+                "live": True,
+                "source": mq.get("source") or "yahoo-chart",
+            }
+            out["live_source"] = mq.get("source") or "yahoo-chart"
+    except Exception as e:
+        print(f"[stock-info] live quote {tk}: {e!s:.120}", flush=True)
+    if not (out.get("quote") or {}).get("price"):
+        try:
+            bq = batch_quotes(tk) or {}
+            q = bq.get(tk) or bq.get(alias) or {}
+            if q.get("price") is not None:
+                out["quote"] = {
+                    "price": q.get("price"),
+                    "prev_close": q.get("prev_close") or q.get("previous_close"),
+                    "pct_change": q.get("pct_change"),
+                    "as_of": _pacific_time_str(),
+                    "live": True,
+                    "source": q.get("source") or "batch_quotes",
+                }
+                out["live_source"] = q.get("source") or "batch_quotes"
+        except Exception as e:
+            print(f"[stock-info] batch_quotes {tk}: {e!s:.120}", flush=True)
+
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        # Still return live quote even without DB
+        if "saved_report" not in out:
+            out["saved_report"] = {"exists": False}
+        out["free"] = True
+        out["token_cost"] = 0
+        if out.get("quote"):
+            _STOCK_INFO_CACHE[tk] = (time.time(), out)
         return out
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            alias = _resolve_ticker_alias(tk)
+            # Store only fills realized_vol / as_of if live quote already set;
+            # never overwrite a live price with a stale store row.
             cur.execute("SELECT price, prev_close, pct_change, realized_vol, updated_at "
                         "FROM market_quotes WHERE symbol IN (%s, %s) "
                         "ORDER BY updated_at DESC LIMIT 1", (tk, alias))
             q = cur.fetchone()
             if q:
-                out["quote"] = {
-                    "price": q["price"], "prev_close": q["prev_close"],
-                    "pct_change": q["pct_change"], "realized_vol": q["realized_vol"],
-                    "as_of": q["updated_at"].isoformat() if q["updated_at"] else None,
-                }
+                if out.get("quote"):
+                    if q.get("realized_vol") is not None:
+                        out["quote"]["realized_vol"] = q["realized_vol"]
+                else:
+                    out["quote"] = {
+                        "price": q["price"], "prev_close": q["prev_close"],
+                        "pct_change": q["pct_change"], "realized_vol": q["realized_vol"],
+                        "as_of": q["updated_at"].isoformat() if q["updated_at"] else None,
+                        "live": False,
+                        "source": "store",
+                    }
             cur.execute("SELECT name, sector, industry, analyst_target "
                         "FROM security_meta WHERE symbol IN (%s, %s) LIMIT 1", (tk, alias))
             m = cur.fetchone()
@@ -7209,14 +7259,13 @@ def get_stock_info(ticker: str):
     except Exception as e:
         out["warning"] = str(e)[:160]
 
-    # Free live enrichment (Yahoo via existing helpers) when local store is thin.
-    # Still zero LLM tokens — used by top-bar ticker lookup for any symbol.
+    # Meta / range enrichment when local store is thin (still zero LLM).
     need_quote = not (out.get("quote") or {}).get("price")
     need_meta = not (out.get("meta") or {}).get("name")
     if need_quote or need_meta:
         try:
             if need_quote:
-                snap = analyst.fetch_market_snapshot(_resolve_ticker_alias(tk)) or {}
+                snap = analyst.fetch_market_snapshot(alias) or {}
                 if snap.get("price") is not None:
                     out["quote"] = {
                         "price": snap.get("price"),
@@ -7225,8 +7274,9 @@ def get_stock_info(ticker: str):
                         "realized_vol": (out.get("quote") or {}).get("realized_vol"),
                         "as_of": _pacific_time_str(),
                         "live": True,
+                        "source": snap.get("source") or "fast_info",
                     }
-                    out["live_source"] = "yahoo"
+                    out["live_source"] = snap.get("source") or "fast_info"
             if need_meta and yf is not None:
                 info = _builder_call_timeout(
                     lambda: getattr(yf.Ticker(_resolve_ticker_alias(tk)), "info", {}) or {},
@@ -7572,6 +7622,26 @@ def market_movers(request: Request, limit: int = 12, min_price: float = 3.0,
                     "stale": True, "error": f"{e!s:.160}",
                     "movers": (c["data"] or [])[: int(limit)]}
         rows.sort(key=lambda m: abs(m.get("pct_change") or 0.0), reverse=True)
+        # Re-price top movers with the same bar-based quote path as stock-info
+        # click-through so card price/day% === peek modal (screener alone can
+        # lag a few seconds; never diverge on prev-close math).
+        try:
+            top_n = max(int(limit) * 2, 24)
+            tops = [r.get("ticker") for r in rows[:top_n] if r.get("ticker")]
+            if tops:
+                qmap = _md.get_quotes(tops) or {}
+                for r in rows[:top_n]:
+                    q = qmap.get(r.get("ticker") or "") or {}
+                    if q.get("price") is not None:
+                        r["price"] = float(q["price"])
+                    if q.get("pct_change") is not None:
+                        r["pct_change"] = round(float(q["pct_change"]), 4)
+                    if q.get("prev_close") is not None:
+                        r["prev_close"] = float(q["prev_close"])
+                    r["quote_source"] = q.get("source") or r.get("screener") or "yahoo"
+                rows.sort(key=lambda m: abs(m.get("pct_change") or 0.0), reverse=True)
+        except Exception as e:
+            print(f"[market/movers] re-price failed: {e!s:.120}", flush=True)
         # Report the session Yahoo actually printed (pre-open = last close)
         dated = [m.get("session_date") for m in rows if m.get("session_date")]
         data_sess = max(dated) if dated else session_date
