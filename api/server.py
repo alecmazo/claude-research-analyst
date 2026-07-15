@@ -23460,10 +23460,76 @@ def _already_indexed(ticker: str, qtag: str) -> bool:
         return False
 
 
+def _call_index_universe() -> list[str]:
+    """All tickers we should cover: saved reports ∪ (optional) watchlist names.
+    Ordered A–Z for stable UI; callers re-prioritize missing first."""
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(tk: str) -> None:
+        tk = (tk or "").upper().strip().rstrip("*")
+        if not tk or tk in seen:
+            return
+        if not re.fullmatch(r"[A-Z0-9.\-]+", tk):
+            return
+        if tk in ("SPAXX", "FDRXX", "SPRXX", "VMFXX", "USD", "CASH", "SPY", "IWM", "QQQ"):
+            return  # cash / broad ETFs — no useful single-name call
+        seen.add(tk)
+        out.append(tk)
+
+    try:
+        if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT ticker FROM analyst_reports
+                     WHERE archived IS NOT TRUE AND ticker IS NOT NULL
+                     ORDER BY ticker
+                """)
+                for row in cur.fetchall() or []:
+                    _add(row[0] if not isinstance(row, dict) else row.get("ticker"))
+    except Exception as e:
+        print(f"[calls] universe reports: {e!s:.100}", flush=True)
+    return out
+
+
+def _call_indexed_tickers() -> set[str]:
+    try:
+        if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+            return set()
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT ticker FROM call_chunks")
+            return {(r[0] or "").upper() for r in (cur.fetchall() or []) if r and r[0]}
+    except Exception:
+        return set()
+
+
+def _estimate_call_sync_cost(n_names: int, max_quarters: int, n_already: int = 0) -> dict:
+    """Rough USD band for Grok live-search call sync.
+
+    Already-indexed quarters are free (skipped). Worst case ≈ max_quarters
+    live searches per name that still needs data; typical is 1–2 new quarters.
+    """
+    # Live search $0.025 + ~8k in / 3k out tokens on grok-4.5 ≈ $0.03–0.06/call
+    per_search_lo, per_search_hi = 0.03, 0.08
+    # Names that need work
+    need = max(0, int(n_names) - int(n_already or 0))
+    # Assume ~1.2 successful new-quarter fetches avg + ~0.8 empty probes
+    fetches = need * max(1, min(int(max_quarters or 1), 4)) * 0.9
+    return {
+        "names": int(n_names),
+        "names_needing_work": need,
+        "est_grok_calls": round(fetches, 1),
+        "est_cost_usd_low": round(fetches * per_search_lo, 2),
+        "est_cost_usd_high": round(fetches * per_search_hi, 2),
+        "note": "Already-indexed quarters are free. HF Backfill is $0.",
+        "per_call_usd": [per_search_lo, per_search_hi],
+    }
+
+
 def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4) -> dict:
     """Index recent earnings calls for one ticker. Returns
-    {indexed, found:[quarters], errors:[str]}. Source defaults to Grok
-    live-search (API Ninjas transcripts are premium-gated)."""
+    {indexed, found:[quarters], errors:[str], grok_calls:int}. Source defaults
+    to Grok live-search (API Ninjas transcripts are premium-gated)."""
     if _CALL_SOURCE == "grok":
         # Walk recent calendar quarters newest-first, fetching each MISSING one
         # via Grok live-search. This fills the gap between the Hugging Face
@@ -23472,7 +23538,7 @@ def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4) -> dict:
         # stayed perpetually missing. Already-indexed quarters are skipped for
         # free (no Grok call), so re-running sync just extends forward cheaply.
         indexed, found, errors = 0, [], []
-        seen, new_count, consec_miss = set(), 0, 0
+        seen, new_count, consec_miss, grok_calls = set(), 0, 0, 0
         for (y, q) in _recent_quarters(max_quarters + 4):
             if new_count >= max_quarters:
                 break
@@ -23482,6 +23548,7 @@ def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4) -> dict:
                     found.append(qtag)
                 consec_miss = 0
                 continue
+            grok_calls += 1
             res = _fetch_grok_call_transcript_for_quarter(ticker, y, q)
             if not res.get("ok"):
                 # The current (not-yet-reported) quarter is an expected miss;
@@ -23506,7 +23573,8 @@ def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4) -> dict:
                 errors.append(f"{act}: {err}")
             else:
                 found.append(act); indexed += n; new_count += 1
-        return {"indexed": indexed, "found": found, "errors": errors}
+        return {"indexed": indexed, "found": found, "errors": errors,
+                "grok_calls": grok_calls}
 
     # ── API Ninjas path (premium) — multi-quarter walk-back ──
     from datetime import datetime as _dt
@@ -23564,18 +23632,29 @@ def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int) -> None:
     def _set(**kw):
         _call_sync_jobs[job_id] = {**(_call_sync_jobs.get(job_id) or {}), **kw,
                                     "updated_at": time.time()}
+    cost_est = _estimate_call_sync_cost(len(tickers), max_quarters)
     _set(stage="queued", status="running", label="Queued…", started_at=time.time(),
-         total=len(tickers), done=0, indexed=0)
+         total=len(tickers), done=0, indexed=0, grok_calls=0,
+         cost_usd=0.0, cost_est=cost_est)
     try:
         _ensure_transcripts_tables()
         total_indexed = 0
         names_with_calls = 0
+        grok_calls = 0
+        cost_usd = 0.0
         all_errors = []
+        # ~$0.05 mid-point per live-search call for running counter
+        per_call = 0.05
         for i, tk in enumerate(tickers):
-            _set(stage="syncing", label=f"📞 {tk} ({i+1}/{len(tickers)})…", done=i)
+            _set(stage="syncing",
+                 label=f"📞 {tk} ({i+1}/{len(tickers)}) · ~${cost_usd:.2f} spent…",
+                 done=i, grok_calls=grok_calls, cost_usd=round(cost_usd, 2))
             try:
                 r = _sync_one_ticker_calls(tk, max_quarters=max_quarters)
                 total_indexed += r.get("indexed", 0)
+                gc = int(r.get("grok_calls") or 0)
+                grok_calls += gc
+                cost_usd += gc * per_call
                 if r.get("found"):
                     names_with_calls += 1
                 for e in (r.get("errors") or [])[:2]:
@@ -23583,17 +23662,24 @@ def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int) -> None:
             except Exception as e:
                 all_errors.append(f"{tk}: {e!s:.100}")
                 print(f"⚠️ [call sync {tk}] {e!s:.150}", flush=True)
-            _set(indexed=total_indexed)
+            _set(indexed=total_indexed, grok_calls=grok_calls,
+                 cost_usd=round(cost_usd, 2))
         # Build an honest label: if nothing indexed, surface the dominant reason.
         if total_indexed > 0:
-            label = f"✓ Indexed {total_indexed} passages across {names_with_calls} names"
+            label = (f"✓ Indexed {total_indexed} passages across {names_with_calls} names"
+                     f" · ~${cost_usd:.2f} ({grok_calls} Grok searches)")
         else:
             src = "Grok" if _CALL_SOURCE == "grok" else "API Ninjas"
             reason = all_errors[0] if all_errors else f"no transcripts returned by {src}"
             label = f"⚠ Indexed 0 passages — {reason[:160]}"
+            if grok_calls:
+                label += f" · ~${cost_usd:.2f} spent"
         _set(stage="done", status="done", done=len(tickers), label=label,
+             grok_calls=grok_calls, cost_usd=round(cost_usd, 2),
              result={"tickers": tickers, "chunks_indexed": total_indexed,
                      "names_with_calls": names_with_calls,
+                     "grok_calls": grok_calls,
+                     "cost_usd_est": round(cost_usd, 2),
                      "errors": all_errors[:12]})
     except Exception as e:
         print(f"❌ [call sync {job_id}] {e!s:.300}", flush=True)
@@ -24268,8 +24354,13 @@ def transcripts_delete(transcript_id: str, request: Request):
 
 @app.post("/api/transcripts/calls/sync")
 def transcripts_calls_sync(req: Request, background_tasks: BackgroundTasks):
-    """Build/refresh the earnings-call RAG index. Body: {tickers?, max_quarters?}.
-    If tickers omitted, uses every ticker in Saved Reports."""
+    """Build/refresh the earnings-call RAG index via Grok live-search.
+
+    Body: {tickers?, max_quarters?, max_names?, missing_only?}.
+    Default universe = ALL saved-report tickers (not the old hard cap of 40).
+    Prioritizes names with zero coverage first to close the 52-vs-92 gap
+    cheaply. Already-indexed quarters are free (skipped).
+    """
     claims = _claims_or_401(req)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
@@ -24286,33 +24377,58 @@ def transcripts_calls_sync(req: Request, background_tasks: BackgroundTasks):
     except Exception:
         body = {}
     tickers = [t.upper().strip() for t in ((body or {}).get("tickers") or []) if t and t.strip()]
-    max_quarters = max(1, min(int((body or {}).get("max_quarters") or 4), 8))
+    # Default 2 quarters — enough to fill the HF gap without burning budget
+    max_quarters = max(1, min(int((body or {}).get("max_quarters") or 2), 6))
+    # Cap paid Grok names per run (user can re-run for the rest)
+    max_names = max(5, min(int((body or {}).get("max_names") or 40), 120))
+    missing_only = bool((body or {}).get("missing_only", True))
     if not tickers:
-        try:
-            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-                cur.execute("SELECT ticker FROM analyst_reports WHERE archived IS NOT TRUE ORDER BY ticker")
-                tickers = [r["ticker"].upper() for r in (cur.fetchall() or []) if r.get("ticker")]
-        except Exception:
-            tickers = []
-    tickers = tickers[:40]
-    if not tickers:
+        tickers = _call_index_universe()
+    # Prioritize: never-indexed first, then rest (stable alpha within groups)
+    covered = _call_indexed_tickers()
+    missing = [t for t in tickers if t not in covered]
+    have = [t for t in tickers if t in covered]
+    ordered = (missing + have) if missing_only else (missing + have)
+    if missing_only:
+        # Only burn Grok on gaps; re-run with missing_only=false to extend all
+        ordered = missing if missing else have[:max_names]
+    selected = ordered[:max_names]
+    deferred = ordered[max_names:]
+    if not selected:
         return JSONResponse({"ok": False, "error": "No tickers to sync."}, status_code=400)
+    cost_est = _estimate_call_sync_cost(
+        len(selected), max_quarters,
+        n_already=sum(1 for t in selected if t in covered))
     import uuid as _uuid
     job_id = "CALLSYNC_" + _uuid.uuid4().hex[:12]
     _call_sync_jobs[job_id] = {"stage": "queued", "status": "running", "label": "Queued…",
                                 "started_at": time.time(), "updated_at": time.time(),
-                                "total": len(tickers), "done": 0, "indexed": 0}
-    background_tasks.add_task(_run_call_sync, job_id, tickers, max_quarters)
-    print(f"📞 [call sync] queued {job_id}  {len(tickers)} tickers  q={max_quarters}", flush=True)
-    return {"ok": True, "job_id": job_id, "tickers": tickers}
+                                "total": len(selected), "done": 0, "indexed": 0,
+                                "grok_calls": 0, "cost_usd": 0.0, "cost_est": cost_est}
+    background_tasks.add_task(_run_call_sync, job_id, selected, max_quarters)
+    print(f"📞 [call sync] queued {job_id}  {len(selected)} tickers  q={max_quarters}  "
+          f"missing={len(missing)} deferred={len(deferred)}", flush=True)
+    return {
+        "ok": True, "job_id": job_id, "tickers": selected,
+        "universe_size": len(tickers),
+        "missing_before": len(missing),
+        "deferred": deferred[:40],
+        "deferred_count": len(deferred),
+        "max_quarters": max_quarters,
+        "cost_est": cost_est,
+        "source": _CALL_SOURCE,
+        "note": ("Prioritized never-indexed names. Already-indexed quarters free. "
+                 "Re-run to pick up deferred names." if deferred else
+                 "Already-indexed quarters free."),
+    }
 
 
 @app.post("/api/transcripts/calls/backfill")
 def transcripts_calls_backfill(req: Request, background_tasks: BackgroundTasks):
     """Bulk-index HISTORICAL earnings calls from the Hugging Face dataset
     (multi-quarter depth), or restore from the Dropbox backup. Body:
-    {tickers?, years_back?, restore_from_dropbox?}. Polls the same job endpoint
-    as sync. Backs up the pulled corpus to Dropbox automatically."""
+    {tickers?, years_back?, restore_from_dropbox?}. FREE (no Grok). Polls the
+    same job endpoint as sync. Backs up the pulled corpus to Dropbox."""
     claims = _claims_or_401(req)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
@@ -24324,23 +24440,20 @@ def transcripts_calls_backfill(req: Request, background_tasks: BackgroundTasks):
     years_back = max(1, min(int((body or {}).get("years_back") or 3), 20))
     tickers = [t.upper().strip() for t in ((body or {}).get("tickers") or []) if t and t.strip()]
     if not tickers:
-        try:
-            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-                cur.execute("SELECT ticker FROM analyst_reports WHERE archived IS NOT TRUE ORDER BY ticker")
-                tickers = [r["ticker"].upper() for r in (cur.fetchall() or []) if r.get("ticker")]
-        except Exception:
-            tickers = []
-    tickers = tickers[:60]
+        tickers = _call_index_universe()
+    # FREE path — cover full book (was hard-capped at 60 → left 40 reports out)
+    tickers = tickers[:200]
     if not tickers and not restore:
         return JSONResponse({"ok": False, "error": "No tickers to backfill."}, status_code=400)
     import uuid as _uuid
     job_id = "BACKFILL_" + _uuid.uuid4().hex[:12]
     _call_sync_jobs[job_id] = {"stage": "queued", "status": "running", "label": "Queued…",
                                 "started_at": time.time(), "updated_at": time.time(),
-                                "total": 0, "done": 0, "indexed": 0}
+                                "total": 0, "done": 0, "indexed": 0, "cost_usd": 0.0}
     background_tasks.add_task(_run_calls_backfill, job_id, tickers, years_back, restore)
     print(f"📚 [backfill] queued {job_id}  {len(tickers)} tickers  yrs={years_back}  restore={restore}", flush=True)
-    return {"ok": True, "job_id": job_id, "tickers": tickers, "restore": restore}
+    return {"ok": True, "job_id": job_id, "tickers": tickers, "restore": restore,
+            "cost_usd": 0.0, "note": "Hugging Face history is free · $0 Grok"}
 
 
 @app.get("/api/transcripts/calls/sync/{job_id}")
@@ -24355,7 +24468,7 @@ def transcripts_calls_sync_status(job_id: str, request: Request):
 
 @app.get("/api/transcripts/calls/coverage")
 def transcripts_calls_coverage(request: Request):
-    """Which tickers/quarters are indexed in the earnings RAG store."""
+    """Which tickers/quarters are indexed vs the saved-report universe."""
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
@@ -24363,11 +24476,42 @@ def transcripts_calls_coverage(request: Request):
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
             cur.execute("""SELECT ticker, COUNT(DISTINCT quarter) AS quarters,
-                                  COUNT(*) AS chunks
+                                  COUNT(*) AS chunks,
+                                  MAX(call_date) AS latest_call
                              FROM call_chunks GROUP BY ticker ORDER BY ticker""")
             rows = cur.fetchall() or []
-        return {"ok": True, "coverage": [{"ticker": r["ticker"],
-                "quarters": int(r["quarters"]), "chunks": int(r["chunks"])} for r in rows]}
+        coverage = []
+        for r in rows:
+            latest = r.get("latest_call")
+            coverage.append({
+                "ticker": r["ticker"],
+                "quarters": int(r["quarters"] or 0),
+                "chunks": int(r["chunks"] or 0),
+                "latest_call": (latest.isoformat()[:10]
+                                if hasattr(latest, "isoformat")
+                                else (str(latest or "")[:10] or None)),
+            })
+        universe = _call_index_universe()
+        covered = {c["ticker"].upper() for c in coverage}
+        missing = [t for t in universe if t not in covered]
+        cost_hint = _estimate_call_sync_cost(
+            min(40, len(missing) or len(universe)), max_quarters=2,
+            n_already=0 if missing else len(universe))
+        return {
+            "ok": True,
+            "coverage": coverage,
+            "universe": {
+                "saved_reports": len(universe),
+                "indexed": len(covered & set(universe)),
+                "missing": len(missing),
+                "missing_tickers": missing[:80],
+                "extra_indexed": sorted(covered - set(universe))[:40],
+            },
+            "source": _CALL_SOURCE,
+            "cost_hint": cost_hint,
+            "note": ("Backfill history = free HF dataset. Latest calls (Grok) = "
+                     "paid live-search; skips quarters already indexed."),
+        }
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
 
