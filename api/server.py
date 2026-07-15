@@ -11877,18 +11877,35 @@ def _automation_needs_catchup(job: str, hour: int, minute: int) -> bool:
     """True when today's scheduled run was missed — e.g. a Railway deploy
     restarted the process across the run time (the sleep-until-target pattern
     has no memory). The worker then runs once immediately instead of silently
-    skipping the day. The in-process _CATCHUP_DONE guard means a failing
-    kv write (DB down) can't turn this into a run-the-job-every-loop cycle."""
+    skipping the day. Also retries once per process boot if the last run
+    recorded ok=False (e.g. NameError during import race left SnapTrade red
+    all day even though holdings were fine). The in-process _CATCHUP_DONE
+    guard means a failing kv write can't turn this into a every-loop cycle."""
     try:
         now_p = _now_pacific()
         today_key = now_p.date().isoformat()
+        if (now_p.hour, now_p.minute) < (int(hour), int(minute)):
+            return False   # scheduled time not reached yet
+        rec = {}
+        try:
+            rec = _kv_get(f"automation.last_run.{job}") or {}
+        except NameError:
+            # Module still loading — never claim catch-up mid-import
+            return False
+        except Exception:
+            rec = {}
+        last_day = (rec.get("ts") or "")[:10]
+        last_ok = rec.get("ok")
+        # Same-day failure → one retry per process boot (clears red Data Health)
+        if last_day == today_key and last_ok is False:
+            retry_key = f"{job}:fail-retry:{today_key}"
+            if _CATCHUP_DONE.get(retry_key):
+                return False
+            _CATCHUP_DONE[retry_key] = True
+            return True
         if _CATCHUP_DONE.get(job) == today_key:
             return False
-        if (now_p.hour, now_p.minute) < (int(hour), int(minute)):
-            return False   # scheduled time not reached yet — don't set the flag
         _CATCHUP_DONE[job] = today_key   # one evaluation past the gate per day
-        rec = _kv_get(f"automation.last_run.{job}") or {}
-        last_day = (rec.get("ts") or "")[:10]
         # last_run ts is UTC; a morning-Pacific run lands on the same UTC
         # calendar day, so a plain date compare is a safe once-a-day guard.
         return last_day != today_key
@@ -11995,7 +12012,9 @@ def _auto_daily_brief_worker() -> None:
             import time as _time2
             _time2.sleep(3600)
 
-threading.Thread(target=_auto_daily_brief_worker, daemon=True, name="daily-brief-scheduler").start()
+# Thread start deferred until after _kv_get/_kv_put are defined (see
+# _start_automation_schedulers below). Starting earlier races import order
+# and leaves Data Health with "name '_kv_get' is not defined".
 
 # ── Auto-scan all saved reports into Market Pulse (time from automation.settings)
 def _auto_market_pulse_worker() -> None:
@@ -12048,7 +12067,7 @@ def _auto_market_pulse_worker() -> None:
             _automation_record_run("market_pulse", False, str(_e))
             _t2.sleep(3600)
 
-threading.Thread(target=_auto_market_pulse_worker, daemon=True, name="pulse-scheduler").start()
+# Thread start deferred — see _start_automation_schedulers.
 
 
 # ── Auto-sync SnapTrade (Fidelity) holdings pre-market (time from automation.settings)
@@ -12098,7 +12117,7 @@ def _auto_snaptrade_sync_worker() -> None:
             _automation_record_run("snaptrade_sync", False, str(_e))
             _t2.sleep(3600)
 
-threading.Thread(target=_auto_snaptrade_sync_worker, daemon=True, name="snaptrade-scheduler").start()
+# Thread start deferred — see _start_automation_schedulers.
 
 
 # ---------------------------------------------------------------------------
@@ -12633,6 +12652,31 @@ def _kv_put(key: str, value) -> bool:
     except Exception as e:
         print(f"[kv_put] {key}: {e}")
         return False
+
+
+# ── Start automation daemons AFTER _kv_get/_kv_put/_fund_conn exist ──────────
+# Workers used to start mid-file (before these helpers). On boot they raced
+# import, hit NameError('_kv_get'), recorded SnapTrade sync as "failed", and
+# then slept until the next calendar day — leaving the Data Health card red
+# even when holdings were fine.
+_AUTOMATION_STARTED = False
+
+
+def _start_automation_schedulers() -> None:
+    global _AUTOMATION_STARTED
+    if _AUTOMATION_STARTED:
+        return
+    _AUTOMATION_STARTED = True
+    threading.Thread(target=_auto_daily_brief_worker, daemon=True,
+                     name="daily-brief-scheduler").start()
+    threading.Thread(target=_auto_market_pulse_worker, daemon=True,
+                     name="pulse-scheduler").start()
+    threading.Thread(target=_auto_snaptrade_sync_worker, daemon=True,
+                     name="snaptrade-scheduler").start()
+    print("[automation] schedulers started (after kv helpers ready)", flush=True)
+
+
+_start_automation_schedulers()
 
 
 def _ensure_benchmark_annual_returns_table(conn) -> None:
