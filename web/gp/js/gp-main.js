@@ -1111,9 +1111,13 @@
       const beat = res.beat || null;
 
       if (badgeSlot) {
-        if (status === 'reported' && beat) {
-          badgeSlot.innerHTML = _earnBeatBadge(beat, res.surprise_pct);
-        } else if (status === 'scheduled' || status === 'pending_update') {
+        if (status === 'reported' && (beat || res.eps_actual != null)) {
+          badgeSlot.innerHTML = beat
+            ? _earnBeatBadge(beat, res.surprise_pct)
+            : '<span class="earn-badge earn-pending">REPORTED</span>';
+        } else if (status === 'pending_update') {
+          badgeSlot.innerHTML = '<span class="earn-badge earn-pending">RESULTS PENDING</span>';
+        } else if (status === 'scheduled') {
           badgeSlot.innerHTML = '<span class="earn-badge earn-pending">AWAITING</span>';
         }
       }
@@ -1158,11 +1162,15 @@
               '<div class="earn-metric-val">' + _earnFmtEps(res.eps_estimate) + '</div></div>' +
             '<div class="earn-metric"><div class="earn-metric-lbl">Status</div>' +
               '<div class="earn-metric-val" style="font-size:13px;">' +
-                (status === 'pending_update' ? 'Results pending' : 'Not yet reported') +
+                (status === 'pending_update'
+                  ? 'Printed · results lagging'
+                  : 'Not yet reported') +
               '</div></div>' +
           '</div>' +
           '<div style="margin-top:8px;font-size:11px;color:var(--dim);text-align:center;">' +
-            'Beat / miss appears here once Nasdaq posts the surprise.' +
+            (status === 'pending_update'
+              ? 'Session window has passed (BMO/AMC). Pulling free beat/miss from Yahoo + Nasdaq — refresh shortly if blank.'
+              : 'Beat / miss appears after the company prints (Yahoo same-day · Nasdaq may lag).') +
           '</div>';
       }
 
@@ -1199,7 +1207,8 @@
         '<div style="font-size:12px;margin-bottom:12px;">Price ' + pxLine + '</div>' +
         hero +
         histHtml +
-        '<div style="margin-top:12px;font-size:10px;color:var(--dim);">Not investment advice. EPS figures from Nasdaq consensus / reported.</div>';
+        '<div style="margin-top:12px;font-size:10px;color:var(--dim);">Not investment advice. EPS from Nasdaq calendar + Yahoo/Nasdaq surprise (free · no LLM)'
+          + (d.source ? (' · source ' + _cfEsc(d.source)) : '') + '.</div>';
 
       const repBtn = overlay.querySelector('#ec-report');
       if (repBtn && d.has_report) {

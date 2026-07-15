@@ -648,16 +648,53 @@ def _parse_money_num(v):
         return None
 
 
+def _parse_reported_date(s) -> "object | None":
+    """Parse m/d/yyyy or ISO earnings date → date or None."""
+    from datetime import datetime
+    if s is None:
+        return None
+    raw = str(s).strip()
+    if not raw:
+        return None
+    # ISO with time
+    if "T" in raw or len(raw) >= 10 and raw[4] == "-":
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")[:19]).date()
+        except Exception:
+            pass
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(raw[:10] if fmt.startswith("%Y-%m") else raw, fmt).date()
+        except Exception:
+            continue
+    return None
+
+
+def _beat_from_eps(actual, est) -> str | None:
+    if actual is None or est is None:
+        return None
+    try:
+        a, e = float(actual), float(est)
+    except (TypeError, ValueError):
+        return None
+    if a > e:
+        return "beat"
+    if a < e:
+        return "miss"
+    return "inline"
+
+
 def nasdaq_earnings_surprise(symbol: str) -> dict:
     """Historical EPS actual vs consensus from Nasdaq (free).
 
-    Returns {history: [...], latest: {...}|None} — never raises.
+    Returns {history: [...], latest: {...}|None, source: str} — never raises.
+    Nasdaq often lags same-day prints by hours/days; pair with yfinance fallback.
     """
     import time as _time
     sym = (symbol or "").strip().upper()
     if not sym:
-        return {"history": [], "latest": None}
-    hit = _EARNINGS_DETAIL_CACHE.get(sym)
+        return {"history": [], "latest": None, "source": "nasdaq"}
+    hit = _EARNINGS_DETAIL_CACHE.get(("nasdaq", sym))
     if hit and _time.time() - hit[0] < _EARNINGS_DETAIL_TTL_S:
         return hit[1]
     history: list[dict] = []
@@ -678,21 +715,14 @@ def nasdaq_earnings_surprise(symbol: str) -> dict:
                 actual = _parse_money_num(row.get("eps"))
                 est = _parse_money_num(row.get("consensusForecast"))
                 surprise_pct = _parse_money_num(row.get("percentageSurprise"))
-                beat = None
-                if actual is not None and est is not None:
-                    if actual > est:
-                        beat = "beat"
-                    elif actual < est:
-                        beat = "miss"
-                    else:
-                        beat = "inline"
                 history.append({
                     "fiscal_quarter": row.get("fiscalQtrEnd") or "",
                     "date_reported": row.get("dateReported") or "",
                     "eps_actual": actual,
                     "eps_estimate": est,
                     "surprise_pct": surprise_pct,
-                    "beat": beat,
+                    "beat": _beat_from_eps(actual, est),
+                    "source": "nasdaq",
                 })
         else:
             print(f"[market_data] nasdaq surprise {sym} HTTP {r.status_code}", flush=True)
@@ -701,17 +731,144 @@ def nasdaq_earnings_surprise(symbol: str) -> dict:
     out = {
         "history": history,
         "latest": history[0] if history else None,
+        "source": "nasdaq",
     }
-    _EARNINGS_DETAIL_CACHE[sym] = (_time.time(), out)
+    _EARNINGS_DETAIL_CACHE[("nasdaq", sym)] = (_time.time(), out)
     return out
+
+
+def yfinance_earnings_surprise(symbol: str) -> dict:
+    """Same-shape surprise history via yfinance get_earnings_dates (free).
+
+    Nasdaq surprise table often lags BMO prints until late day / next day;
+    yfinance usually has Reported EPS within minutes of the release.
+    """
+    import time as _time
+    from datetime import datetime
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return {"history": [], "latest": None, "source": "yfinance"}
+    hit = _EARNINGS_DETAIL_CACHE.get(("yf", sym))
+    # Short TTL — same-day results appear during the session
+    if hit and _time.time() - hit[0] < 600:
+        return hit[1]
+    history: list[dict] = []
+    try:
+        import yfinance as yf
+        t = yf.Ticker(sym)
+        df = None
+        try:
+            df = t.get_earnings_dates(limit=12)
+        except Exception:
+            df = getattr(t, "earnings_dates", None)
+        if df is not None and len(df) > 0:
+            # Columns: EPS Estimate, Reported EPS, Surprise(%)
+            for idx, row in df.iterrows():
+                try:
+                    actual = row.get("Reported EPS")
+                    est = row.get("EPS Estimate")
+                    surp = row.get("Surprise(%)")
+                except Exception:
+                    actual = est = surp = None
+                try:
+                    if actual is not None and actual == actual:  # not NaN
+                        actual = float(actual)
+                    else:
+                        actual = None
+                except Exception:
+                    actual = None
+                try:
+                    if est is not None and est == est:
+                        est = float(est)
+                    else:
+                        est = None
+                except Exception:
+                    est = None
+                try:
+                    if surp is not None and surp == surp:
+                        surp = float(surp)
+                    else:
+                        surp = None
+                except Exception:
+                    surp = None
+                # Skip pure future rows with no actual
+                if actual is None and est is None:
+                    continue
+                # Date from index
+                d_iso = ""
+                try:
+                    if hasattr(idx, "date"):
+                        d_iso = idx.date().isoformat()
+                    else:
+                        d_iso = str(idx)[:10]
+                except Exception:
+                    d_iso = str(idx)[:10]
+                # yfinance Surprise(%) is already percent points (e.g. 9.93)
+                history.append({
+                    "fiscal_quarter": "",
+                    "date_reported": d_iso,
+                    "eps_actual": actual,
+                    "eps_estimate": est,
+                    "surprise_pct": round(surp, 2) if surp is not None else (
+                        round((actual - est) / abs(est) * 100, 2)
+                        if actual is not None and est not in (None, 0) else None
+                    ),
+                    "beat": _beat_from_eps(actual, est) if actual is not None else None,
+                    "source": "yfinance",
+                })
+    except Exception as e:
+        print(f"[market_data] yfinance earnings {sym} failed: {e!s:.120}", flush=True)
+    out = {
+        "history": history,
+        "latest": next((h for h in history if h.get("eps_actual") is not None),
+                       history[0] if history else None),
+        "source": "yfinance",
+    }
+    _EARNINGS_DETAIL_CACHE[("yf", sym)] = (_time.time(), out)
+    return out
+
+
+def _earnings_report_window_passed(event_date_iso: str, session: str) -> bool:
+    """True if the expected print window for this event is already over (ET).
+
+    BMO → after 09:30 America/New_York on event day.
+    AMC → after 16:00 ET on event day.
+    Unknown → after 12:00 ET on event day.
+    Past calendar days → always True.
+    """
+    from datetime import date, datetime, time as dtime
+    try:
+        from zoneinfo import ZoneInfo
+        et = ZoneInfo("America/New_York")
+    except Exception:
+        et = None
+    try:
+        ev = date.fromisoformat(str(event_date_iso)[:10])
+    except Exception:
+        return False
+    now = datetime.now(et) if et else datetime.utcnow()
+    today = now.date()
+    if ev < today:
+        return True
+    if ev > today:
+        return False
+    sess = (session or "").upper()
+    if sess == "BMO":
+        cutoff = dtime(9, 30)
+    elif sess == "AMC":
+        cutoff = dtime(16, 0)
+    else:
+        cutoff = dtime(12, 0)
+    return now.timetz().replace(tzinfo=None) >= cutoff if hasattr(now, "timetz") else now.time() >= cutoff
 
 
 def earnings_card(symbol: str, horizon_days: int = 5,
                   include_past_days: int = 1) -> dict:
     """Full earnings card payload for watchlist chip click.
 
-    Combines upcoming calendar event (if any) + surprise history + beat/miss.
-    Free Nasdaq sources only — no LLM.
+    Combines calendar event + surprise history + beat/miss.
+    Free sources: Nasdaq calendar/surprise, yfinance earnings_dates fallback
+    when Nasdaq lags same-day BMO/AMC prints. No LLM.
     """
     from datetime import date, datetime, timedelta
     sym = (symbol or "").strip().upper()
@@ -721,8 +878,9 @@ def earnings_card(symbol: str, horizon_days: int = 5,
     upcoming = earnings_upcoming([sym], horizon_days=horizon_days,
                                  include_past_days=include_past_days).get(sym)
     surprise = nasdaq_earnings_surprise(sym)
-    history = surprise.get("history") or []
+    history = list(surprise.get("history") or [])
     latest = surprise.get("latest")
+    result_source = "nasdaq"
 
     # Session label from calendar
     session = ""
@@ -733,35 +891,78 @@ def earnings_card(symbol: str, horizon_days: int = 5,
         elif "after" in tlabel or "post" in tlabel:
             session = "AMC"
 
+    def _match_event(row: dict) -> bool:
+        if not row:
+            return False
+        reported_d = _parse_reported_date(row.get("date_reported"))
+        if reported_d is None:
+            return False
+        today = date.today()
+        age = (today - reported_d).days
+        if age < 0 or age > 14:
+            return False
+        if upcoming and upcoming.get("date"):
+            try:
+                ev = date.fromisoformat(str(upcoming["date"])[:10])
+                # Same day or within 2 calendar days (Yahoo often stamps
+                # BMO prints the evening before ET).
+                if abs((reported_d - ev).days) <= 2:
+                    return True
+            except Exception:
+                pass
+        return age <= 3 and row.get("eps_actual") is not None
+
     # Determine if latest surprise is "this" event (reported within window)
     result = None
-    status = "scheduled"  # scheduled | reported | unknown
-    if latest and latest.get("date_reported"):
-        # Parse m/d/yyyy
-        reported_d = None
-        for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y"):
-            try:
-                reported_d = datetime.strptime(str(latest["date_reported"]).strip(), fmt).date()
-                break
-            except Exception:
-                continue
-        today = date.today()
-        if reported_d is not None:
-            age = (today - reported_d).days
-            # Fresh result if reported in last 14 days, or matches upcoming date
-            match_upcoming = bool(
-                upcoming and upcoming.get("date")
-                and reported_d.isoformat() == str(upcoming.get("date"))[:10]
-            )
-            if age <= 14 or match_upcoming:
-                result = latest
-                status = "reported"
+    status = "scheduled"  # scheduled | reported | pending_update | unknown
+    if latest and _match_event(latest):
+        result = latest
+        status = "reported" if latest.get("eps_actual") is not None else "pending_update"
+        result_source = latest.get("source") or "nasdaq"
+
+    # Nasdaq lag: yfinance often has Reported EPS same morning for BMO
+    if status != "reported" or (result and result.get("eps_actual") is None):
+        yf_s = yfinance_earnings_surprise(sym)
+        yf_latest = yf_s.get("latest")
+        if yf_latest and yf_latest.get("eps_actual") is not None and _match_event(yf_latest):
+            result = dict(yf_latest)
+            status = "reported"
+            result_source = "yfinance"
+            # Prefer Nasdaq calendar consensus for beat/miss when available
+            # (Street estimate users expect); keep yfinance actual.
+            cal_est = _parse_money_num((upcoming or {}).get("eps_forecast"))
+            if cal_est is not None:
+                result["eps_estimate"] = cal_est
+                result["beat"] = _beat_from_eps(result.get("eps_actual"), cal_est)
+                try:
+                    a = float(result["eps_actual"])
+                    result["surprise_pct"] = round(
+                        (a - float(cal_est)) / abs(float(cal_est)) * 100.0, 2)
+                except Exception:
+                    pass
+                result_source = "yfinance+nasdaq"
+            if not any(
+                h.get("date_reported") == yf_latest.get("date_reported")
+                and h.get("eps_actual") == yf_latest.get("eps_actual")
+                for h in history
+            ):
+                history = [result] + history
+
+    # After the expected print window, never keep saying "scheduled / AWAITING"
     if upcoming and status != "reported":
-        # Still waiting — show estimate from calendar if present
-        status = "scheduled" if (upcoming.get("days_until") or 0) >= 0 else "scheduled"
-        if (upcoming.get("days_until") or 0) < 0 and result is None:
-            # Past schedule but no matching surprise yet
+        du = upcoming.get("days_until")
+        try:
+            du_i = int(du) if du is not None else 0
+        except (TypeError, ValueError):
+            du_i = 0
+        past_window = du_i < 0 or (
+            du_i == 0 and _earnings_report_window_passed(
+                str(upcoming.get("date") or ""), session)
+        )
+        if past_window:
             status = "pending_update"
+        else:
+            status = "scheduled"
 
     eps_est = None
     if result and result.get("eps_estimate") is not None:
@@ -771,11 +972,23 @@ def earnings_card(symbol: str, horizon_days: int = 5,
 
     beat = (result or {}).get("beat")
     surprise_pct = (result or {}).get("surprise_pct")
+    if (beat is None and result and result.get("eps_actual") is not None
+            and eps_est is not None):
+        beat = _beat_from_eps(result.get("eps_actual"), eps_est)
+    if (surprise_pct is None and result and result.get("eps_actual") is not None
+            and eps_est not in (None, 0)):
+        try:
+            surprise_pct = round(
+                (float(result["eps_actual"]) - float(eps_est))
+                / abs(float(eps_est)) * 100.0, 2)
+        except Exception:
+            pass
 
     return {
         "ok": True,
         "ticker": sym,
         "status": status,  # scheduled | reported | pending_update
+        "source": result_source if status == "reported" else "nasdaq",
         "event": {
             "date": (upcoming or {}).get("date") or (result or {}).get("date_reported"),
             "days_until": (upcoming or {}).get("days_until"),
@@ -797,6 +1010,5 @@ def earnings_card(symbol: str, horizon_days: int = 5,
             "fiscal_quarter": (result or {}).get("fiscal_quarter"),
         } if (result or eps_est is not None) else None,
         "history": history[:8],
-        "source": "nasdaq",
         "cost": "free · no LLM",
     }
