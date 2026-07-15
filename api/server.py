@@ -6714,6 +6714,8 @@ def get_quote(ticker: str):
 
     Applies the alias map before fetching so BRKB→BRK-B etc. resolve
     correctly. The original symbol is preserved in the response.
+    Falls back to market_data (bar-based prev close) when snapshot lacks
+    price or day % so the report hero Day never stays blank while price shows.
     """
     original  = ticker.strip().upper().rstrip("*")
     # Skip Yahoo/Tiingo entirely for tickers in the exclusion list —
@@ -6721,8 +6723,34 @@ def get_quote(ticker: str):
     if original in _SCAN_EXCLUDE:
         return {"ticker": original, "price": None, "pct_change": None}
     yahoo_sym = _resolve_ticker_alias(original)   # e.g. BRKB → BRK-B
-    snapshot  = analyst.fetch_market_snapshot(yahoo_sym)
-    # If Yahoo returned no price, try Tiingo before giving up
+    snapshot  = analyst.fetch_market_snapshot(yahoo_sym) or {}
+    # Fill missing price / prev / day % via market_data (correct bar prev)
+    if (snapshot.get("price") is None
+            or snapshot.get("pct_change") is None
+            or snapshot.get("previous_close") is None):
+        try:
+            import market_data as _md
+            mq = (_md.get_quotes([yahoo_sym]) or {}).get(yahoo_sym) or {}
+            if snapshot.get("price") is None and mq.get("price") is not None:
+                snapshot["price"] = mq["price"]
+                snapshot["source"] = mq.get("source") or snapshot.get("source") or "yahoo-chart"
+            if snapshot.get("previous_close") is None and mq.get("prev_close") is not None:
+                snapshot["previous_close"] = mq["prev_close"]
+            if snapshot.get("pct_change") is None and mq.get("pct_change") is not None:
+                snapshot["pct_change"] = mq["pct_change"]
+            # Recompute day % if we now have both legs
+            if (snapshot.get("pct_change") is None
+                    and snapshot.get("price") is not None
+                    and snapshot.get("previous_close") not in (None, 0)):
+                try:
+                    px = float(snapshot["price"])
+                    pv = float(snapshot["previous_close"])
+                    snapshot["pct_change"] = round((px - pv) / pv * 100.0, 2)
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pass
+        except Exception as e:
+            print(f"[quote] {original}: market_data fill failed: {e!s:.100}", flush=True)
+    # If still no price, try Tiingo before giving up
     if snapshot.get("price") is None:
         t = _tiingo_single(yahoo_sym)
         if t.get("price") is not None:
@@ -10695,11 +10723,16 @@ def batch_quotes(tickers: str = ""):
     result: dict = {}
 
     # ── Per-ticker cache check ────────────────────────────────────────────────
+    # Require BOTH price and pct_change for a cache hit — a price-only row
+    # (Yahoo meta missing previousClose) left the report Day column blank and
+    # stuck the watchlist on a wrong fallback %.
     now    = time.time()
     misses: list = []
     for sym in originals:
         entry = _QUOTE_CACHE.get(sym)
-        if entry and (now - entry["_ts"]) < _QUOTE_TTL and entry.get("price") is not None:
+        if (entry and (now - entry["_ts"]) < _QUOTE_TTL
+                and entry.get("price") is not None
+                and entry.get("pct_change") is not None):
             result[sym] = {"price": entry["price"], "pct_change": entry.get("pct_change")}
             if entry.get("as_of"):
                 result[sym]["as_of"] = entry["as_of"]
@@ -10733,42 +10766,22 @@ def batch_quotes(tickers: str = ""):
             row["as_of"] = as_of
         if source:
             row["source"] = source
+        # Prefer a complete (price+pct) row over a price-only one already stored
+        prev_row = result.get(sym) or {}
+        if (prev_row.get("price") is not None
+                and prev_row.get("pct_change") is not None
+                and pct is None):
+            return
         result[sym] = row
         _QUOTE_CACHE[sym] = {**row, "_ts": now}
 
-    # ── 1) Same path as /api/quote/{ticker}: yfinance fast_info (correct prev) ─
-    # Parallelized; this is what the report header uses and matches Yahoo Finance.
-    if misses and _YFINANCE_OK:
-        try:
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            def _snap_one(orig: str):
-                ysym = _resolve_ticker_alias(orig)
-                try:
-                    snap = analyst.fetch_market_snapshot(ysym) or {}
-                    return orig, snap
-                except Exception as e:
-                    return orig, {"error": str(e)[:80]}
+    def _still_need(sym: str) -> bool:
+        r = result.get(sym) or {}
+        return r.get("price") is None or r.get("pct_change") is None
 
-            with ThreadPoolExecutor(max_workers=min(12, max(2, len(misses)))) as pool:
-                futs = {pool.submit(_snap_one, o): o for o in misses}
-                for fut in as_completed(futs, timeout=14):
-                    try:
-                        orig, snap = fut.result()
-                    except Exception:
-                        continue
-                    px = snap.get("price")
-                    prev = snap.get("previous_close")
-                    pct = snap.get("pct_change")
-                    if pct is None:
-                        pct = _pct_from(px, prev)
-                    if px is not None:
-                        _accept(orig, px, pct, prev,
-                                source=snap.get("source") or "fast_info")
-            misses = [s for s in misses if s not in result or result[s].get("price") is None]
-        except Exception as e:
-            print(f"[batch_quotes] fast_info batch failed: {e!s:.140}", flush=True)
-
-    # ── 2) market_data Yahoo chart / Tiingo (fixed prev-close priority) ───────
+    # ── 1) market_data Yahoo chart (bar-based prev close — authoritative day %) ─
+    # Prefer this over raw fast_info alone: Yahoo chart meta often omits
+    # previousClose, and chartPreviousClose is the range-start close (wrong).
     if misses:
         try:
             import market_data as _md
@@ -10786,11 +10799,42 @@ def batch_quotes(tickers: str = ""):
                 for orig in rev.get(ysym, [ysym]):
                     if orig in misses:
                         _accept(orig, px, pct, prev, source=q.get("source") or "yahoo-chart")
-            misses = [s for s in misses if s not in result or result[s].get("price") is None]
+            misses = [s for s in misses if _still_need(s)]
         except Exception as e:
             print(f"[batch_quotes] market_data failed: {e!s:.140}", flush=True)
 
-    # ── 3) Yahoo chart HTTP fallback ──────────────────────────────────────────
+    # ── 2) yfinance fast_info / fetch_market_snapshot (fills remaining) ────────
+    if misses and _YFINANCE_OK:
+        try:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            def _snap_one(orig: str):
+                ysym = _resolve_ticker_alias(orig)
+                try:
+                    snap = analyst.fetch_market_snapshot(ysym) or {}
+                    return orig, snap
+                except Exception as e:
+                    return orig, {"error": str(e)[:80]}
+
+            with ThreadPoolExecutor(max_workers=min(12, max(2, len(misses)))) as pool:
+                futs = {pool.submit(_snap_one, o): o for o in list(misses)}
+                for fut in as_completed(futs, timeout=14):
+                    try:
+                        orig, snap = fut.result()
+                    except Exception:
+                        continue
+                    px = snap.get("price")
+                    prev = snap.get("previous_close")
+                    pct = snap.get("pct_change")
+                    if pct is None:
+                        pct = _pct_from(px, prev)
+                    if px is not None:
+                        _accept(orig, px, pct, prev,
+                                source=snap.get("source") or "fast_info")
+            misses = [s for s in misses if _still_need(s)]
+        except Exception as e:
+            print(f"[batch_quotes] fast_info batch failed: {e!s:.140}", flush=True)
+
+    # ── 3) Yahoo chart HTTP fallback (bar prev — never chartPreviousClose) ────
     if misses:
         try:
             import urllib.request as _urlreq
@@ -10799,7 +10843,7 @@ def batch_quotes(tickers: str = ""):
                 ysym = _resolve_ticker_alias(orig)
                 try:
                     url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{ysym}"
-                           f"?range=5d&interval=1d")
+                           f"?range=10d&interval=1d")
                     req = _urlreq.Request(
                         url, headers={"User-Agent": "Mozilla/5.0 DGACapital/1.0"})
                     with _urlreq.urlopen(req, timeout=6) as resp:
@@ -10809,24 +10853,25 @@ def batch_quotes(tickers: str = ""):
                         still.append(orig)
                         continue
                     meta = res0.get("meta") or {}
+                    closes = ((res0.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
+                    closes = [float(c) for c in closes if c is not None]
                     px = (meta.get("regularMarketPrice")
                           or meta.get("postMarketPrice")
                           or meta.get("preMarketPrice"))
-                    # Official prev close first — chartPreviousClose is often wrong
+                    if px is None and closes:
+                        px = closes[-1]
+                    # Official meta prev only — never chartPreviousClose
                     prev = (meta.get("previousClose")
-                            or meta.get("regularMarketPreviousClose")
-                            or meta.get("chartPreviousClose"))
-                    if px is None:
-                        closes = ((res0.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
-                        closes = [c for c in closes if c is not None]
-                        if closes:
-                            px = closes[-1]
-                            if prev is None and len(closes) >= 2:
-                                prev = closes[-2]
+                            or meta.get("regularMarketPreviousClose"))
+                    if prev is None and len(closes) >= 2:
+                        prev = closes[-2]
+                    pct = meta.get("regularMarketChangePercent")
                     if px is None:
                         still.append(orig)
                         continue
-                    _accept(orig, px, None, prev, source="yahoo-chart")
+                    _accept(orig, px, pct, prev, source="yahoo-chart")
+                    if _still_need(orig):
+                        still.append(orig)
                 except Exception:
                     still.append(orig)
             misses = still
@@ -10876,7 +10921,7 @@ def batch_quotes(tickers: str = ""):
                     for orig in origs:
                         if orig in misses:
                             _accept(orig, price, None, prev, source="yfinance")
-                misses = [s for s in misses if s not in result or result[s].get("price") is None]
+                misses = [s for s in misses if _still_need(s)]
         except Exception as _e:
             print(f"[batch_quotes] yf.download failed: {_e}", flush=True)
 
@@ -10888,7 +10933,7 @@ def batch_quotes(tickers: str = ""):
                 if q.get("price") is not None:
                     _accept(orig, q.get("price"), q.get("pct_change"),
                             source="tiingo")
-            misses = [s for s in misses if s not in result or result[s].get("price") is None]
+            misses = [s for s in misses if _still_need(s)]
         except Exception as e:
             print(f"[batch_quotes] tiingo failed: {e!s:.120}", flush=True)
 
@@ -10904,7 +10949,7 @@ def batch_quotes(tickers: str = ""):
             if dq and dq.get("price") is not None:
                 _accept(sym, dq["price"], dq.get("pct_change"),
                         source="store-fresh", as_of=dq.get("as_of"))
-        misses = [s for s in misses if s not in result or result[s].get("price") is None]
+        misses = [s for s in misses if _still_need(s)]
 
     if misses:
         try:
@@ -10918,13 +10963,17 @@ def batch_quotes(tickers: str = ""):
                 _accept(sym, dq["price"], dq.get("pct_change"),
                         source="store", as_of=dq.get("as_of"))
                 print(f"[quotes] {sym}: live miss → store as_of {dq.get('as_of')}", flush=True)
-        misses = [s for s in misses if s not in result or result[s].get("price") is None]
+        misses = [s for s in misses if _still_need(s)]
 
-    # Fill remaining with nulls (short negative cache)
+    # Fill remaining with nulls (short negative cache) — only if still no price
     for sym in originals:
         if sym not in result:
             result[sym] = dict(null_row)
             _QUOTE_CACHE[sym] = {**null_row, "_ts": now - _QUOTE_TTL + 45}
+        elif result[sym].get("pct_change") is None:
+            # Don't negative-cache price-only rows as complete — drop TTL so next
+            # poll retries day % (avoids sticky blank Day on report / watchlist).
+            _QUOTE_CACHE[sym] = {**result[sym], "_ts": now - _QUOTE_TTL + 20}
 
     return result
 

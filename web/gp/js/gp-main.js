@@ -14995,6 +14995,20 @@
       if (qRes && qRes.ok) {
         try { quote = await qRes.json(); } catch (_) {}
       }
+      // If /api/quote returned price but no day %, fill from batch quotes
+      if (quote && quote.price != null && quote.pct_change == null) {
+        try {
+          const bq = await window.dgaFetch(
+            '/api/quotes?tickers=' + encodeURIComponent(ticker) + '&_t=' + Date.now(),
+            { cache: 'no-store' });
+          if (bq && bq.ok) {
+            const map = await bq.json();
+            const row = (map && (map[ticker] || map[String(ticker).toUpperCase()])) || null;
+            if (row && row.pct_change != null) quote.pct_change = row.pct_change;
+            if (row && quote.price == null && row.price != null) quote.price = row.price;
+          }
+        } catch (_) {}
+      }
       let listMeta = null;
       if (listRes && listRes.ok) {
         try {
@@ -15053,18 +15067,25 @@
         };
       }
 
-      // Hero metrics
+      // Hero metrics — accept pct_change OR day_change_pct aliases
       const priceEl = overlay.querySelector('#rm-price');
       const dayEl = overlay.querySelector('#rm-day');
       const ratingEl = overlay.querySelector('#rm-rating');
       const targetEl = overlay.querySelector('#rm-target');
       const upsideEl = overlay.querySelector('#rm-upside');
       const px = quote && (quote.price != null) ? Number(quote.price) : null;
-      const day = quote && (quote.pct_change != null) ? Number(quote.pct_change) : null;
+      let day = null;
+      if (quote) {
+        if (quote.pct_change != null && !isNaN(Number(quote.pct_change))) day = Number(quote.pct_change);
+        else if (quote.day_change_pct != null && !isNaN(Number(quote.day_change_pct))) day = Number(quote.day_change_pct);
+        else if (quote.price != null && quote.previous_close != null && Number(quote.previous_close) !== 0) {
+          day = (Number(quote.price) - Number(quote.previous_close)) / Number(quote.previous_close) * 100;
+        }
+      }
       if (priceEl) priceEl.textContent = _fmtHeroPrice(px);
       if (dayEl) {
         dayEl.textContent = _fmtHeroPct(day);
-        dayEl.className = 'rm-hero-val' + (day == null ? '' : (day >= 0 ? ' up' : ' dn'));
+        dayEl.className = 'rm-hero-val' + (day == null || isNaN(day) ? '' : (day >= 0 ? ' up' : ' dn'));
       }
       const mdText = d.report_md || d.markdown || '';
       const parsed = _extractReportMeta(mdText);

@@ -75,8 +75,27 @@ def tradier_chain(symbol: str, expiration: str) -> list | None:
 
 
 # ── Yahoo chart quotes (free primary) ────────────────────────────────────────
+def _daily_closes_from_chart(res0: dict) -> list[float]:
+    """Non-null daily closes from a v8 chart result, oldest → newest."""
+    closes = ((res0.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
+    out = []
+    for c in closes:
+        try:
+            if c is not None and float(c) == float(c):
+                out.append(float(c))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def _yahoo_chart_quote(symbol: str) -> dict | None:
-    """One symbol via Yahoo v8 chart meta — regularMarketPrice + previousClose."""
+    """One symbol via Yahoo v8 chart — live price + true prior-session close.
+
+    Yahoo's chart meta often omits previousClose / regularMarketChangePercent
+    (2026+). chartPreviousClose is NOT the prior session — it is the close at
+    the start of the chart window and inflates day % (e.g. C −4% vs real +0.3%).
+    When meta previousClose is missing we use the second-to-last daily bar.
+    """
     import requests
     sym = (symbol or "").strip().upper()
     if not sym:
@@ -85,7 +104,7 @@ def _yahoo_chart_quote(symbol: str) -> dict | None:
         try:
             r = requests.get(
                 f"https://{host}.finance.yahoo.com/v8/finance/chart/{sym}",
-                params={"range": "5d", "interval": "1d", "includePrePost": "false"},
+                params={"range": "10d", "interval": "1d", "includePrePost": "false"},
                 timeout=8,
                 headers={"User-Agent": "Mozilla/5.0 DGACapital/1.0"},
             )
@@ -95,28 +114,23 @@ def _yahoo_chart_quote(symbol: str) -> dict | None:
             if not res0:
                 continue
             meta = res0.get("meta") or {}
+            closes = _daily_closes_from_chart(res0)
             # Live last trade / session price
-            px = (meta.get("regularMarketPrice")
-                  or meta.get("postMarketPrice")
-                  or meta.get("preMarketPrice"))
-            # Official prior-session close for day-change. NEVER prefer
-            # chartPreviousClose first — it is often an older bar in the
-            # chart range and inflates day % (e.g. C at −2.4% vs real −0.2%).
-            prev = (meta.get("previousClose")
-                    or meta.get("regularMarketPreviousClose")
-                    or meta.get("chartPreviousClose"))
-            if px is None:
-                closes = ((res0.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
-                closes = [c for c in closes if c is not None]
-                if closes:
-                    px = closes[-1]
-                    # Only use prior bar if meta did not give an official prev close
-                    if prev is None and len(closes) >= 2:
-                        prev = closes[-2]
+            px = _f(meta.get("regularMarketPrice")
+                    or meta.get("postMarketPrice")
+                    or meta.get("preMarketPrice"))
+            if px is None and closes:
+                px = closes[-1]
+            # Official prior-session close only — never chartPreviousClose.
+            prev = _f(meta.get("previousClose")
+                      or meta.get("regularMarketPreviousClose"))
+            if prev is None and len(closes) >= 2:
+                prev = closes[-2]
             if px is None:
                 continue
-            pct = None
-            if prev not in (None, 0):
+            # Prefer Yahoo's own day % when present (authoritative)
+            pct = _f(meta.get("regularMarketChangePercent"))
+            if pct is None and prev not in (None, 0):
                 pct = (float(px) - float(prev)) / float(prev) * 100.0
             return {
                 "price": float(px),

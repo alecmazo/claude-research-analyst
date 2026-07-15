@@ -1258,8 +1258,10 @@ def fetch_market_snapshot(ticker: str) -> dict:
         print(f"   ⚠️  yfinance fast_info failed for {ticker}: {exc}")
 
     # ── Fallback: raw Yahoo chart API ────────────────────────────────────────
+    # Meta previousClose is often missing (2026+). chartPreviousClose is NOT
+    # the prior session — use second-to-last daily bar for day %.
     try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=5d"
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=10d"
         resp = requests.get(
             url,
             headers={"User-Agent": "Mozilla/5.0"},
@@ -1270,11 +1272,36 @@ def fetch_market_snapshot(ticker: str) -> dict:
             chart  = data.get("chart", {}) if isinstance(data.get("chart"), dict) else {}
             result = chart.get("result", []) if isinstance(chart.get("result"), list) else []
             if result and isinstance(result[0], dict):
-                meta = result[0].get("meta", {}) if isinstance(result[0].get("meta"), dict) else {}
+                res0 = result[0]
+                meta = res0.get("meta", {}) if isinstance(res0.get("meta"), dict) else {}
+                closes_raw = ((res0.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
+                closes = []
+                for c in closes_raw:
+                    try:
+                        if c is not None and float(c) == float(c):
+                            closes.append(float(c))
+                    except (TypeError, ValueError):
+                        pass
                 if out["price"] is None:
-                    out["price"] = meta.get("regularMarketPrice") or meta.get("previousClose")
+                    px = meta.get("regularMarketPrice") or meta.get("postMarketPrice")
+                    if px is None and closes:
+                        px = closes[-1]
+                    if px is not None:
+                        out["price"] = float(px)
                 if out["previous_close"] is None:
-                    out["previous_close"] = meta.get("previousClose")
+                    prev = meta.get("previousClose") or meta.get("regularMarketPreviousClose")
+                    if prev is None and len(closes) >= 2:
+                        prev = closes[-2]
+                    if prev is not None:
+                        out["previous_close"] = float(prev)
+                # Yahoo's own day % when meta still sends it
+                if out.get("pct_change") is None:
+                    rmp = meta.get("regularMarketChangePercent")
+                    if rmp is not None:
+                        try:
+                            out["pct_change"] = float(rmp)
+                        except (TypeError, ValueError):
+                            pass
                 if not out["source"]:
                     out["source"] = "Yahoo Finance"
     except Exception as exc:  # noqa: BLE001
