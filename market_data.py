@@ -494,7 +494,7 @@ def nasdaq_earnings_for_day(day_iso: str) -> list[dict]:
                 "User-Agent": "Mozilla/5.0 (compatible; DGA-Capital/1.0)",
                 "Accept": "application/json",
             },
-            timeout=12,
+            timeout=4,
         )
         if r.status_code == 200:
             data = (r.json() or {}).get("data") or {}
@@ -535,31 +535,58 @@ def earnings_upcoming(symbols: list[str] | None = None,
     today = date.today()
     start = today - timedelta(days=max(0, int(include_past_days)))
     end = today + timedelta(days=max(0, int(horizon_days)))
-    best: dict[str, dict] = {}
+    days: list[str] = []
     d = start
     while d <= end:
-        for row in nasdaq_earnings_for_day(d.isoformat()):
+        days.append(d.isoformat())
+        d += timedelta(days=1)
+
+    # Parallel day fetches — sequential was stacking 4–12s and blocking mobile
+    # watchlist price refresh after the earnings feature landed.
+    day_rows: list[tuple[str, list]] = []
+    try:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=min(6, max(1, len(days)))) as pool:
+            futs = {pool.submit(nasdaq_earnings_for_day, day): day for day in days}
+            for fut in as_completed(futs, timeout=8):
+                day = futs[fut]
+                try:
+                    day_rows.append((day, fut.result() or []))
+                except Exception:
+                    day_rows.append((day, []))
+    except Exception:
+        for day in days:
+            try:
+                day_rows.append((day, nasdaq_earnings_for_day(day) or []))
+            except Exception:
+                day_rows.append((day, []))
+
+    best: dict[str, dict] = {}
+    for day_iso, rows in day_rows:
+        try:
+            from datetime import date as _date
+            day_d = _date.fromisoformat(day_iso)
+        except Exception:
+            continue
+        for row in rows:
             sym = row["symbol"]
             if want is not None and sym not in want:
                 continue
-            days_until = (d - today).days
+            days_until = (day_d - today).days
             rec = {
                 **row,
                 "days_until": days_until,
                 "imminent": -include_past_days <= days_until <= horizon_days,
             }
             prev = best.get(sym)
-            # Prefer the soonest upcoming event; if only past, keep closest past
             if prev is None:
                 best[sym] = rec
             else:
-                # Prefer non-negative (upcoming/today) over past; then nearer
                 def _rank(r):
                     du = r["days_until"]
                     return (0 if du >= 0 else 1, abs(du))
                 if _rank(rec) < _rank(prev):
                     best[sym] = rec
-        d += timedelta(days=1)
     return best
 
 

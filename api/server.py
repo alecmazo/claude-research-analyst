@@ -3145,28 +3145,33 @@ def watchlist_get(request: Request):
     _watchlist_migrate_legacy_once()
     tickers = _wl_get_db(lp_id)
 
+    # Prices FIRST and always — mobile/desktop must not wait on earnings calendar.
     quotes: dict[str, dict] = {}
     if tickers:
-        # batch_quotes() uses the unified per-ticker _QUOTE_CACHE — if the
-        # user's positions were already fetched by /api/v2/lp/me/positions
-        # or /api/fund/positions this session, most tickers are cache-hits
-        # (zero yfinance HTTP requests).  No per-ticker fast_info loops.
-        raw = batch_quotes(",".join(tickers))
+        try:
+            raw = batch_quotes(",".join(tickers)) or {}
+        except Exception as e:
+            print(f"[watchlist] batch_quotes failed: {e!s:.160}", flush=True)
+            raw = {}
         for tk in tickers:
             q = raw.get(tk) or {}
             quotes[tk] = {
                 "price": q.get("price"),
                 "prev":  None,
                 "pct":   q.get("pct_change"),
+                "as_of": q.get("as_of"),
             }
 
-    # Imminent / just-reported earnings (Nasdaq free calendar) + saved-report links
+    # Earnings calendar is best-effort with a hard deadline so a slow Nasdaq
+    # day never blocks price refresh on mobile (was hanging the whole payload).
     earnings: dict[str, dict] = {}
     report_tickers: set[str] = set()
-    if tickers:
+
+    def _wl_earnings_and_reports():
+        out_e: dict = {}
+        out_r: set = set()
         try:
             from market_data import earnings_upcoming
-            # Horizon: next 5 calendar days + yesterday (so "just reported" stays visible)
             raw_e = earnings_upcoming(tickers, horizon_days=5, include_past_days=1) or {}
             for tk, ev in raw_e.items():
                 du = int(ev.get("days_until") or 0)
@@ -3177,7 +3182,7 @@ def watchlist_get(request: Request):
                     sess = "AMC"
                 else:
                     sess = ""
-                earnings[tk] = {
+                out_e[tk] = {
                     "date": ev.get("date"),
                     "days_until": du,
                     "session": sess,
@@ -3192,34 +3197,49 @@ def watchlist_get(request: Request):
                 }
         except Exception as e:
             print(f"[watchlist] earnings calendar failed: {e!s:.160}", flush=True)
-        # Which watchlist names have a saved DGA report (clickable)
         try:
-            if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+            if globals().get("_PSYCOPG2_OK") and os.environ.get("DATABASE_URL"):
                 with _fund_conn() as conn, conn.cursor() as cur:
                     cur.execute("""
                         SELECT ticker FROM analyst_reports
                          WHERE archived IS NOT TRUE
                            AND ticker = ANY(%s)
                     """, (list(tickers),))
-                    report_tickers = {(r[0] or "").upper() for r in (cur.fetchall() or []) if r and r[0]}
+                    out_r = {(r[0] or "").upper() for r in (cur.fetchall() or []) if r and r[0]}
         except Exception as e:
             print(f"[watchlist] report lookup failed: {e!s:.160}", flush=True)
+        return out_e, out_r
 
-    # Attach has_report onto earnings rows; also surface reports without earnings
+    if tickers:
+        try:
+            import concurrent.futures as _cf
+            with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+                _fut = _ex.submit(_wl_earnings_and_reports)
+                try:
+                    earnings, report_tickers = _fut.result(timeout=5.0)
+                except _cf.TimeoutError:
+                    print("[watchlist] earnings enrichment timed out after 5s — returning quotes only",
+                          flush=True)
+                    try:
+                        _fut.cancel()
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"[watchlist] earnings enrichment failed: {e!s:.160}", flush=True)
+
     for tk in list(earnings.keys()):
         earnings[tk]["has_report"] = tk in report_tickers
     reports_map = {tk: True for tk in report_tickers}
 
-    # Sort: earnings imminent first (soonest), then alpha
+    # Sort: earnings imminent first (soonest), then alpha — only when we have data
     def _wl_sort_key(tk: str):
         ev = earnings.get(tk)
         if ev is not None:
             du = int(ev.get("days_until") if ev.get("days_until") is not None else 99)
-            # today/soon first; past (just reported) after upcoming
             return (0 if du >= 0 else 1, abs(du), tk)
         return (2, 99, tk)
 
-    tickers_sorted = sorted(tickers, key=_wl_sort_key)
+    tickers_sorted = sorted(tickers, key=_wl_sort_key) if earnings else list(tickers)
 
     return {
         "tickers": tickers_sorted,
@@ -8106,8 +8126,16 @@ def _builder_fetch_candidates() -> list[dict]:
     #     come from analyst_reports); sectors/prices fill in from the store, which
     #     the market autosync keeps fresh.
     all_tickers = list(own_tickers) + list(comp_universe.keys())
-    quotes = _db_quotes(all_tickers)
-    db_meta = _db_meta(all_tickers)
+    try:
+        quotes = _db_quotes(all_tickers) if callable(globals().get("_db_quotes")) else {}
+    except Exception as _e:
+        print(f"[builder] _db_quotes failed: {_e!s:.120}", flush=True)
+        quotes = {}
+    try:
+        db_meta = _db_meta(all_tickers) if callable(globals().get("_db_meta")) else {}
+    except Exception as _e:
+        print(f"[builder] _db_meta failed: {_e!s:.120}", flush=True)
+        db_meta = {}
 
     # ── 4. Build candidate dicts for report subjects ─────────────────────
     out: list[dict] = []
@@ -10624,7 +10652,13 @@ def batch_quotes(tickers: str = ""):
     # If the market-data store was refreshed very recently, serve those quotes
     # from the DB instead of a live call. Window kept tight (5 min) so the
     # watchlist never shows stale prices; anything older falls through to live.
-    db_fresh = _db_quotes(misses, max_age_s=300)
+    # Safe wrapper: never let a missing/broken _db_quotes (domain mount race)
+    # take down live pricing for mobile or desktop.
+    try:
+        db_fresh = _db_quotes(misses, max_age_s=300) if "_db_quotes" in globals() and callable(_db_quotes) else {}
+    except Exception as _dbq_e:
+        print(f"[batch_quotes] db_quotes fresh failed: {_dbq_e!s:.120}", flush=True)
+        db_fresh = {}
     if db_fresh:
         still_missing = []
         for sym in misses:
@@ -10721,7 +10755,11 @@ def batch_quotes(tickers: str = ""):
     # as stale instead of rendering "—" during a Yahoo/Tiingo outage.
     still_null = [orig for orig, v in fetched.items() if v.get("price") is None]
     if still_null:
-        db_any = _db_quotes(still_null)
+        try:
+            db_any = _db_quotes(still_null) if "_db_quotes" in globals() and callable(_db_quotes) else {}
+        except Exception as _dbq_e:
+            print(f"[batch_quotes] db_quotes any-age failed: {_dbq_e!s:.120}", flush=True)
+            db_any = {}
         for orig in still_null:
             dq = db_any.get(orig)
             if dq and dq.get("price") is not None:
@@ -11866,6 +11904,54 @@ def _fund_conn():
         return psycopg2.connect(url)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Fund DB unavailable: {e}")
+
+
+
+def _db_quotes(symbols, max_age_s=None) -> dict:
+    """{SYM: {price, pct_change, as_of?}} from market_quotes store.
+
+    Always defined on the server module (not only after financials domain mount)
+    so /api/quotes, watchlist, fund positions, and mobile never NameError when
+    the domain mount is late or fails. Financials body may re-bind the same name.
+    """
+    syms = [s.strip().upper() for s in (symbols or []) if s and str(s).strip()]
+    if not syms:
+        return {}
+    if not globals().get("_PSYCOPG2_OK") or not os.environ.get("DATABASE_URL"):
+        return {}
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            if max_age_s is not None:
+                cur.execute("""SELECT symbol, price, pct_change, updated_at FROM market_quotes
+                                WHERE symbol = ANY(%s)
+                                  AND updated_at > now() - (%s || ' seconds')::interval""",
+                            (syms, str(int(max_age_s))))
+            else:
+                cur.execute("SELECT symbol, price, pct_change, updated_at FROM market_quotes "
+                            "WHERE symbol = ANY(%s)", (syms,))
+            return {r["symbol"]: {"price": r["price"], "pct_change": r["pct_change"],
+                                  "as_of": r["updated_at"].isoformat() if r.get("updated_at") else None}
+                    for r in (cur.fetchall() or []) if r.get("price") is not None}
+    except Exception as e:
+        print(f"[market] db_quotes failed: {e!s:.120}", flush=True)
+        return {}
+
+
+def _db_meta(symbols) -> dict:
+    """{SYM: {name, sector, industry, ...}} from security_meta — always available."""
+    syms = [s.strip().upper() for s in (symbols or []) if s and str(s).strip()]
+    if not syms:
+        return {}
+    if not globals().get("_PSYCOPG2_OK") or not os.environ.get("DATABASE_URL"):
+        return {}
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""SELECT symbol, name, sector, industry, analyst_target
+                             FROM security_meta WHERE symbol = ANY(%s)""", (syms,))
+            return {r["symbol"]: dict(r) for r in (cur.fetchall() or []) if r.get("symbol")}
+    except Exception as e:
+        print(f"[market] db_meta failed: {e!s:.120}", flush=True)
+        return {}
 
 
 def _ddl_once(fn):
