@@ -24324,12 +24324,20 @@ def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4,
     return {"indexed": indexed, "found": found, "errors": errors}
 
 
+def _call_sync_cancel_requested(job_id: str) -> bool:
+    j = _call_sync_jobs.get(job_id) or {}
+    return bool(j.get("cancel_requested"))
+
+
 def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int,
                    allow_grok: bool = True) -> None:
     """Background worker: build/refresh the earnings RAG index for tickers."""
     def _set(**kw):
-        _call_sync_jobs[job_id] = {**(_call_sync_jobs.get(job_id) or {}), **kw,
-                                    "updated_at": time.time()}
+        prev = _call_sync_jobs.get(job_id) or {}
+        # Preserve cancel flag across updates
+        if prev.get("cancel_requested") and "cancel_requested" not in kw:
+            kw = {**kw, "cancel_requested": True}
+        _call_sync_jobs[job_id] = {**prev, **kw, "updated_at": time.time()}
     cost_est = (_estimate_call_sync_cost(len(tickers), max_quarters)
                 if allow_grok else
                 {"names": len(tickers), "names_needing_work": len(tickers),
@@ -24352,6 +24360,7 @@ def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int,
     }
     _set(stage="queued", status="running", label="Queued…", started_at=time.time(),
          total=len(tickers), done=0, indexed=0, grok_calls=0, free_hits=0,
+         cancel_requested=False,
          cost_usd=0.0, cost_est=cost_est, allow_grok=allow_grok,
          cascade=cascade_order, keys=keys_status, trail=[])
     try:
@@ -24367,7 +24376,14 @@ def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int,
         # ~$0.05 mid-point per live-search call for running counter
         per_call = 0.05
         mode = "free cascade" if not allow_grok else "cascade (free→Grok)"
+        canceled = False
+        i = 0
         for i, tk in enumerate(tickers):
+            if _call_sync_cancel_requested(job_id):
+                canceled = True
+                print(f"🛑 [call sync {job_id}] cancel at {tk} ({i}/{len(tickers)})",
+                      flush=True)
+                break
             spent_bit = (f" · free hits {free_hits}"
                          + (f" · ~${cost_usd:.2f} Grok" if allow_grok else " · $0 Grok"))
             _set(stage="syncing",
@@ -24397,23 +24413,33 @@ def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int,
                 print(f"⚠️ [call sync {tk}] {e!s:.150}", flush=True)
             _set(indexed=total_indexed, grok_calls=grok_calls, free_hits=free_hits,
                  cost_usd=round(cost_usd, 2), trail=trail_all[-60:])
-        if total_indexed > 0:
+            if _call_sync_cancel_requested(job_id):
+                canceled = True
+                break
+        by_src: dict[str, int] = {}
+        for trow in trail_all:
+            if trow.get("ok"):
+                by_src[trow.get("source") or "?"] = by_src.get(trow.get("source") or "?", 0) + 1
+        if canceled:
+            label = (f"⏹ Stopped · indexed {total_indexed} passages · "
+                     f"{names_with_calls} names · free hits {free_hits}"
+                     + (f" · ~${cost_usd:.2f} Grok" if grok_calls else " · $0 Grok"))
+            st = "canceled"
+        elif total_indexed > 0:
             label = (f"✓ Indexed {total_indexed} passages across {names_with_calls} names"
                      f" · free hits {free_hits}"
                      + (f" · ~${cost_usd:.2f} ({grok_calls} Grok)" if grok_calls
                         else " · $0 Grok")
                      + (f" · via {', '.join(sources_all)}" if sources_all else ""))
+            st = "done"
         else:
             reason = all_errors[0] if all_errors else f"no transcripts via {mode}"
             label = f"⚠ Indexed 0 passages — {reason[:160]}"
             if grok_calls:
                 label += f" · ~${cost_usd:.2f} spent"
-        # Summarize sources used on this run
-        by_src: dict[str, int] = {}
-        for trow in trail_all:
-            if trow.get("ok"):
-                by_src[trow.get("source") or "?"] = by_src.get(trow.get("source") or "?", 0) + 1
-        _set(stage="done", status="done", done=len(tickers), label=label,
+            st = "done"
+        _set(stage=st, status=st, done=len(tickers) if not canceled else i,
+             label=label,
              grok_calls=grok_calls, free_hits=free_hits, cost_usd=round(cost_usd, 2),
              trail=trail_all[-80:],
              result={"tickers": tickers, "chunks_indexed": total_indexed,
@@ -24426,6 +24452,7 @@ def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int,
                      "keys": keys_status,
                      "cost_usd_est": round(cost_usd, 2),
                      "allow_grok": allow_grok,
+                     "canceled": canceled,
                      "errors": all_errors[:12]})
     except Exception as e:
         print(f"❌ [call sync {job_id}] {e!s:.300}", flush=True)
@@ -25271,6 +25298,67 @@ def transcripts_calls_sync_status(job_id: str, request: Request):
     if not job:
         return JSONResponse({"ok": False, "stage": "idle", "error": "no such job"}, status_code=404)
     return {"ok": True, **job}
+
+
+@app.post("/api/transcripts/calls/sync/{job_id}/cancel")
+def transcripts_calls_sync_cancel(job_id: str, request: Request):
+    """Stop a running gap-fill / latest-calls / backfill job after the current ticker."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    job = _call_sync_jobs.get(job_id)
+    if not job:
+        return JSONResponse({"ok": False, "error": "no such job"}, status_code=404)
+    if job.get("status") in ("done", "error", "canceled"):
+        return {"ok": True, "job_id": job_id, "status": job.get("status"),
+                "note": "already finished"}
+    job["cancel_requested"] = True
+    job["label"] = "⏹ Stopping after current name…"
+    job["updated_at"] = time.time()
+    print(f"🛑 [call sync] cancel requested {job_id}", flush=True)
+    return {"ok": True, "job_id": job_id, "status": "canceling",
+            "note": "Stops after the ticker currently in progress."}
+
+
+@app.post("/api/transcripts/calls/sync/cancel-all")
+def transcripts_calls_sync_cancel_all(request: Request):
+    """Cancel every running call-sync / backfill job (in-memory on this process)."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    canceled = []
+    for jid, job in list(_call_sync_jobs.items()):
+        if not isinstance(job, dict):
+            continue
+        if job.get("status") in ("running", "queued", "syncing", "loading",
+                                  "indexing", "backup"):
+            job["cancel_requested"] = True
+            job["label"] = "⏹ Stopping after current name…"
+            job["updated_at"] = time.time()
+            canceled.append(jid)
+        elif job.get("status") not in ("done", "error", "canceled") and job.get("stage") not in (
+                "done", "error", "canceled"):
+            # Heuristic: anything still moving
+            if job.get("stage") and job.get("stage") not in ("done", "error", "canceled"):
+                job["cancel_requested"] = True
+                job["label"] = "⏹ Stopping after current name…"
+                job["updated_at"] = time.time()
+                canceled.append(jid)
+    # Also mark status=running loosely
+    for jid, job in list(_call_sync_jobs.items()):
+        if not isinstance(job, dict):
+            continue
+        if job.get("status") == "running" or job.get("stage") in (
+                "queued", "syncing", "loading", "indexing", "backup"):
+            if jid not in canceled:
+                job["cancel_requested"] = True
+                job["label"] = "⏹ Stopping after current name…"
+                job["updated_at"] = time.time()
+                canceled.append(jid)
+    print(f"🛑 [call sync] cancel-all → {len(canceled)} jobs", flush=True)
+    return {"ok": True, "canceled": canceled, "count": len(canceled),
+            "note": ("Stops between tickers. Redeploy also kills in-flight workers. "
+                     "Already-stored passages stay.")}
 
 
 def _call_date_str(v) -> str | None:

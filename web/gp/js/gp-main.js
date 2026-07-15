@@ -1543,6 +1543,8 @@
     if (syncBtn) syncBtn.addEventListener('click', () => _syncEarningsCalls({ allowGrok: true }));
     const gapBtn = document.getElementById('tr-gap-btn');
     if (gapBtn) gapBtn.addEventListener('click', () => _syncEarningsCalls({ allowGrok: false }));
+    const stopBtn = document.getElementById('tr-stop-btn');
+    if (stopBtn) stopBtn.addEventListener('click', _stopCallSync);
     const backfillBtn = document.getElementById('tr-backfill-btn');
     if (backfillBtn) backfillBtn.addEventListener('click', () => _backfillCalls(false));
     const restoreBtn = document.getElementById('tr-restore-btn');
@@ -1611,12 +1613,40 @@
 
   // ── Sync earnings calls (free gap-fill or cascade free→Grok) ──
   let _trSyncPoll = null;
+  let _trActiveJobId = null;
   const _TR_SYNC_BTN = '⚡ Latest calls (free→Grok)';
   const _TR_GAP_BTN = '🕳 Fill gap · free (Fool/FMP)';
   function _trFmtUsd(n) {
     const v = Number(n);
     if (!isFinite(v)) return '—';
     return (v < 10 ? v.toFixed(2) : v.toFixed(1));
+  }
+  function _trShowStop(show) {
+    const row = document.getElementById('tr-stop-row');
+    if (row) row.style.display = show ? 'block' : 'none';
+  }
+  async function _stopCallSync() {
+    const status = document.getElementById('tr-sync-status');
+    const box = h => { if (status) status.innerHTML = h; };
+    try {
+      let r;
+      if (_trActiveJobId) {
+        r = await window.dgaFetch('/api/transcripts/calls/sync/' + encodeURIComponent(_trActiveJobId) + '/cancel', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        });
+      } else {
+        r = await window.dgaFetch('/api/transcripts/calls/sync/cancel-all', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        });
+      }
+      const j = await r.json().catch(() => ({}));
+      box('<div style="font-size:12px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:9px 12px;">⏹ Stop requested'
+        + (j.count != null ? ' · ' + j.count + ' job(s)' : '')
+        + ' — finishes the current name, then stops. Already-saved passages stay.</div>');
+      window.toast && window.toast('⏹ Stopping fill…', { type: 'warn' });
+    } catch (e) {
+      box('<div style="font-size:12px;color:#b91c1c;">Could not stop: ' + _trEsc(e.message) + '</div>');
+    }
   }
   async function _syncEarningsCalls(opts) {
     const allowGrok = !opts || opts.allowGrok !== false;
@@ -1685,6 +1715,8 @@
         otherBtn.disabled = false;
         otherBtn.textContent = allowGrok ? _TR_GAP_BTN : _TR_SYNC_BTN;
       }
+      _trShowStop(false);
+      _trActiveJobId = null;
     };
     try {
       const r = await window.dgaFetch('/api/transcripts/calls/sync', {
@@ -1698,6 +1730,8 @@
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
       const jobId = j.job_id;
+      _trActiveJobId = jobId;
+      _trShowStop(true);
       const est = j.cost_est || {};
       const cascade = (j.cascade || []).join(' → ') || (allowGrok ? 'free→Grok' : 'free');
       const estLine = allowGrok && est.est_cost_usd_high
@@ -1737,7 +1771,7 @@
                 : {},
             }, trail);
           }
-          if (s.status === 'done') {
+          if (s.status === 'done' || s.status === 'canceled') {
             clearInterval(_trSyncPoll); _trSyncPoll=null;
             const n = (s.result && s.result.chunks_indexed) || 0;
             const errs = (s.result && s.result.errors) || [];
@@ -1750,7 +1784,12 @@
             const meta = ' · free hits ' + ((s.result && s.result.free_hits) || freeHits || 0)
               + (costDone ? ' · ~$' + _trFmtUsd(costDone) + ' Grok' : ' · $0 Grok')
               + (srcs ? ' · via ' + _trEsc(srcs) : '');
-            if (n > 0) {
+            const stopped = s.status === 'canceled' || (s.result && s.result.canceled);
+            if (stopped) {
+              box('<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:9px 12px;font-size:12px;color:#9a3412;">⏹ '
+                +_trEsc(s.label||'Stopped')+meta+'</div>');
+              window.toast('⏹ Fill stopped' + (n ? ' · ' + n + ' passages kept' : ''), {type:'warn'});
+            } else if (n > 0) {
               box('<div style="background:var(--success-50);border:1px solid #bbf7d0;border-radius:8px;padding:9px 12px;font-size:12px;color:var(--success-700);">✓ '
                 +_trEsc(s.label||'Done')+meta+'</div>');
               window.toast('✓ Calls indexed' + meta, {type:'success'});
