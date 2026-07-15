@@ -23698,13 +23698,25 @@ def _fetch_motley_fool_transcript(ticker: str, year: int, quarter: int) -> dict:
                 "error": "no Motley Fool URL found (probe + search)",
                 "source": "motley_fool"}
     errors = []
+    import requests as _req
+    sess = _req.Session()
+    sess.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml",
+    })
     for url in urls:
         try:
-            got = _http_get_text(url, timeout=30)
-            if not isinstance(got, (tuple, list)) or len(got) < 2:
-                errors.append(f"bad http response type for {url[-40:]}")
-                continue
-            status, html = int(got[0]), got[1]
+            r = sess.get(url, timeout=30, allow_redirects=True)
+            status = int(getattr(r, "status_code", 0) or 0)
+            html = getattr(r, "text", None) or ""
+            if not html and getattr(r, "content", None):
+                try:
+                    html = r.content.decode("utf-8", "replace")
+                except Exception:
+                    html = ""
         except Exception as e:
             errors.append(_redact_secrets(str(e)[:80]))
             continue
