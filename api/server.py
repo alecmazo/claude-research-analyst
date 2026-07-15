@@ -194,7 +194,9 @@ except ImportError:
 # yfinance HTTP requests for the same symbol within _QUOTE_TTL seconds.
 # Format: { symbol: {"price": float|None, "pct_change": float|None, "_ts": float} }
 _QUOTE_CACHE: dict = {}
-_QUOTE_TTL = 600   # seconds (10 min)
+# Short TTL so watchlist / mobile day-change stays near live (was 10 min and
+# often served wrong multi-ticker yfinance closes + bad day-over-day %).
+_QUOTE_TTL = 90    # seconds
 
 # Cache for information_schema column checks (avoid slow system-table hits per request)
 _col_exists_cache: dict = {}   # { "table.column": bool }
@@ -10615,168 +10617,220 @@ def _tiingo_single(sym: str) -> dict:
 def batch_quotes(tickers: str = ""):
     """Return {symbol: {price, pct_change}} for a comma-separated ticker list.
 
-    Uses a single yf.download() batch call for all cache-MISS tickers, then
-    stores results per-ticker in the unified _QUOTE_CACHE.  Subsequent calls
-    for any subset of already-fetched symbols are served from cache at zero
-    cost — including calls from _fetch_prices() which now delegates here.
+    Cascade (cache-miss only):
+      1. In-process cache (short TTL)
+      2. market_data.get_quotes — Tradier last + official day % when configured
+      3. Yahoo chart HTTP (per symbol) — correct regularMarketPrice / previousClose
+      4. yfinance download with safe multi-index extraction
+      5. Tiingo
+      6. Any-age market_quotes store (as_of stamped)
 
-    Period "5d" covers weekends, holidays, and illiquid tickers that may not
-    have traded on the most recent market day.
+    Day % always prefers official previous_close vs last, never a random prior
+    bar from a multi-ticker frame (that path mixed symbols and wrong %).
     """
     originals = [t.strip().upper().rstrip("*") for t in tickers.split(",") if t.strip()][:100]
     if not originals:
         return {}
 
     # NOTE: _SCAN_EXCLUDE is intentionally NOT applied here — batch_quotes() is
-    # a price-only function. Tickers excluded from AI scanning (preferred stocks,
-    # ETFs, alias mismatches) still have real prices and must appear in the live
-    # portfolio watchlist.  Scan-level filtering lives in _filter_scan_tickers().
-    to_lookup = originals
+    # a price-only function. Tickers excluded from AI scanning still have real
+    # prices and must appear in the live portfolio / watchlist.
     null_row: dict = {"price": None, "pct_change": None}
     result: dict = {}
 
     # ── Per-ticker cache check ────────────────────────────────────────────────
     now    = time.time()
     misses: list = []
-    for sym in to_lookup:
+    for sym in originals:
         entry = _QUOTE_CACHE.get(sym)
-        if entry and (now - entry["_ts"]) < _QUOTE_TTL:
-            result[sym] = {"price": entry["price"], "pct_change": entry["pct_change"]}
+        if entry and (now - entry["_ts"]) < _QUOTE_TTL and entry.get("price") is not None:
+            result[sym] = {"price": entry["price"], "pct_change": entry.get("pct_change")}
+            if entry.get("as_of"):
+                result[sym]["as_of"] = entry["as_of"]
         else:
             misses.append(sym)
 
     if not misses:
         return result
 
-    # ── Persisted store (freshness-gated) for cache-MISS tickers ──────────────
-    # If the market-data store was refreshed very recently, serve those quotes
-    # from the DB instead of a live call. Window kept tight (5 min) so the
-    # watchlist never shows stale prices; anything older falls through to live.
-    # Safe wrapper: never let a missing/broken _db_quotes (domain mount race)
-    # take down live pricing for mobile or desktop.
-    try:
-        db_fresh = _db_quotes(misses, max_age_s=300) if "_db_quotes" in globals() and callable(_db_quotes) else {}
-    except Exception as _dbq_e:
-        print(f"[batch_quotes] db_quotes fresh failed: {_dbq_e!s:.120}", flush=True)
-        db_fresh = {}
-    if db_fresh:
-        still_missing = []
-        for sym in misses:
-            dq = db_fresh.get(sym)
-            if dq and dq.get("price") is not None:
-                result[sym] = {"price": dq["price"], "pct_change": dq.get("pct_change")}
-                _QUOTE_CACHE[sym] = {**result[sym], "_ts": now}
-            else:
-                still_missing.append(sym)
-        misses = still_missing
-        if not misses:
-            return result
-
-    if not _YFINANCE_OK:
-        for s in misses:
-            result[s] = null_row
-            _QUOTE_CACHE[s] = {**null_row, "_ts": now}
-        return result
-
-    # ── Apply alias map for misses only ──────────────────────────────────────
-    alias_map: dict = {}   # yahoo_sym → original
-    yahoo_syms: list = []
-    for orig in misses:
-        ysym = _resolve_ticker_alias(orig)
-        alias_map[ysym] = orig
-        yahoo_syms.append(ysym)
-
-    fetched: dict = {}
-    try:
-        import yfinance as _yf
-        # period="1mo" ensures we capture illiquid OTC preferreds (Freddie/Fannie)
-        # that may only trade a few times per week.  dropna() in _extract always
-        # returns the most-recent available close, so stale days don't matter.
-        # Timeout-guarded: a rate-limited Yahoo call can hang indefinitely from
-        # the cloud IP (the ui209 failure class) — never let it stall a request.
-        data = _builder_call_timeout(
-            lambda: _yf.download(yahoo_syms, period="1mo", auto_adjust=True,
-                                 progress=False, group_by="ticker"),
-            10.0, None)
-        if data is None:
-            raise ValueError("yf.download timed out")
-
-        def _extract(ysym: str) -> tuple:
-            """Return (price, pct_change) from the last two available close prices.
-
-            Handles both single-ticker (flat columns) and multi-ticker
-            (nested MultiIndex) yfinance download shapes.  dropna() removes
-            days with no data so illiquid preferreds fall back to their last
-            actual trade date automatically.
-            """
-            try:
-                # Single-ticker download → flat columns ("Close", "Open", …)
-                if len(yahoo_syms) == 1:
-                    closes = data["Close"].dropna()
-                else:
-                    # Multi-ticker → try (ticker, "Close") MultiIndex first,
-                    # then fall back to data[ysym]["Close"] for older yfinance.
-                    try:
-                        closes = data[(ysym, "Close")].dropna()
-                    except KeyError:
-                        closes = data[ysym]["Close"].dropna()
-                if len(closes) >= 2:
-                    price = float(closes.iloc[-1])
-                    prev  = float(closes.iloc[-2])
-                    pct   = (price - prev) / prev * 100 if prev else None
-                    return price, pct
-                elif len(closes) == 1:
-                    return float(closes.iloc[-1]), None
-            except Exception as _ex:
-                print(f"[batch_quotes] _extract({ysym}): {_ex}")
-            return None, None
-
-        for ysym, orig in alias_map.items():
-            price, pct = _extract(ysym)
-            fetched[orig] = {"price": price, "pct_change": pct}
-            if price is not None:
-                print(f"[batch_quotes] {orig}({ysym}): ${price:.4f}  {pct:+.2f}%" if pct is not None else f"[batch_quotes] {orig}({ysym}): ${price:.4f}  pct=n/a")
-
-    except Exception as _e:
-        print(f"[batch_quotes] yf.download failed: {_e}")
-        fetched = {s: {"price": None, "pct_change": None} for s in misses}
-
-    # ── Tiingo fallback for any Yahoo misses ──────────────────────────────────
-    still_missing = [orig for orig, v in fetched.items() if v.get("price") is None]
-    if still_missing:
-        tiingo_data = _tiingo_batch(still_missing)
-        for orig in still_missing:
-            if orig in tiingo_data:
-                fetched[orig] = tiingo_data[orig]
-                print(f"[quotes] {orig}: Yahoo miss → Tiingo hit")
-
-    # ── Last resort: newest persisted quote of ANY age, marked as_of ─────────
-    # A 12-minute-old autosync price beats a blank cell — the UI can badge it
-    # as stale instead of rendering "—" during a Yahoo/Tiingo outage.
-    still_null = [orig for orig, v in fetched.items() if v.get("price") is None]
-    if still_null:
+    def _pct_from(price, prev):
         try:
-            db_any = _db_quotes(still_null) if "_db_quotes" in globals() and callable(_db_quotes) else {}
-        except Exception as _dbq_e:
-            print(f"[batch_quotes] db_quotes any-age failed: {_dbq_e!s:.120}", flush=True)
-            db_any = {}
-        for orig in still_null:
-            dq = db_any.get(orig)
-            if dq and dq.get("price") is not None:
-                fetched[orig] = dq
-                print(f"[quotes] {orig}: live miss → store quote as_of {dq.get('as_of')}")
+            if price is None or prev in (None, 0):
+                return None
+            return (float(price) - float(prev)) / float(prev) * 100.0
+        except (TypeError, ValueError):
+            return None
 
-    # ── Store per-ticker in unified cache and merge into result ───────────────
-    # Null rows get a short effective TTL (60s) instead of the full window, so
-    # a transient failure doesn't pin blanks on screen for 10 minutes.
-    ts_now = time.time()
-    for sym, q in fetched.items():
-        _QUOTE_CACHE[sym] = {**q, "_ts": (ts_now if q.get("price") is not None
-                                          else ts_now - _QUOTE_TTL + 60)}
-        result[sym] = q
-    for sym in misses:
+    def _accept(sym: str, price, pct=None, prev=None, source: str = "", as_of=None):
+        if price is None:
+            return
+        try:
+            price = float(price)
+        except (TypeError, ValueError):
+            return
+        if price != price:  # NaN
+            return
+        if pct is None and prev is not None:
+            pct = _pct_from(price, prev)
+        row = {"price": price, "pct_change": pct}
+        if as_of:
+            row["as_of"] = as_of
+        if source:
+            row["source"] = source
+        result[sym] = row
+        _QUOTE_CACHE[sym] = {**row, "_ts": now}
+
+    # ── 1) Tradier / market_data (authoritative day % when available) ─────────
+    try:
+        import market_data as _md
+        ymap = {orig: _resolve_ticker_alias(orig) for orig in misses}
+        rev: dict = {}
+        for orig, ysym in ymap.items():
+            rev.setdefault(ysym, []).append(orig)
+        mdq = _md.get_quotes(list(rev.keys())) or {}
+        for ysym, q in mdq.items():
+            px = q.get("price")
+            prev = q.get("prev_close")
+            pct = q.get("pct_change")
+            if pct is None:
+                pct = _pct_from(px, prev)
+            for orig in rev.get(ysym, [ysym]):
+                if orig in misses:
+                    _accept(orig, px, pct, prev, source=q.get("source") or "market_data")
+        misses = [s for s in misses if s not in result or result[s].get("price") is None]
+    except Exception as e:
+        print(f"[batch_quotes] market_data failed: {e!s:.140}", flush=True)
+
+    # ── 2) Yahoo chart HTTP — last / previousClose (avoids multi-ticker mixups) ─
+    if misses:
+        try:
+            import urllib.request as _urlreq
+            still = []
+            for orig in misses:
+                ysym = _resolve_ticker_alias(orig)
+                try:
+                    url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{ysym}"
+                           f"?range=5d&interval=1d")
+                    req = _urlreq.Request(
+                        url, headers={"User-Agent": "Mozilla/5.0 DGACapital/1.0"})
+                    with _urlreq.urlopen(req, timeout=6) as resp:
+                        data = json.loads(resp.read().decode("utf-8", "replace"))
+                    res0 = ((data.get("chart") or {}).get("result") or [None])[0]
+                    if not res0:
+                        still.append(orig)
+                        continue
+                    meta = res0.get("meta") or {}
+                    px = meta.get("regularMarketPrice") or meta.get("previousClose")
+                    prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+                    if px is None:
+                        closes = ((res0.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
+                        closes = [c for c in closes if c is not None]
+                        if closes:
+                            px = closes[-1]
+                            if prev is None and len(closes) >= 2:
+                                prev = closes[-2]
+                    if px is None:
+                        still.append(orig)
+                        continue
+                    _accept(orig, px, None, prev, source="yahoo-chart")
+                except Exception:
+                    still.append(orig)
+            misses = still
+        except Exception as e:
+            print(f"[batch_quotes] yahoo-chart path failed: {e!s:.120}", flush=True)
+
+    # ── 3) yfinance batch (safe multi-index) ──────────────────────────────────
+    if misses and _YFINANCE_OK:
+        ymap = {}
+        yahoo_syms = []
+        seen_y = set()
+        for orig in misses:
+            ysym = _resolve_ticker_alias(orig)
+            ymap.setdefault(ysym, []).append(orig)
+            if ysym not in seen_y:
+                seen_y.add(ysym)
+                yahoo_syms.append(ysym)
+        try:
+            import yfinance as _yf
+            data = _builder_call_timeout(
+                lambda: _yf.download(
+                    yahoo_syms, period="5d", auto_adjust=True,
+                    progress=False, group_by="column", threads=False),
+                10.0, None)
+            if data is not None and len(getattr(data, "columns", [])) > 0:
+                def _closes_for(ysym: str):
+                    # group_by=column → ('Close', TICKER) or flat Close for n=1
+                    try:
+                        if len(yahoo_syms) == 1:
+                            return data["Close"].dropna()
+                        if hasattr(data.columns, "levels"):
+                            # MultiIndex: try Close then ticker
+                            try:
+                                return data["Close"][ysym].dropna()
+                            except Exception:
+                                return data[(ysym, "Close")].dropna()
+                        return data[ysym]["Close"].dropna()
+                    except Exception:
+                        return None
+
+                for ysym, origs in ymap.items():
+                    closes = _closes_for(ysym)
+                    if closes is None or len(closes) == 0:
+                        continue
+                    price = float(closes.iloc[-1])
+                    prev = float(closes.iloc[-2]) if len(closes) >= 2 else None
+                    for orig in origs:
+                        if orig in misses:
+                            _accept(orig, price, None, prev, source="yfinance")
+                misses = [s for s in misses if s not in result or result[s].get("price") is None]
+        except Exception as _e:
+            print(f"[batch_quotes] yf.download failed: {_e}", flush=True)
+
+    # ── 4) Tiingo ─────────────────────────────────────────────────────────────
+    if misses:
+        try:
+            tiingo_data = _tiingo_batch(misses) or {}
+            for orig, q in tiingo_data.items():
+                if q.get("price") is not None:
+                    _accept(orig, q.get("price"), q.get("pct_change"),
+                            source="tiingo")
+            misses = [s for s in misses if s not in result or result[s].get("price") is None]
+        except Exception as e:
+            print(f"[batch_quotes] tiingo failed: {e!s:.120}", flush=True)
+
+    # ── 5) Fresh store (≤90s) then any-age store ──────────────────────────────
+    if misses:
+        try:
+            db_fn = globals().get("_db_quotes")
+            db_fresh = db_fn(misses, max_age_s=90) if callable(db_fn) else {}
+        except Exception as e:
+            print(f"[batch_quotes] db_quotes fresh failed: {e!s:.120}", flush=True)
+            db_fresh = {}
+        for sym, dq in (db_fresh or {}).items():
+            if dq and dq.get("price") is not None:
+                _accept(sym, dq["price"], dq.get("pct_change"),
+                        source="store-fresh", as_of=dq.get("as_of"))
+        misses = [s for s in misses if s not in result or result[s].get("price") is None]
+
+    if misses:
+        try:
+            db_fn = globals().get("_db_quotes")
+            db_any = db_fn(misses) if callable(db_fn) else {}
+        except Exception as e:
+            print(f"[batch_quotes] db_quotes any-age failed: {e!s:.120}", flush=True)
+            db_any = {}
+        for sym, dq in (db_any or {}).items():
+            if dq and dq.get("price") is not None:
+                _accept(sym, dq["price"], dq.get("pct_change"),
+                        source="store", as_of=dq.get("as_of"))
+                print(f"[quotes] {sym}: live miss → store as_of {dq.get('as_of')}", flush=True)
+        misses = [s for s in misses if s not in result or result[s].get("price") is None]
+
+    # Fill remaining with nulls (short negative cache)
+    for sym in originals:
         if sym not in result:
-            result[sym] = null_row
+            result[sym] = dict(null_row)
+            _QUOTE_CACHE[sym] = {**null_row, "_ts": now - _QUOTE_TTL + 45}
 
     return result
 

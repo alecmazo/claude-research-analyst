@@ -145,24 +145,42 @@ def tradier_chain(symbol: str, expiration: str) -> list | None:
 
 # ── yfinance fallback (normalized to the same shape) ─────────────────────────
 def _yf_quotes(symbols: list) -> dict:
+    """Per-symbol Yahoo chart quotes (avoids multi-ticker frame mixups)."""
     out = {}
+    if not symbols:
+        return out
     try:
-        import yfinance as yf
-        data = yf.download(symbols, period="5d", auto_adjust=True,
-                           progress=False, group_by="ticker")
+        import json as _json
+        import urllib.request as _urlreq
         for sym in symbols:
             try:
-                closes = (data["Close"].dropna() if len(symbols) == 1
-                          else data[(sym, "Close")].dropna())
-                if len(closes) >= 2:
-                    price, prev = float(closes.iloc[-1]), float(closes.iloc[-2])
-                    out[sym] = {"price": price, "prev_close": prev,
-                                "pct_change": (price - prev) / prev * 100 if prev else None,
-                                "source": "yfinance"}
+                url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+                       f"?range=5d&interval=1d")
+                req = _urlreq.Request(
+                    url, headers={"User-Agent": "Mozilla/5.0 DGACapital/1.0"})
+                with _urlreq.urlopen(req, timeout=6) as resp:
+                    data = _json.loads(resp.read().decode("utf-8", "replace"))
+                res0 = ((data.get("chart") or {}).get("result") or [None])[0]
+                if not res0:
+                    continue
+                meta = res0.get("meta") or {}
+                px = meta.get("regularMarketPrice") or meta.get("previousClose")
+                prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+                if px is None:
+                    continue
+                pct = None
+                if prev not in (None, 0):
+                    pct = (float(px) - float(prev)) / float(prev) * 100.0
+                out[sym] = {
+                    "price": float(px),
+                    "prev_close": float(prev) if prev is not None else None,
+                    "pct_change": pct,
+                    "source": "yahoo-chart",
+                }
             except Exception:
                 continue
     except Exception as e:
-        print(f"[market_data] yfinance quotes failed: {e!s:.120}", flush=True)
+        print(f"[market_data] yfinance/yahoo-chart quotes failed: {e!s:.120}", flush=True)
     return out
 
 
