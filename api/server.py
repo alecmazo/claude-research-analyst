@@ -6718,7 +6718,9 @@ def get_report(ticker: str, provider: str = "grok", request: Request = None):
             with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
                 cur.execute("""
                     SELECT report_md, has_docx, has_pptx, generated_at, gamma_url,
-                           report_md_claude, claude_generated_at
+                           report_md_claude, claude_generated_at,
+                           rating, price_target, upside_pct,
+                           claude_rating, claude_price_target, claude_upside_pct
                     FROM analyst_reports
                     WHERE ticker = %s
                 """, (ticker,))
@@ -6734,6 +6736,15 @@ def get_report(ticker: str, provider: str = "grok", request: Request = None):
                         "has_pptx": False,
                         "gamma_url": None,
                         "gamma_generated_at": None,
+                        "rating": row.get("claude_rating") or row.get("rating"),
+                        "price_target": (float(row["claude_price_target"])
+                                         if row.get("claude_price_target") is not None
+                                         else (float(row["price_target"])
+                                               if row.get("price_target") is not None else None)),
+                        "upside_pct": (float(row["claude_upside_pct"])
+                                       if row.get("claude_upside_pct") is not None
+                                       else (float(row["upside_pct"])
+                                             if row.get("upside_pct") is not None else None)),
                     }
                 if provider == "grok" and row["report_md"]:
                     return {
@@ -6745,6 +6756,11 @@ def get_report(ticker: str, provider: str = "grok", request: Request = None):
                         "has_pptx": row["has_pptx"],
                         "gamma_url": row["gamma_url"],
                         "gamma_generated_at": None,
+                        "rating": row.get("rating"),
+                        "price_target": (float(row["price_target"])
+                                         if row.get("price_target") is not None else None),
+                        "upside_pct": (float(row["upside_pct"])
+                                       if row.get("upside_pct") is not None else None),
                     }
         except Exception as _e:
             print(f"[analyst_reports] get_report DB query failed for {ticker} (falling back): {_e!s:.200}")
@@ -6811,47 +6827,57 @@ def download_pptx(ticker: str):
 
 @app.get("/api/quote/{ticker}")
 def get_quote(ticker: str):
-    """Return live market price for *ticker* from Yahoo Finance.
+    """Return live market price for *ticker* (fast path for report hero).
 
-    Applies the alias map before fetching so BRKB→BRK-B etc. resolve
-    correctly. The original symbol is preserved in the response.
-    Falls back to market_data (bar-based prev close) when snapshot lacks
-    price or day % so the report hero Day never stays blank while price shows.
+    Prefer market_data Yahoo chart (bar prev-close) first — typically <300ms.
+    Fall back to analyst snapshot / Tiingo only when that misses. The old order
+    (snapshot first) could stall report open for several seconds.
     """
     original  = ticker.strip().upper().rstrip("*")
     # Skip Yahoo/Tiingo entirely for tickers in the exclusion list —
     # they're preferred stocks or ETFs that generate 404/delisted spam.
-    if original in _SCAN_EXCLUDE:
+    if original in _SCAN_EXCLUDE or _is_agency_preferred(original):
         return {"ticker": original, "price": None, "pct_change": None}
     yahoo_sym = _resolve_ticker_alias(original)   # e.g. BRKB → BRK-B
-    snapshot  = analyst.fetch_market_snapshot(yahoo_sym) or {}
-    # Fill missing price / prev / day % via market_data (correct bar prev)
-    if (snapshot.get("price") is None
-            or snapshot.get("pct_change") is None
-            or snapshot.get("previous_close") is None):
+    snapshot: dict = {}
+    # 1) Fast path — same bar prev-close as watchlist / stock-info
+    try:
+        import market_data as _md
+        mq = (_md.get_quotes([yahoo_sym]) or {}).get(yahoo_sym) or {}
+        if mq.get("price") is not None:
+            snapshot = {
+                "price": mq.get("price"),
+                "previous_close": mq.get("prev_close"),
+                "prev_close": mq.get("prev_close"),
+                "pct_change": mq.get("pct_change"),
+                "source": mq.get("source") or "yahoo-chart",
+            }
+    except Exception as e:
+        print(f"[quote] {original}: market_data failed: {e!s:.100}", flush=True)
+    # 2) Slower snapshot only if still missing price or day %
+    if snapshot.get("price") is None or snapshot.get("pct_change") is None:
         try:
-            import market_data as _md
-            mq = (_md.get_quotes([yahoo_sym]) or {}).get(yahoo_sym) or {}
-            if snapshot.get("price") is None and mq.get("price") is not None:
-                snapshot["price"] = mq["price"]
-                snapshot["source"] = mq.get("source") or snapshot.get("source") or "yahoo-chart"
-            if snapshot.get("previous_close") is None and mq.get("prev_close") is not None:
-                snapshot["previous_close"] = mq["prev_close"]
-            if snapshot.get("pct_change") is None and mq.get("pct_change") is not None:
-                snapshot["pct_change"] = mq["pct_change"]
-            # Recompute day % if we now have both legs
-            if (snapshot.get("pct_change") is None
-                    and snapshot.get("price") is not None
-                    and snapshot.get("previous_close") not in (None, 0)):
-                try:
-                    px = float(snapshot["price"])
-                    pv = float(snapshot["previous_close"])
-                    snapshot["pct_change"] = round((px - pv) / pv * 100.0, 2)
-                except (TypeError, ValueError, ZeroDivisionError):
-                    pass
+            snap = analyst.fetch_market_snapshot(yahoo_sym) or {}
+            if snapshot.get("price") is None and snap.get("price") is not None:
+                snapshot["price"] = snap["price"]
+                snapshot["source"] = snap.get("source") or snapshot.get("source")
+            if snapshot.get("previous_close") is None and snap.get("previous_close") is not None:
+                snapshot["previous_close"] = snap["previous_close"]
+                snapshot["prev_close"] = snap["previous_close"]
+            if snapshot.get("pct_change") is None and snap.get("pct_change") is not None:
+                snapshot["pct_change"] = snap["pct_change"]
         except Exception as e:
-            print(f"[quote] {original}: market_data fill failed: {e!s:.100}", flush=True)
-    # If still no price, try Tiingo before giving up
+            print(f"[quote] {original}: snapshot fill failed: {e!s:.100}", flush=True)
+    if (snapshot.get("pct_change") is None
+            and snapshot.get("price") is not None
+            and snapshot.get("previous_close") not in (None, 0)):
+        try:
+            px = float(snapshot["price"])
+            pv = float(snapshot["previous_close"])
+            snapshot["pct_change"] = round((px - pv) / pv * 100.0, 2)
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+    # 3) Tiingo last resort
     if snapshot.get("price") is None:
         t = _tiingo_single(yahoo_sym)
         if t.get("price") is not None:
@@ -7195,6 +7221,8 @@ _TICKER_META_TTL = 900                     # 15 min — same as price/SPY caches
 
 
 _STOCK_INFO_CACHE: dict[str, tuple[float, dict]] = {}
+# list_reports orphan hydration / date backfill — once per process only
+_REPORTS_HYDRATE_ONCE: bool = False
 
 
 @app.get("/api/stock-info/{ticker}")
@@ -10178,25 +10206,23 @@ def list_reports(request: Request = None):
     except Exception:
         pass
 
-    # Lazy one-shot: hydrate any orphaned Grok reports — the typical case
-    # is a Grok analysis whose file made it to disk + Drive but whose DB
-    # upsert silently failed for any reason. Without this, the user sees
-    # the file in Dropbox but nothing in Saved Reports.
-    try:
-        _hydrate_orphaned_grok_reports()
-    except Exception:
-        pass
-    # Same for orphaned Claude reports (Compare / LLM Lab side artifacts).
-    try:
-        _hydrate_orphaned_claude_reports()
-    except Exception:
-        pass
-    # Lazy one-shot: backfill report_date / claude_report_date for existing
-    # rows that predate the schema migration (extracts from stored markdown).
-    try:
-        _backfill_report_dates()
-    except Exception:
-        pass
+    # Hydration / date backfill run AT MOST once per process — they were
+    # re-scanning Dropbox/disk on every Saved Reports / list open (~seconds).
+    global _REPORTS_HYDRATE_ONCE  # noqa: PLW0603
+    if not _REPORTS_HYDRATE_ONCE:
+        _REPORTS_HYDRATE_ONCE = True
+        try:
+            _hydrate_orphaned_grok_reports()
+        except Exception:
+            pass
+        try:
+            _hydrate_orphaned_claude_reports()
+        except Exception:
+            pass
+        try:
+            _backfill_report_dates()
+        except Exception:
+            pass
 
     # ── Primary: PostgreSQL ──────────────────────────────────────────────────
     if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
@@ -10291,10 +10317,19 @@ def list_reports(request: Request = None):
                 # client depending solely on a second /api/quotes round-trip
                 # (that was leaving Price + Upside blank when the quotes call
                 # failed or dual-provider rows only computed upside from px).
+                # Prefer market_data.get_quotes (batch Yahoo chart) over
+                # batch_quotes cascade — full book via cascade can take 15s+.
                 try:
                     tks = [row["ticker"] for row in out if row.get("ticker")]
                     if tks:
-                        qmap = batch_quotes(",".join(tks)) or {}
+                        qmap = {}
+                        try:
+                            import market_data as _md
+                            qmap = _md.get_quotes(tks) or {}
+                        except Exception as _qe:
+                            print(f"[reports] market_data quotes: {_qe!s:.100}", flush=True)
+                        if not qmap:
+                            qmap = batch_quotes(",".join(tks[:60])) or {}
                         for row in out:
                             q = qmap.get(row["ticker"]) or {}
                             px = q.get("price")

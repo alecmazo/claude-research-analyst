@@ -4724,7 +4724,11 @@
       }
       if (!rRep.ok) throw new Error('reports ' + rRep.status);
       const list = await rRep.json();
-      renderReports(Array.isArray(list) ? list : []);
+      const arr = Array.isArray(list) ? list : [];
+      // Keep a light in-memory index so openReport() can read PT/rating
+      // without re-fetching the full /api/reports book on every click.
+      window._reportsListCache = arr;
+      renderReports(arr);
       // Inject news headlines as a side-effect after the rows render.
       setTimeout(loadNewsForReports, 200);
     } catch (e) {
@@ -15399,11 +15403,13 @@
     const freshRow = overlay.querySelector('#rm-fresh-row');
 
     try {
-      const [r, qRes, listRes] = await Promise.all([
+      // CRITICAL: never fetch full /api/reports here — that endpoint re-quotes
+      // the entire book (~15s) and was making every watchlist click crawl.
+      // Rating / PT / upside come from the report payload + markdown parse.
+      const [r, qRes] = await Promise.all([
         window.dgaFetch('/api/report/' + encodeURIComponent(ticker)
                          + '?provider=' + encodeURIComponent(provider)),
         window.dgaFetch('/api/quote/' + encodeURIComponent(ticker)).catch(() => null),
-        window.dgaFetch('/api/reports').catch(() => null),
       ]);
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const d = await r.json();
@@ -15412,7 +15418,7 @@
       if (qRes && qRes.ok) {
         try { quote = await qRes.json(); } catch (_) {}
       }
-      // If /api/quote returned price but no day %, fill from batch quotes
+      // If /api/quote returned price but no day %, fill from batch quotes (single ticker)
       if (quote && quote.price != null && quote.pct_change == null) {
         try {
           const bq = await window.dgaFetch(
@@ -15426,14 +15432,23 @@
           }
         } catch (_) {}
       }
+      // Prefer fields on the report response; optional in-memory list from
+      // loadReports() if the user already visited Saved Reports this session.
       let listMeta = null;
-      if (listRes && listRes.ok) {
-        try {
-          const list = await listRes.json();
-          listMeta = (Array.isArray(list) ? list : []).find(function (x) {
+      try {
+        const cached = window._reportsListCache;
+        if (Array.isArray(cached)) {
+          listMeta = cached.find(function (x) {
             return String(x.ticker || '').toUpperCase() === String(ticker).toUpperCase();
           }) || null;
-        } catch (_) {}
+        }
+      } catch (_) {}
+      if (!listMeta && d) {
+        listMeta = {
+          rating: d.rating,
+          price_target: d.price_target,
+          upside_pct: d.upside_pct,
+        };
       }
 
       if (d.generated_at) {
