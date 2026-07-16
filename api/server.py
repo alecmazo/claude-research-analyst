@@ -303,16 +303,62 @@ _SCAN_EXCLUDE: dict[str, str] = {
     "BKLN":   "etf",
     # Preferred stocks — Fannie Mae / Freddie Mac; use FNMA / FMCC commons instead
     "FNMAP":  "preferred",
+    "FNMAS":  "preferred",
+    "FNMAT":  "preferred",
+    "FNMAJ":  "preferred",
+    "FNMAH":  "preferred",
+    "FNMAN":  "preferred",
+    "FNMAO":  "preferred",
+    "FNMAG":  "preferred",
+    "FNMFN":  "preferred",
     "FMCCS":  "preferred",
     "FMCCN":  "preferred",
     "FMCKI":  "preferred",
     "FMCCM":  "preferred",
     "FMCKM":  "preferred",
     "FMCCJ":  "preferred",
+    "FMCKL":  "preferred",
+    "FMCKJ":  "preferred",
+    "FMCCI":  "preferred",
     # Other preferred stocks
     "FLGPRA": "preferred",
     "NLYPRF": "preferred",
 }
+
+# Agency preferred series: FNMA/FMCC/FMCK + letter suffix(es). Bare FNMA/FMCC
+# commons are allowed; series prefs (FNMAS, FMCCM, …) are not — tiny volume
+# makes ±4% day moves meaningless noise on the Idea Generator card.
+_AGENCY_PREFERRED_RE = re.compile(
+    r"^(FNMA|FMCC|FMCK)[A-Z]{1,3}$"  # e.g. FNMAS, FMCCM, FMCCN, FMCKI
+)
+
+
+def _is_agency_preferred(ticker: str) -> bool:
+    """True for Fannie Mae / Freddie Mac preferred stock symbols."""
+    tk = (ticker or "").strip().upper().rstrip("*")
+    if not tk:
+        return False
+    if _SCAN_EXCLUDE.get(tk) == "preferred":
+        return True
+    return bool(_AGENCY_PREFERRED_RE.match(tk))
+
+
+def _is_idea_feed_excluded(ticker: str) -> bool:
+    """Tickers that must never appear on the Idea Generator card.
+
+    Agency prefs (FNMAS, FMCCM, …) trade ~hundreds of shares/day; a 4% print
+    is a few lots, not a thesis. Also skip ETFs / scan-excluded aliases.
+    """
+    tk = (ticker or "").strip().upper().rstrip("*")
+    if not tk:
+        return True
+    reason = _SCAN_EXCLUDE.get(tk)
+    if reason in ("preferred", "etf", "alias"):
+        return True
+    if _is_agency_preferred(tk):
+        return True
+    return False
+
 
 def _filter_scan_tickers(tickers: list[str]) -> list[str]:
     """Remove tickers that should not be scanned (aliases, ETFs, preferreds).
@@ -320,8 +366,9 @@ def _filter_scan_tickers(tickers: list[str]) -> list[str]:
     out = []
     for t in tickers:
         clean = t.strip().upper().rstrip("*")
-        if clean in _SCAN_EXCLUDE:
-            print(f"[scan-filter] skipping {clean} ({_SCAN_EXCLUDE[clean]})")
+        if clean in _SCAN_EXCLUDE or _is_agency_preferred(clean):
+            why = _SCAN_EXCLUDE.get(clean) or "preferred"
+            print(f"[scan-filter] skipping {clean} ({why})")
             continue
         out.append(clean)
     return out
@@ -7774,6 +7821,10 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
         tk = tk.strip().upper().rstrip("*")
         if not tk or not re.fullmatch(r"[A-Z0-9.\-]+", tk):
             return
+        # Never surface Fannie/Freddie preferreds (or other idea-excluded junk)
+        # on the Idea Generator — illiquid series print tiny volume + noisy %.
+        if _is_idea_feed_excluded(tk):
+            return
         universe.add(tk)
         sources.setdefault(tk, set()).add(src)
 
@@ -7857,6 +7908,8 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
     soft_thr = max(1.0, float(threshold) * 0.75)
     soft: list[dict] = []
     for tk in universe:
+        if _is_idea_feed_excluded(tk):
+            continue
         q = quotes.get(tk) or {}
         pct = q.get("pct_change")
         prc = q.get("price")
