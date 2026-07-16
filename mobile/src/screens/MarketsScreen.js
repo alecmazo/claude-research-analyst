@@ -4,6 +4,7 @@
 //   2. Idea Generator — today's movers ≥4% from your universe, tap → news
 //   3. Watchlist      — equities you follow, with live price + % change
 //   4. Daily Brief    — the morning brief (collapsible, with a Run button)
+// Market Wire lives on Research (HomeScreen) only — not duplicated here.
 // Pure RN (no WebView, no SVG) so it ships over-the-air. Theme-aware (light/dark).
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState, useCallback, useRef, useMemo } from 'react';
@@ -29,13 +30,6 @@ function fmtPx(p) {
   return n >= 1000
     ? n.toLocaleString('en-US', { maximumFractionDigits: 0 })
     : n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-function _wireAge(pubTs) {
-  if (pubTs == null) return '';
-  const sec = Math.max(0, Date.now() / 1000 - Number(pubTs));
-  if (sec < 3600) return Math.max(1, Math.floor(sec / 60)) + 'm ago';
-  if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
-  return Math.floor(sec / 86400) + 'd ago';
 }
 
 function PctPill({ p, size = 12, t }) {
@@ -114,43 +108,50 @@ export default function MarketsScreen() {
   const [pulseExpanded, setPulseExpanded] = useState({}); // ticker → bool
   const [pulseBusy, setPulseBusy]   = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [quotesBusy, setQuotesBusy] = useState(false);
   const moversRef = useRef([]);
-  // Market Wire (free macro RSS — same as desktop Desk / Research)
-  const [wireItems, setWireItems]   = useState([]);
-  const [wireAsOf, setWireAsOf]     = useState('');
-  const [wireErr, setWireErr]       = useState('');
 
-  const loadAll = useCallback(async () => {
+  const loadQuotes = useCallback(async () => {
+    // Indices + watchlist + idea-feed prices only (no brief/pulse/wire).
     await Promise.all([
       api.getMarketIndices().then(d => setIndices(d.indices || [])).catch(() => {}),
+      api.getWatchlist().then(d => setWatch(d || { tickers: [], quotes: {} }))
+        .catch(() => setWatch({ tickers: [], quotes: {} })),
       api.getIdeaFeed(4, 60).then(d => {
         const m = d.movers || [];
         moversRef.current = m; setMovers(m); setAsOf(d.as_of || '');
-      }).catch(() => setMovers([])),
-      api.getWatchlist().then(d => setWatch(d || { tickers: [], quotes: {} }))
-        .catch(() => setWatch({ tickers: [], quotes: {} })),
+      }).catch(() => {}),
+    ]);
+  }, []);
+
+  const loadAll = useCallback(async () => {
+    await Promise.all([
+      loadQuotes(),
       api.getLatestDailyBrief().then(d => setBrief(d && d.exists && d.markdown ? d : null))
         .catch(() => setBrief(null)),
       // Free, read-only: last completed scan from the server's kv store.
       api.getLatestScan().then(d => setPulse(d && d.exists && d.results ? d : null))
         .catch(() => setPulse(null)),
-      api.getMarketWire(8).then(d => {
-        const items = Array.isArray(d?.items) ? d.items
-          : (Array.isArray(d?.market_wire?.items) ? d.market_wire.items : []);
-        setWireItems(items);
-        setWireAsOf(d?.as_of || d?.market_wire?.as_of || '');
-        setWireErr(items.length ? '' : (d?.error || d?.detail || ''));
-      }).catch(e => {
-        setWireErr(e?.message || 'Wire unavailable');
-      }),
     ]);
-  }, []);
+  }, [loadQuotes]);
 
   useFocusEffect(useCallback(() => { loadAll(); }, [loadAll]));
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true); await loadAll(); setRefreshing(false);
   }, [loadAll]);
+
+  /** Small header / section refresh — live stock quotes only. */
+  const onRefreshQuotes = useCallback(async () => {
+    if (quotesBusy) return;
+    setQuotesBusy(true);
+    haptics.onPressPrimary?.();
+    try {
+      await loadQuotes();
+    } finally {
+      setQuotesBusy(false);
+    }
+  }, [loadQuotes, quotesBusy]);
 
   const toggleMover = useCallback(async (m) => {
     const tk = m.ticker;
@@ -225,15 +226,55 @@ export default function MarketsScreen() {
 
   const cardStyle = [s.card, { backgroundColor: t.surface, borderColor: t.border, borderWidth: 1 }];
 
+  const quotesRefreshBtn = (
+    <TouchableOpacity
+      onPress={onRefreshQuotes}
+      disabled={quotesBusy}
+      activeOpacity={0.7}
+      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      style={s.quotesRefreshBtn}
+      accessibilityLabel="Refresh stock quotes"
+    >
+      {quotesBusy
+        ? <ActivityIndicator color="#F5C542" size="small" />
+        : <Ionicons name="refresh" size={18} color="#F5C542" />}
+    </TouchableOpacity>
+  );
+
   return (
     <View style={{ flex: 1, backgroundColor: t.bg }}>
-      <AppHeader title="Markets" subtitle="Live moves · ideas · watchlist · brief" showLogo />
+      <AppHeader
+        title="Markets"
+        subtitle="Live moves · ideas · watchlist · brief"
+        showLogo
+        right={quotesRefreshBtn}
+      />
       <ScrollView
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: 40 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.primary} />}
       >
         {/* ── 1. Live Markets ─────────────────────────────────────────── */}
-        <SectionHeader icon="pulse" t={t} s={s}>Live Markets</SectionHeader>
+        <SectionHeader
+          icon="pulse"
+          t={t}
+          s={s}
+          right={
+            <TouchableOpacity
+              onPress={onRefreshQuotes}
+              disabled={quotesBusy}
+              activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={s.quotesRefreshChip}
+            >
+              {quotesBusy
+                ? <ActivityIndicator color={t.primary} size="small" />
+                : <>
+                    <Ionicons name="refresh" size={13} color={t.primary} />
+                    <Text style={s.quotesRefreshTxt}>Quotes</Text>
+                  </>}
+            </TouchableOpacity>
+          }
+        >Live Markets</SectionHeader>
         {indices.length === 0 ? (
           <Card style={cardStyle}><ActivityIndicator color={t.primary} /></Card>
         ) : (
@@ -247,42 +288,6 @@ export default function MarketsScreen() {
             ))}
           </ScrollView>
         )}
-
-        {/* ── 1b. Market Wire (free macro RSS, no LLM) ───────────────── */}
-        <SectionHeader
-          icon="newspaper"
-          t={t}
-          s={s}
-          right={wireAsOf ? <Text style={s.asOf}>{wireAsOf}</Text> : null}
-        >Market Wire</SectionHeader>
-        <Card style={[cardStyle, { marginBottom: spacing.md }]}>
-          {wireItems.length === 0 ? (
-            <Text style={s.muted}>
-              {wireErr ? `Wire: ${wireErr}` : 'Loading macro wire… pull to refresh.'}
-            </Text>
-          ) : (
-            wireItems.slice(0, 8).map((it, i) => (
-              <TouchableOpacity
-                key={(it.url || it.title || '') + i}
-                style={[s.wireRow, i > 0 && s.wireRowBorder]}
-                activeOpacity={0.7}
-                onPress={() => {
-                  if (it.url) {
-                    haptics.onPressPrimary?.();
-                    Linking.openURL(it.url).catch(() => {});
-                  }
-                }}
-              >
-                <Text style={s.wireTitle} numberOfLines={2}>{it.title || '—'}</Text>
-                <Text style={s.wireMeta}>
-                  {(it.feed || it.publisher || 'Wire')}
-                  {it.pub_ts ? ` · ${_wireAge(it.pub_ts)}` : ''}
-                </Text>
-              </TouchableOpacity>
-            ))
-          )}
-          <Text style={[s.muted, { marginTop: 8, fontSize: 10 }]}>Macro / policy RSS · FREE · no AI</Text>
-        </Card>
 
         {/* ── 2. Idea Generator ──────────────────────────────────────── */}
         <SectionHeader icon="lightbulb-on-outline" t={t} s={s}
@@ -499,10 +504,16 @@ function makeStyles(t) {
     idxLabel: { fontSize: 10, color: t.textSecondary, fontWeight: '700', marginBottom: 4, letterSpacing: 0.3 },
     idxPx: { fontSize: 16, color: t.textPrimary, fontWeight: '800', fontVariant: ['tabular-nums'] },
 
-    wireRow: { paddingVertical: 8 },
-    wireRowBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.border },
-    wireTitle: { fontSize: 13, fontWeight: '600', color: t.textPrimary, lineHeight: 17 },
-    wireMeta: { fontSize: 10, color: t.textDim, fontWeight: '600', marginTop: 3 },
+    quotesRefreshBtn: {
+      width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center',
+      backgroundColor: 'rgba(245,197,66,0.12)', borderWidth: 1, borderColor: 'rgba(245,197,66,0.35)',
+    },
+    quotesRefreshChip: {
+      flexDirection: 'row', alignItems: 'center', gap: 4,
+      paddingHorizontal: 9, paddingVertical: 4, borderRadius: 12,
+      backgroundColor: t.surfaceTint, borderWidth: 1, borderColor: t.border,
+    },
+    quotesRefreshTxt: { fontSize: 11, fontWeight: '700', color: t.primary },
 
     moverWrap: { paddingHorizontal: 14 },
     divider: { borderBottomWidth: 1, borderBottomColor: t.border },
