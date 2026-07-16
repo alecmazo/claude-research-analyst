@@ -7987,91 +7987,79 @@ def _research_idea_feed_body(lp_id: str, role: str, is_priv: bool,
         _IDEA_FEED_CACHE[cache_key] = {"data": out, "ts": time.time()}
         return out
 
-    # ── 2. Batch live quotes (price + pct_change) ─────────────────────────────
-    # Cap universe — batch_quotes cascade over 80 names can hang >30s and never
-    # hit the budget check (it only ran AFTER quotes returned).
-    uni_list = sorted(universe)[:50]
-    # Serve stale idea-feed immediately if we have one and force=false
-    # (already handled above). On force or miss: HARD timeout around quotes.
-    quotes: dict = {}
+    # ── 2–3. Find movers FAST ────────────────────────────────────────────────
+    # Quoting the entire book (50–100 names) via Yahoo often exceeds 5–15s on
+    # Railway and used to blank the card. Instead:
+    #   A) Yahoo market-wide gainers/losers (1–3 HTTP calls) ∩ our universe
+    #   B) If that misses, quote only watchlist (small set) with hard timeout
+    thr = float(threshold)
+    raw_movers: list[dict] = []
+    uni_set = set(universe)
+
+    # A) Broad market movers ∩ book — usually <2s
     try:
         import market_data as _md
-
-        def _fast_quotes():
-            return _md.get_quotes(uni_list) or {}
-
-        quotes = _run_with_timeout(_fast_quotes, min(5.0, max(1.0, _budget_left() - 1.0)), {}) or {}
+        market_rows = _run_with_timeout(
+            lambda: _md.yahoo_market_movers(min_price=2.0, min_market_cap=5e8, per_list=40) or [],
+            4.0,
+            [],
+        ) or []
+        for row in market_rows:
+            tk = (row.get("ticker") or "").upper().strip()
+            if not tk or tk not in uni_set or _is_idea_feed_excluded(tk):
+                continue
+            try:
+                pct_f = float(row.get("pct_change"))
+                prc_f = float(row.get("price"))
+            except Exception:
+                continue
+            if abs(pct_f) < thr:
+                continue
+            if abs(pct_f) >= _IDEA_SANITY_PCT:
+                continue  # extreme without per-ticker re-verify — skip noise
+            raw_movers.append({
+                "ticker": tk,
+                "price": prc_f,
+                "pct_change": round(pct_f, 4),
+                "abs_change": round(prc_f * pct_f / 100.0, 2),
+                "sources": sorted(sources.get(tk, ()) or {"market"}),
+                "quote_source": "yahoo-screener",
+            })
     except Exception as _e:
-        print(f"[idea-feed] market_data quotes: {_e!s:.100}", flush=True)
-        quotes = {}
-    if not quotes and _budget_left() > 2.0:
-        # Last resort — batch_quotes with hard timeout (never unbounded)
-        quotes = _run_with_timeout(
-            lambda: batch_quotes(",".join(uni_list)) or {},
-            min(4.0, max(1.0, _budget_left() - 0.5)),
-            {},
-        ) or {}
+        print(f"[idea-feed] market movers path: {_e!s:.120}", flush=True)
 
-    if not quotes:
-        # Prefer any warm cache over error/blank
-        if cached:
-            return cached["data"]
-        out = {"movers": [], "universe_size": len(universe),
-               "as_of": _pacific_time_str(), "session_date": _idea_session,
-               "threshold": threshold,
-               "note": "Quotes timed out — tap ↻ to retry."}
-        return out
-
-    # ── 3. Movers ≥ |threshold|% — YOUR universe only (watchlist / saved reports
-    # / positions). Soft-pass first; market_data already uses bar prev-close so
-    # skip a second re-verify pass (that was doubling latency).
-    soft_thr = max(1.0, float(threshold) * 0.75)
-    soft: list[dict] = []
-    for tk in uni_list:
-        if _is_idea_feed_excluded(tk):
-            continue
-        q = quotes.get(tk) or {}
-        pct = q.get("pct_change")
-        prc = q.get("price")
-        if pct is None or prc is None:
-            continue
-        try:
-            pct_f = float(pct)
-            prc_f = float(prc)
-        except Exception:
-            continue
-        if abs(pct_f) < soft_thr:
-            continue
-        # Drop absurd unconfirmed extremes without a second network hop
-        if abs(pct_f) >= _IDEA_SANITY_PCT and not q.get("source"):
-            continue
-        soft.append({
-            "ticker": tk, "price": prc_f, "pct_change": pct_f,
-            "sources": sorted(sources.get(tk, ())),
-            "quote_source": q.get("source") or "market_data",
-        })
-
-    raw_movers: list[dict] = []
-    for m in soft:
-        try:
-            pct_f = float(m["pct_change"])
-            prc_f = float(m["price"])
-        except Exception:
-            continue
-        if abs(pct_f) < float(threshold):
-            continue
-        # Final sanity: still > sanity and not re-verified → skip
-        if abs(pct_f) >= _IDEA_SANITY_PCT and not m.get("quote_source"):
-            print(f"[idea-feed] drop unverified extreme {m['ticker']} {pct_f:+.2f}%",
-                  flush=True)
-            continue
-        raw_movers.append({
-            "ticker":     m["ticker"],
-            "price":      prc_f,
-            "pct_change": round(pct_f, 4),
-            "abs_change": round(prc_f * pct_f / 100.0, 2),
-            "sources":    m.get("sources") or [],
-        })
+    # B) Top up with watchlist quotes if we still have budget (small set)
+    if _budget_left() > 2.0:
+        wl_only = [t for t in sorted(universe) if "watchlist" in sources.get(t, set())][:30]
+        if wl_only:
+            try:
+                import market_data as _md
+                qmap = _run_with_timeout(
+                    lambda: _md.get_quotes(wl_only) or {},
+                    min(3.0, _budget_left() - 0.5),
+                    {},
+                ) or {}
+                have = {m["ticker"] for m in raw_movers}
+                for tk, q in qmap.items():
+                    if tk in have or _is_idea_feed_excluded(tk):
+                        continue
+                    try:
+                        pct_f = float(q.get("pct_change"))
+                        prc_f = float(q.get("price"))
+                    except Exception:
+                        continue
+                    if abs(pct_f) < thr:
+                        continue
+                    raw_movers.append({
+                        "ticker": tk,
+                        "price": prc_f,
+                        "pct_change": round(pct_f, 4),
+                        "abs_change": round(prc_f * pct_f / 100.0, 2),
+                        "sources": sorted(sources.get(tk, ())),
+                        "quote_source": q.get("source") or "market_data",
+                    })
+            except Exception as _e:
+                print(f"[idea-feed] watchlist quotes: {_e!s:.100}", flush=True)
 
     raw_movers.sort(key=lambda m: abs(m["pct_change"]), reverse=True)
     movers = raw_movers[: int(limit)]
