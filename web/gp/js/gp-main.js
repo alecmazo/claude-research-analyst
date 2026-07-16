@@ -636,7 +636,8 @@
         const url = '/api/v2/news/fund-filings?limit=40&days=30'
           + (force ? '&_=' + Date.now() : '');
         const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-        const timer = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (_) {} }, 16000) : null;
+        // Server returns within ~7s (stale cache if SEC slow)
+        const timer = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (_) {} }, 10000) : null;
         const r = await window.dgaFetch(url, {
           cache: 'no-store',
           signal: ctrl ? ctrl.signal : undefined,
@@ -5877,7 +5878,8 @@
         + '&_t=' + Date.now();
       // Abort if server hangs — never leave the card blank forever
       const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-      const timer = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (_) {} }, 14000) : null;
+      // Server budget is ~7s; client aborts at 10s so we never spin forever
+      const timer = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (_) {} }, 10000) : null;
       const r = await window.dgaFetch(url, {
         cache: 'no-store',
         signal: ctrl ? ctrl.signal : undefined,
@@ -5888,7 +5890,7 @@
       if (data && data.error && !(data.movers || []).length) {
         throw new Error(data.error);
       }
-      _ideaFeedLastFetch = now;
+      _ideaFeedLastFetch = Date.now();
       _renderIdeaFeed(data);
     } catch (e) {
       console.warn('[idea-feed]', e);

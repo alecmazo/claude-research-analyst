@@ -2631,25 +2631,60 @@ def _filings_for_ticker(tk: str, ua: str, cutoff) -> tuple[list[dict], str | Non
     return items, None
 
 
+def _run_with_timeout(fn, timeout_s: float, default=None):
+    """Run fn() with a hard timeout. Never block on worker shutdown.
+
+    Critical: `with ThreadPoolExecutor` always waits for running workers on
+    exit — that made Fund Filings / Idea Generator hang past their budgets.
+    """
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutTimeout
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        fut = pool.submit(fn)
+        return fut.result(timeout=max(0.1, float(timeout_s)))
+    except FutTimeout:
+        return default
+    except Exception:
+        return default
+    finally:
+        try:
+            pool.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            pool.shutdown(wait=False)
+
+
 def _build_fund_filings(lp_id: str | None, limit: int = 50, days: int = 30) -> dict:
     """High-signal EDGAR for the **saved-reports** universe, newest first.
 
-    Previous bugs: only first 28 alphabetical tickers, 12s timeout, sorted by
-    form priority (old 8-Ks outranked fresh filings). Fixed: full report list,
-    parallel SEC pulls, sort by filing date.
+    Always returns within ~7s. Uses stale cache if a fresh scan is still
+    running or times out — never leaves the browser on "Loading…".
     """
     now = time.time()
     # Bump cache key version when ranking/universe rules change
-    cache_key = f"v2|{lp_id or 'anon'}|{int(limit)}|{int(days)}"
+    cache_key = f"v3|{lp_id or 'anon'}|{int(limit)}|{int(days)}"
     hit = _FILINGS_CACHE.get(cache_key)
     if hit and (now - hit["ts"]) < _FILINGS_TTL:
         data = dict(hit["data"])
         data["cached"] = True
         return data
+    # Stale-while-revalidate: if we have ANY previous result for this key
+    # (or any recent filings payload), serve it while a scan would block.
+    stale_hit = hit  # may be expired but still useful
+    if not stale_hit:
+        # Fall back to any cached filings blob for this user (different limit)
+        for k, v in list(_FILINGS_CACHE.items()):
+            if isinstance(k, str) and k.startswith(f"v3|{lp_id or 'anon'}|"):
+                stale_hit = v
+                break
 
     try:
         ua = analyst.get_sec_user_agent()
     except Exception as e:
+        if stale_hit:
+            data = dict(stale_hit["data"])
+            data["cached"] = True
+            data["stale"] = True
+            return data
         return {
             "ok": False, "kind": "fund_filings", "items": [],
             "error": f"SEC_USER_AGENT not configured: {e!s:.80}",
@@ -2661,8 +2696,8 @@ def _build_fund_filings(lp_id: str | None, limit: int = 50, days: int = 30) -> d
     if not tickers:
         # Fallback if no reports yet
         tickers = _research_universe_tickers_full(lp_id)
-    # Hard cap for safety (SEC politeness) — full coverage list still ~100
-    tickers = tickers[:120]
+    # Smaller cap — prefer newest report tickers first if list is ordered
+    tickers = tickers[:60]
     lookback = max(7, min(int(days or 30), 60))
     cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback)).date()
     max_items = max(10, min(int(limit or 50), 80))
@@ -2672,43 +2707,53 @@ def _build_fund_filings(lp_id: str | None, limit: int = 50, days: int = 30) -> d
     scanned = 0
 
     # Parallel workers — SEC allows ~10 req/s with a proper User-Agent.
-    # Hard wall-clock budget so desk-feeds never leaves the browser spinning
-    # on "Loading…" for minutes (was blank Market Wire + Fund Filings cards).
-    from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
-    workers = 8
-    # Keep under browser / proxy patience (~15–20s). Idea-feed hangs used to
-    # starve this path; budget stays tight so the card always paints.
-    hard_budget_s = 8.0
+    # MUST shutdown(wait=False) or the context manager waits for ALL workers
+    # even after budget — that was the 18s+ browser timeout.
+    from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+    workers = 6
+    hard_budget_s = 6.0
     t0 = time.time()
+    pool = ThreadPoolExecutor(max_workers=workers)
     try:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futs = {pool.submit(_filings_for_ticker, tk, ua, cutoff): tk for tk in tickers}
-            pending = set(futs.keys())
-            while pending and (time.time() - t0) < hard_budget_s:
-                done, pending = wait(
-                    pending,
-                    timeout=max(0.15, hard_budget_s - (time.time() - t0)),
-                    return_when=FIRST_COMPLETED,
-                )
-                if not done:
-                    break
-                for fut in done:
-                    scanned += 1
-                    try:
-                        part, err = fut.result(timeout=0.05)
-                        if err:
-                            errors.append(err)
-                        if part:
-                            items.extend(part)
-                    except Exception as e:
-                        errors.append(f"{futs.get(fut, '?')}: {e!s:.60}")
-            # Cancel stragglers so they don't pin Railway workers
-            for fut in pending:
-                fut.cancel()
-            if pending:
-                errors.append(f"scan budget {hard_budget_s:.0f}s — {len(pending)} tickers skipped")
+        futs = {pool.submit(_filings_for_ticker, tk, ua, cutoff): tk for tk in tickers}
+        pending = set(futs.keys())
+        while pending and (time.time() - t0) < hard_budget_s:
+            done, pending = wait(
+                pending,
+                timeout=max(0.1, hard_budget_s - (time.time() - t0)),
+                return_when=FIRST_COMPLETED,
+            )
+            if not done:
+                break
+            for fut in done:
+                scanned += 1
+                try:
+                    part, err = fut.result(timeout=0.01)
+                    if err:
+                        errors.append(err)
+                    if part:
+                        items.extend(part)
+                except Exception as e:
+                    errors.append(f"{futs.get(fut, '?')}: {e!s:.60}")
+        for fut in pending:
+            fut.cancel()
+        if pending:
+            errors.append(f"scan budget {hard_budget_s:.0f}s — {len(pending)} tickers skipped")
     except Exception as e:
         errors.append(f"scan partial: {e!s:.80}")
+    finally:
+        try:
+            pool.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            pool.shutdown(wait=False)
+
+    # If we got nothing and have stale cache, serve stale rather than empty timeout UI
+    if not items and stale_hit and (stale_hit.get("data") or {}).get("items"):
+        data = dict(stale_hit["data"])
+        data["cached"] = True
+        data["stale"] = True
+        data["note"] = (data.get("note") or "") + " · showing cached (fresh scan slow)"
+        return data
 
     # De-dupe by accession; sort NEWEST first (then form priority)
     seen_acc: set[str] = set()
@@ -7576,8 +7621,8 @@ _IDEA_FEED_TTL    = 60                     # seconds
 # Sector-only enrich (NO news on the request path). yfinance .news from a
 # cloud IP routinely hangs 5–8s per ticker; 25× that blanked Idea Generator
 # and starved Fund Filings on the same Railway worker. News loads on expand.
-_IDEA_ENRICH_CAP  = 12
-_IDEA_FEED_BUDGET_S = 9.0                  # hard wall-clock — always respond
+_IDEA_ENRICH_CAP  = 8
+_IDEA_FEED_BUDGET_S = 7.0                  # hard wall-clock — always respond
 # Day-move above this without bar re-verify is almost always bad prev-close
 # (Yahoo chartPreviousClose on 5d = range-start close, e.g. IBM −29%).
 _IDEA_SANITY_PCT  = 12.0
@@ -7947,33 +7992,43 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
         return out
 
     # ── 2. Batch live quotes (price + pct_change) ─────────────────────────────
-    # Cap universe size for the hot path — 100+ preferreds used to stall quotes.
-    uni_list = sorted(universe)[:80]
+    # Cap universe — batch_quotes cascade over 80 names can hang >30s and never
+    # hit the budget check (it only ran AFTER quotes returned).
+    uni_list = sorted(universe)[:50]
+    # Serve stale idea-feed immediately if we have one and force=false
+    # (already handled above). On force or miss: HARD timeout around quotes.
+    quotes: dict = {}
     try:
-        for tk in uni_list:
-            _QUOTE_CACHE.pop(tk, None)
-    except Exception:
-        pass
-    try:
-        quotes = batch_quotes(",".join(uni_list)) or {}
-    except Exception as _e:
-        return {"movers": [], "universe_size": len(universe),
-                "as_of": _pacific_time_str(), "session_date": _idea_session,
-                "error": f"quote fetch failed: {_e}"}
+        import market_data as _md
 
-    if _budget_left() < 1.0:
-        # Return empty movers rather than hang — client shows note, not blank error
+        def _fast_quotes():
+            return _md.get_quotes(uni_list) or {}
+
+        quotes = _run_with_timeout(_fast_quotes, min(5.0, max(1.0, _budget_left() - 1.0)), {}) or {}
+    except Exception as _e:
+        print(f"[idea-feed] market_data quotes: {_e!s:.100}", flush=True)
+        quotes = {}
+    if not quotes and _budget_left() > 2.0:
+        # Last resort — batch_quotes with hard timeout (never unbounded)
+        quotes = _run_with_timeout(
+            lambda: batch_quotes(",".join(uni_list)) or {},
+            min(4.0, max(1.0, _budget_left() - 0.5)),
+            {},
+        ) or {}
+
+    if not quotes:
+        # Prefer any warm cache over error/blank
+        if cached:
+            return cached["data"]
         out = {"movers": [], "universe_size": len(universe),
                "as_of": _pacific_time_str(), "session_date": _idea_session,
                "threshold": threshold,
-               "note": "Quote pass ran long — try refresh."}
+               "note": "Quotes timed out — tap ↻ to retry."}
         return out
 
     # ── 3. Movers ≥ |threshold|% — YOUR universe only (watchlist / saved reports
-    # / positions). The broad-market biggest movers live on the 'Today's Movers'
-    # card instead, so the Idea Generator stays focused on names DGA cares about. ─
-    # Soft-pass first (slightly below threshold) then bar-reverify every candidate
-    # so a −29% IBM phantom cannot rank as a "mover".
+    # / positions). Soft-pass first; market_data already uses bar prev-close so
+    # skip a second re-verify pass (that was doubling latency).
     soft_thr = max(1.0, float(threshold) * 0.75)
     soft: list[dict] = []
     for tk in uni_list:
@@ -7991,31 +8046,14 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
             continue
         if abs(pct_f) < soft_thr:
             continue
+        # Drop absurd unconfirmed extremes without a second network hop
+        if abs(pct_f) >= _IDEA_SANITY_PCT and not q.get("source"):
+            continue
         soft.append({
             "ticker": tk, "price": prc_f, "pct_change": pct_f,
             "sources": sorted(sources.get(tk, ())),
+            "quote_source": q.get("source") or "market_data",
         })
-
-    # Authoritative re-verify with market_data bar prev-close (never chartPreviousClose)
-    # Cap re-verify set so a noisy day can't hang the request.
-    if soft and _budget_left() > 2.0:
-        soft.sort(key=lambda m: abs(m["pct_change"]), reverse=True)
-        soft = soft[: max(int(limit) * 2, 40)]
-        try:
-            import market_data as _md
-            vmap = _md.get_quotes([m["ticker"] for m in soft]) or {}
-            for m in soft:
-                v = vmap.get(m["ticker"]) or {}
-                if v.get("price") is not None:
-                    m["price"] = float(v["price"])
-                if v.get("pct_change") is not None:
-                    m["pct_change"] = float(v["pct_change"])
-                    m["quote_source"] = v.get("source") or "yahoo-chart"
-                # Drop absurd unconfirmed day moves (bad prev-close residue)
-                if abs(m["pct_change"]) >= _IDEA_SANITY_PCT and v.get("pct_change") is None:
-                    m["pct_change"] = 0.0  # force drop below threshold
-        except Exception as _e:
-            print(f"[idea-feed] bar re-verify failed: {_e!s:.140}", flush=True)
 
     raw_movers: list[dict] = []
     for m in soft:
@@ -8051,19 +8089,8 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
         _IDEA_FEED_CACHE[cache_key] = {"data": out, "ts": time.time()}
         return out
 
-    # ── 4. Sector-ETF batch quote (one call covers all 11 sectors) ────────────
-    etf_quotes: dict = {}
-    if _budget_left() > 1.5:
-        sector_etf_set = set(_SECTOR_ETF_MAP.values())
-        try:
-            etf_quotes = batch_quotes(",".join(sorted(sector_etf_set))) or {}
-        except Exception:
-            etf_quotes = {}
-
-    # ── 5. Per-mover enrichment: SECTOR ONLY (no news on request path) ────────
-    # News was the hang: yfinance .news from Railway IPs blocks for seconds per
-    # name. Expand-on-click still loads /api/news. Classify sector_move when ETF
-    # moves with the stock; otherwise leave reason for lazy fill.
+    # ── 4–5. Light enrich only if budget remains (skip entirely under 2s left) ─
+    # No per-ticker yfinance news; no sector meta network if tight on time.
     for m in movers:
         m.setdefault("sector", "Unknown")
         m.setdefault("industry", "")
@@ -8072,40 +8099,43 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
         m.setdefault("sector_pct_change", None)
         m.setdefault("reason_class", "unknown")
         m.setdefault("reason_text", "")
-    for m in movers[:_IDEA_ENRICH_CAP]:
-        if _budget_left() < 0.8:
-            break
+
+    etf_quotes: dict = {}
+    if _budget_left() > 2.0:
         try:
-            meta = get_ticker_meta(m["ticker"], include_news=False)
+            import market_data as _md
+            etf_list = list(set(_SECTOR_ETF_MAP.values()))
+            etf_quotes = _run_with_timeout(
+                lambda: _md.get_quotes(etf_list) or {}, 2.0, {}) or {}
         except Exception:
-            meta = {}
-        sector = (meta.get("sector") or "Unknown").strip()
-        m["sector"]   = sector
-        m["industry"] = meta.get("industry") or ""
-        # news stays [] — client lazy-loads on expand
-
-        etf = _SECTOR_ETF_MAP.get(sector)
-        etf_pct = None
-        if etf:
-            etf_pct = (etf_quotes.get(etf) or {}).get("pct_change")
-            if etf_pct is not None:
-                try:
-                    etf_pct = float(etf_pct)
-                except Exception:
-                    etf_pct = None
-        m["sector_etf"]        = etf
-        m["sector_pct_change"] = round(etf_pct, 4) if etf_pct is not None else None
-
-        reason_class = "unknown"
-        reason_text  = ""
-        if (etf_pct is not None
-                and abs(etf_pct) >= 1.5
-                and (m["pct_change"] * etf_pct) > 0):
-            reason_class = "sector_move"
-            direction = "tailwind" if m["pct_change"] > 0 else "headwind"
-            reason_text = f"{sector} sector {direction} ({etf}: {etf_pct:+.2f}%)"
-        m["reason_class"] = reason_class
-        m["reason_text"]  = reason_text
+            etf_quotes = {}
+        for m in movers[: min(_IDEA_ENRICH_CAP, 8)]:
+            if _budget_left() < 0.6:
+                break
+            try:
+                meta = get_ticker_meta(m["ticker"], include_news=False)
+            except Exception:
+                meta = {}
+            sector = (meta.get("sector") or "Unknown").strip()
+            m["sector"]   = sector
+            m["industry"] = meta.get("industry") or ""
+            etf = _SECTOR_ETF_MAP.get(sector)
+            etf_pct = None
+            if etf:
+                etf_pct = (etf_quotes.get(etf) or {}).get("pct_change")
+                if etf_pct is not None:
+                    try:
+                        etf_pct = float(etf_pct)
+                    except Exception:
+                        etf_pct = None
+            m["sector_etf"] = etf
+            m["sector_pct_change"] = round(etf_pct, 4) if etf_pct is not None else None
+            if (etf_pct is not None
+                    and abs(etf_pct) >= 1.5
+                    and (m["pct_change"] * etf_pct) > 0):
+                direction = "tailwind" if m["pct_change"] > 0 else "headwind"
+                m["reason_class"] = "sector_move"
+                m["reason_text"] = f"{sector} sector {direction} ({etf}: {etf_pct:+.2f}%)"
 
     out = {
         "movers":        movers,
