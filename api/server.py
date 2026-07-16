@@ -2676,7 +2676,9 @@ def _build_fund_filings(lp_id: str | None, limit: int = 50, days: int = 30) -> d
     # on "Loading…" for minutes (was blank Market Wire + Fund Filings cards).
     from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
     workers = 8
-    hard_budget_s = 12.0
+    # Keep under browser / proxy patience (~15–20s). Idea-feed hangs used to
+    # starve this path; budget stays tight so the card always paints.
+    hard_budget_s = 8.0
     t0 = time.time()
     try:
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -2685,7 +2687,7 @@ def _build_fund_filings(lp_id: str | None, limit: int = 50, days: int = 30) -> d
             while pending and (time.time() - t0) < hard_budget_s:
                 done, pending = wait(
                     pending,
-                    timeout=max(0.2, hard_budget_s - (time.time() - t0)),
+                    timeout=max(0.15, hard_budget_s - (time.time() - t0)),
                     return_when=FIRST_COMPLETED,
                 )
                 if not done:
@@ -7425,22 +7427,35 @@ def get_stock_info(ticker: str):
 
 
 @app.get("/api/market/ticker-meta/{ticker}")
-def get_ticker_meta(ticker: str):
-    """Return sector, industry, and most-recent news headline for *ticker*.
+def get_ticker_meta(ticker: str, include_news: bool = True):
+    """Return sector, industry, and optionally recent news for *ticker*.
 
-    Cached for 15 minutes.  Used by the rebalance table to fill the
-    Category and Recent Development columns via async client-side injection.
+    Cached for 15 minutes.  Used by the rebalance table / Idea Generator.
+
+    include_news=False skips yfinance .news (slow / often hangs on cloud IPs).
+    Idea Generator uses sector-only enrich so the feed never blanks the desk.
 
     Returns:
         sector     — e.g. "Technology"
         industry   — e.g. "Semiconductors"
         recent_dev — title of the most-recent Yahoo Finance news item, or ""
+        news       — list of structured news dicts (empty if include_news=False)
     """
     t = ticker.strip().upper()
     now = time.time()
     cached = _ticker_meta_cache.get(t)
     if cached and (now - cached["ts"]) < _TICKER_META_TTL:
-        return {k: v for k, v in cached.items() if k != "ts"}
+        out = {k: v for k, v in cached.items() if k != "ts"}
+        if include_news or out.get("news") is not None:
+            if not include_news:
+                # Serve sector/industry without waiting for news re-fetch
+                return {
+                    "sector": out.get("sector") or "Unknown",
+                    "industry": out.get("industry") or "",
+                    "recent_dev": "",
+                    "news": [],
+                }
+            return out
 
     # Sector / industry — analyst module has a robust multi-fallback implementation
     try:
@@ -7448,12 +7463,12 @@ def get_ticker_meta(ticker: str):
     except Exception:
         sector, industry = "Unknown", "Unknown"
 
-    # Most-recent news headline via yfinance
+    # Most-recent news headline via yfinance (optional — skip on hot path)
     recent_dev = ""
     news_list: list[dict] = []
-    if _YFINANCE_OK:
+    if include_news and _YFINANCE_OK:
         try:
-            news_items = _builder_call_timeout(lambda: yf.Ticker(t).news or [], 8.0, []) or []
+            news_items = _builder_call_timeout(lambda: yf.Ticker(t).news or [], 4.0, []) or []
             for item in news_items[:8]:        # fetch up to 8, keep best 5
                 # yfinance ≥ 0.2.x wraps fields inside "content" sub-dict
                 content = item.get("content") or {}
@@ -7507,7 +7522,19 @@ def get_ticker_meta(ticker: str):
         "recent_dev": recent_dev,   # compact string for the inline cell
         "news":       news_list,    # structured array for the expanded modal
     }
-    _ticker_meta_cache[t] = {**result, "ts": now}
+    # Only cache full news payloads into the shared meta cache when we fetched news
+    if include_news:
+        _ticker_meta_cache[t] = {**result, "ts": now}
+    else:
+        # Cache sector-only under a light key so we don't stamp empty news forever
+        prev = _ticker_meta_cache.get(t) or {}
+        if not prev.get("news"):
+            _ticker_meta_cache[t] = {
+                "sector": sector, "industry": industry,
+                "recent_dev": prev.get("recent_dev") or "",
+                "news": prev.get("news") or [],
+                "ts": now,
+            }
     return result
 
 
@@ -7518,11 +7545,11 @@ def get_ticker_meta(ticker: str):
 _IDEA_FEED_CACHE: dict[tuple, dict] = {}   # (lp_id, threshold, limit, session) → {data, ts}
 # Keep short — movers use batch_quotes; long TTL served phantom ±% after quote bugs.
 _IDEA_FEED_TTL    = 60                     # seconds
-# Show ALL movers, but only EAGERLY enrich (sector + news) the top N by magnitude
-# so a big-move day can't fire dozens of slow per-ticker news fetches in the
-# request path (the cloud-IP hang trap). Movers beyond the cap still appear;
-# their news loads lazily on row-expand via /api/news.
-_IDEA_ENRICH_CAP  = 25
+# Sector-only enrich (NO news on the request path). yfinance .news from a
+# cloud IP routinely hangs 5–8s per ticker; 25× that blanked Idea Generator
+# and starved Fund Filings on the same Railway worker. News loads on expand.
+_IDEA_ENRICH_CAP  = 12
+_IDEA_FEED_BUDGET_S = 9.0                  # hard wall-clock — always respond
 # Day-move above this without bar re-verify is almost always bad prev-close
 # (Yahoo chartPreviousClose on 5d = range-start close, e.g. IBM −29%).
 _IDEA_SANITY_PCT  = 12.0
@@ -7780,11 +7807,17 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
 
     Day % is re-verified with market_data bar prev-close for every threshold
     candidate so chartPreviousClose phantoms (IBM −29% vs real −1%) never stick.
+
+    Hard wall-clock budget (~9s): always return movers even if enrich is partial.
     """
     claims = _claims_or_401(request)
     lp_id   = claims.get("lp_id") or claims.get("email") or "anon"
     role    = claims.get("role", "lp")
     is_priv = role in ("gp", "admin")
+    t_feed0 = time.time()
+
+    def _budget_left() -> float:
+        return _IDEA_FEED_BUDGET_S - (time.time() - t_feed0)
 
     try:
         import market_data as _md_sess
@@ -7886,19 +7919,27 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
         return out
 
     # ── 2. Batch live quotes (price + pct_change) ─────────────────────────────
-    # Bust quote cache for universe so we never paint idea-feed from a
-    # price-only / chartPreviousClose row left over from earlier in the process.
+    # Cap universe size for the hot path — 100+ preferreds used to stall quotes.
+    uni_list = sorted(universe)[:80]
     try:
-        for tk in universe:
+        for tk in uni_list:
             _QUOTE_CACHE.pop(tk, None)
     except Exception:
         pass
     try:
-        quotes = batch_quotes(",".join(sorted(universe))) or {}
+        quotes = batch_quotes(",".join(uni_list)) or {}
     except Exception as _e:
         return {"movers": [], "universe_size": len(universe),
                 "as_of": _pacific_time_str(), "session_date": _idea_session,
                 "error": f"quote fetch failed: {_e}"}
+
+    if _budget_left() < 1.0:
+        # Return empty movers rather than hang — client shows note, not blank error
+        out = {"movers": [], "universe_size": len(universe),
+               "as_of": _pacific_time_str(), "session_date": _idea_session,
+               "threshold": threshold,
+               "note": "Quote pass ran long — try refresh."}
+        return out
 
     # ── 3. Movers ≥ |threshold|% — YOUR universe only (watchlist / saved reports
     # / positions). The broad-market biggest movers live on the 'Today's Movers'
@@ -7907,7 +7948,7 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
     # so a −29% IBM phantom cannot rank as a "mover".
     soft_thr = max(1.0, float(threshold) * 0.75)
     soft: list[dict] = []
-    for tk in universe:
+    for tk in uni_list:
         if _is_idea_feed_excluded(tk):
             continue
         q = quotes.get(tk) or {}
@@ -7928,7 +7969,10 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
         })
 
     # Authoritative re-verify with market_data bar prev-close (never chartPreviousClose)
-    if soft:
+    # Cap re-verify set so a noisy day can't hang the request.
+    if soft and _budget_left() > 2.0:
+        soft.sort(key=lambda m: abs(m["pct_change"]), reverse=True)
+        soft = soft[: max(int(limit) * 2, 40)]
         try:
             import market_data as _md
             vmap = _md.get_quotes([m["ticker"] for m in soft]) or {}
@@ -7980,16 +8024,18 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
         return out
 
     # ── 4. Sector-ETF batch quote (one call covers all 11 sectors) ────────────
-    sector_etf_set = set(_SECTOR_ETF_MAP.values())
-    try:
-        etf_quotes = batch_quotes(",".join(sorted(sector_etf_set))) or {}
-    except Exception:
-        etf_quotes = {}
+    etf_quotes: dict = {}
+    if _budget_left() > 1.5:
+        sector_etf_set = set(_SECTOR_ETF_MAP.values())
+        try:
+            etf_quotes = batch_quotes(",".join(sorted(sector_etf_set))) or {}
+        except Exception:
+            etf_quotes = {}
 
-    # ── 5. Per-mover enrichment: sector + news + reason classification ────────
-    # Defaults for EVERY mover so the full list renders. We only eagerly enrich
-    # the top _IDEA_ENRICH_CAP by magnitude (bounds request-path network); the
-    # rest keep these defaults and lazy-load news on expand.
+    # ── 5. Per-mover enrichment: SECTOR ONLY (no news on request path) ────────
+    # News was the hang: yfinance .news from Railway IPs blocks for seconds per
+    # name. Expand-on-click still loads /api/news. Classify sector_move when ETF
+    # moves with the stock; otherwise leave reason for lazy fill.
     for m in movers:
         m.setdefault("sector", "Unknown")
         m.setdefault("industry", "")
@@ -7999,16 +8045,17 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
         m.setdefault("reason_class", "unknown")
         m.setdefault("reason_text", "")
     for m in movers[:_IDEA_ENRICH_CAP]:
+        if _budget_left() < 0.8:
+            break
         try:
-            meta = get_ticker_meta(m["ticker"])   # cached 15 min via _ticker_meta_cache
+            meta = get_ticker_meta(m["ticker"], include_news=False)
         except Exception:
             meta = {}
         sector = (meta.get("sector") or "Unknown").strip()
         m["sector"]   = sector
         m["industry"] = meta.get("industry") or ""
-        m["news"]     = (meta.get("news") or [])[:5]
+        # news stays [] — client lazy-loads on expand
 
-        # Sector ETF comparison
         etf = _SECTOR_ETF_MAP.get(sector)
         etf_pct = None
         if etf:
@@ -8021,19 +8068,14 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
         m["sector_etf"]        = etf
         m["sector_pct_change"] = round(etf_pct, 4) if etf_pct is not None else None
 
-        # Classify
         reason_class = "unknown"
         reason_text  = ""
-        # Sector move: ETF also moved same direction with ≥ 1.5% magnitude
         if (etf_pct is not None
                 and abs(etf_pct) >= 1.5
                 and (m["pct_change"] * etf_pct) > 0):
             reason_class = "sector_move"
             direction = "tailwind" if m["pct_change"] > 0 else "headwind"
             reason_text = f"{sector} sector {direction} ({etf}: {etf_pct:+.2f}%)"
-        elif m["news"]:
-            reason_class = "news"
-            reason_text  = (m["news"][0].get("title") or "")[:160]
         m["reason_class"] = reason_class
         m["reason_text"]  = reason_text
 
@@ -8044,8 +8086,11 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
         "session_date":  _idea_session,
         "threshold":     threshold,
         "ttl_seconds":   _IDEA_FEED_TTL,
+        "elapsed_ms":    int((time.time() - t_feed0) * 1000),
     }
     _IDEA_FEED_CACHE[cache_key] = {"data": out, "ts": time.time()}
+    print(f"[idea-feed] {len(movers)} movers / {len(universe)} uni in {out['elapsed_ms']}ms",
+          flush=True)
     return out
 
 

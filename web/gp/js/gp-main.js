@@ -633,9 +633,15 @@
     }
     async function loadFilings() {
       try {
-        const url = '/api/v2/news/fund-filings?limit=50&days=30'
+        const url = '/api/v2/news/fund-filings?limit=40&days=30'
           + (force ? '&_=' + Date.now() : '');
-        const r = await window.dgaFetch(url, { cache: 'no-store' });
+        const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        const timer = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (_) {} }, 16000) : null;
+        const r = await window.dgaFetch(url, {
+          cache: 'no-store',
+          signal: ctrl ? ctrl.signal : undefined,
+        });
+        if (timer) clearTimeout(timer);
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const filings = await r.json();
         _renderFundFilings(ffBody, filings);
@@ -650,11 +656,15 @@
           ffBadge.title = filings.note || 'SEC EDGAR · saved reports · newest first';
         }
       } catch (e) {
-        if (ffBody) ffBody.innerHTML = '<div class="feed-empty">Fund filings unavailable: '
-          + _feedEsc(e.message) + '</div>';
+        const msg = (e && e.name === 'AbortError')
+          ? 'Fund filings timed out — tap refresh to retry (SEC can be slow).'
+          : ('Fund filings unavailable: ' + (e.message || e));
+        if (ffBody) ffBody.innerHTML = '<div class="feed-empty">' + _feedEsc(msg) + '</div>';
       }
     }
-    await Promise.all([loadWire(), loadFilings()]);
+    // Wire first, filings second — don't let SEC block the wire paint
+    await loadWire();
+    await loadFilings();
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -664,12 +674,15 @@
     positions: () => loadGPPositions(),
     options:   () => loadOptionsTab(),
     research:  () => {
-      loadBrief(); loadIdeaFeed(true);
+      loadBrief();
+      // Use cache when warm — force=true on every tab open was hanging Idea
+      // Generator (and starving Fund Filings) while re-quoting the full book.
+      loadIdeaFeed(false);
       // Market Pulse card (ui377): mount once, then only GET the latest
       // persisted results — a scan NEVER auto-runs from tab activation.
       _pulseMount('rpulse-panel', 'rpulse');
       _pulseLoadLatest();
-      loadDeskFeeds();
+      loadDeskFeeds(false);
     },
     builder:   () => _initBuilderTab(),
     lab:       () => _initLabTab(),
@@ -5850,19 +5863,37 @@
     if (!force && (now - _ideaFeedLastFetch) < 60 * 1000 && document.getElementById('idea-gen-count')?.textContent !== '—') {
       return;
     }
+    const list = document.getElementById('idea-gen-list');
+    if (list && force) {
+      list.innerHTML = '<div class="idea-gen-empty">Refreshing movers…</div>';
+    }
     try {
       const url = '/api/v2/research/idea-feed?threshold=' + encodeURIComponent(_ideaFeedThreshold)
-        + '&limit=60' + (force ? '&force=true' : '')
+        + '&limit=40' + (force ? '&force=true' : '')
         + '&_t=' + Date.now();
-      const r = await window.dgaFetch(url, { cache: 'no-store' });
+      // Abort if server hangs — never leave the card blank forever
+      const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (_) {} }, 14000) : null;
+      const r = await window.dgaFetch(url, {
+        cache: 'no-store',
+        signal: ctrl ? ctrl.signal : undefined,
+      });
+      if (timer) clearTimeout(timer);
       if (!r.ok) throw new Error('idea-feed ' + r.status);
       const data = await r.json();
+      if (data && data.error && !(data.movers || []).length) {
+        throw new Error(data.error);
+      }
       _ideaFeedLastFetch = now;
       _renderIdeaFeed(data);
     } catch (e) {
       console.warn('[idea-feed]', e);
-      const list  = document.getElementById('idea-gen-list');
-      if (list) list.innerHTML = '<div class="idea-gen-empty">Idea feed unavailable.</div>';
+      if (list) {
+        const msg = (e && e.name === 'AbortError')
+          ? 'Idea feed timed out — tap ↻ to retry.'
+          : ('Idea feed unavailable' + (e && e.message ? ': ' + e.message : '') + '. Tap ↻.');
+        list.innerHTML = '<div class="idea-gen-empty">' + msg + '</div>';
+      }
     }
   }
 
