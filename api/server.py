@@ -2845,10 +2845,24 @@ def news_market_wire(request: Request, limit: int = 14):
 
 @app.get("/api/v2/news/fund-filings")
 def news_fund_filings(request: Request, limit: int = 50, days: int = 30):
-    """Free SEC EDGAR feed for saved-report universe. Newest first. No LLM."""
+    """Free SEC EDGAR feed for saved-report universe. Newest first. No LLM.
+
+    Outer hard timeout (8s) — never leave the browser on Loading / timed out.
+    """
     claims = _claims_or_401(request)
     lp_id = claims.get("lp_id") or claims.get("email") or "anon"
-    return _build_fund_filings(lp_id, limit=limit, days=days)
+    empty = {
+        "ok": True, "kind": "fund_filings", "items": [],
+        "as_of": _pacific_time_str(), "universe_size": 0,
+        "note": "Filings scan timed out — tap refresh.",
+        "timed_out": True,
+    }
+    result = _run_with_timeout(
+        lambda: _build_fund_filings(lp_id, limit=limit, days=days),
+        8.0,
+        empty,
+    )
+    return result if isinstance(result, dict) else empty
 
 
 @app.get("/api/v2/news/desk-feeds")
@@ -7866,27 +7880,9 @@ def market_movers(request: Request, limit: int = 12, min_price: float = 3.0,
     }
 
 
-@app.get("/api/v2/research/idea-feed")
-def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60, force: bool = False):
-    """Return today's notable movers from the user's universe.
-
-    Universe = watchlist ∪ open positions (tax_lots) ∪ saved-report subjects.
-    A mover is any ticker with |today's pct_change| ≥ `threshold` (default 4%).
-    Each mover is enriched with:
-      • sector and sector-ETF comparison (XLK/XLE/...)
-      • headline news items (up to 5 from Yahoo via yfinance)
-      • reason_class: 'sector_move' | 'news' | 'unknown'
-      • source labels: where it came from in the universe
-
-    Day % is re-verified with market_data bar prev-close for every threshold
-    candidate so chartPreviousClose phantoms (IBM −29% vs real −1%) never stick.
-
-    Hard wall-clock budget (~9s): always return movers even if enrich is partial.
-    """
-    claims = _claims_or_401(request)
-    lp_id   = claims.get("lp_id") or claims.get("email") or "anon"
-    role    = claims.get("role", "lp")
-    is_priv = role in ("gp", "admin")
+def _research_idea_feed_body(lp_id: str, role: str, is_priv: bool,
+                             threshold: float, limit: int, force: bool) -> dict:
+    """Inner body of idea-feed — always invoked under a hard outer timeout."""
     t_feed0 = time.time()
 
     def _budget_left() -> float:
@@ -8150,6 +8146,49 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
     print(f"[idea-feed] {len(movers)} movers / {len(universe)} uni in {out['elapsed_ms']}ms",
           flush=True)
     return out
+
+
+@app.get("/api/v2/research/idea-feed")
+def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60,
+                       force: bool = False):
+    """Return today's notable movers from the user's universe.
+
+    Hard outer timeout (8s): never hang the Research tab. On timeout, serve
+    last warm cache or an empty movers list with a retry note.
+    """
+    claims = _claims_or_401(request)
+    lp_id   = claims.get("lp_id") or claims.get("email") or "anon"
+    role    = claims.get("role", "lp")
+    is_priv = role in ("gp", "admin")
+    # Warm cache for timeout fallback
+    try:
+        import market_data as _md_sess
+        _sess = _md_sess._us_equity_session_date()
+    except Exception:
+        _sess = _now_pacific().strftime("%Y-%m-%d")
+    cache_key = (str(lp_id), float(threshold), int(limit), is_priv, _sess)
+    warm = _IDEA_FEED_CACHE.get(cache_key)
+    empty = {
+        "movers": [], "universe_size": 0,
+        "as_of": _pacific_time_str(), "session_date": _sess,
+        "threshold": threshold,
+        "note": "Idea feed timed out — tap ↻ to retry.",
+        "timed_out": True,
+    }
+    result = _run_with_timeout(
+        lambda: _research_idea_feed_body(
+            lp_id, role, is_priv, float(threshold), int(limit), bool(force)),
+        8.0,
+        None,
+    )
+    if isinstance(result, dict):
+        return result
+    if warm and warm.get("data"):
+        data = dict(warm["data"])
+        data["stale"] = True
+        data["note"] = (data.get("note") or "") + " · cached (fresh timed out)"
+        return data
+    return empty
 
 
 # ──────────────────────────────────────────────────────────────────────────────
