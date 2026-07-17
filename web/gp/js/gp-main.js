@@ -288,6 +288,14 @@
         cost: _llmRng(est.claude_report, '≈ $0.50–1.00'),
         paid: true,
       },
+      report_kimi: {
+        action: 'Full equity report',
+        provider: 'kimi',
+        model: (vol && vol.model) || (cfg.routing && cfg.routing.volume_model) || 'kimi-k3',
+        cost: _llmRng(est.kimi_report || est.daily_brief_volume, '≈ $0.10–0.40'),
+        paid: true,
+        note: 'Kimi K3 · grounded in SEC/yfinance pack (no live X)',
+      },
       report_both: {
         action: 'Full equity report (both engines)',
         provider: 'grok+claude',
@@ -421,7 +429,7 @@
     }
     const phaseTxt = phase || 'Ready';
     line.innerHTML =
-      '<span class="llm-run-pill ' + (m.provider === 'volume' || m.provider === 'kimi' ? 'vol' : (m.provider === 'claude' || String(m.provider).indexOf('claude') >= 0 ? 'claude' : 'grok')) + '">'
+      '<span class="llm-run-pill ' + (m.provider === 'volume' || m.provider === 'kimi' ? 'vol' : (m.provider === 'claude' || String(m.provider).indexOf('claude') >= 0 ? 'claude' : (String(m.provider).indexOf('both') >= 0 ? 'grok' : 'grok'))) + '">'
       + (m.provider || '').toString().toUpperCase() + '</span> '
       + '<strong>' + phaseTxt + '</strong> · '
       + '<span class="llm-mono">' + (m.model || '—') + '</span> · '
@@ -462,7 +470,9 @@
       let act = p[1];
       if (p[0] === '#hero-run-btn') {
         const eng = (document.getElementById('hero-llm') || {}).value || 'grok';
-        act = eng === 'claude' ? 'report_claude' : eng === 'both' ? 'report_both' : 'report_grok';
+        act = eng === 'claude' ? 'report_claude'
+          : eng === 'kimi' ? 'report_kimi'
+          : eng === 'both' ? 'report_both' : 'report_grok';
       }
       llmStampControl(el, act);
     });
@@ -5266,7 +5276,9 @@
     const ticker = ($heroTicker.value || '').trim().toUpperCase().replace(/[^A-Z.]/g,'');
     if (!ticker) { $heroHint.style.color='var(--red)'; $heroHint.textContent='Enter a ticker first.'; return; }
     const eng = document.getElementById('hero-llm')?.value || 'grok';
-    const act = eng === 'claude' ? 'report_claude' : eng === 'both' ? 'report_both' : 'report_grok';
+    const act = eng === 'claude' ? 'report_claude'
+      : eng === 'kimi' ? 'report_kimi'
+      : eng === 'both' ? 'report_both' : 'report_grok';
     const meta = llmDescribe(act);
     $heroBtn.disabled = true;
     $heroBtn.innerHTML = '<span class="spin">⟳</span> ' + meta.model.slice(0, 18);
@@ -5381,7 +5393,12 @@
     const sel = document.getElementById('hero-llm');
     const eng = (sel && sel.value) || 'grok';
     const g = _HERO_MODELS.grok || 'grok', c = _HERO_MODELS.claude || 'claude';
-    tag.textContent = eng === 'claude' ? c : eng === 'both' ? (g + ' + ' + c) : g;
+    const k = (_HERO_MODELS.volume && _HERO_MODELS.volume.model)
+      || (_HERO_MODELS.routing && _HERO_MODELS.routing.volume_model)
+      || 'kimi-k3';
+    tag.textContent = eng === 'claude' ? c
+      : eng === 'kimi' ? k
+      : eng === 'both' ? (g + ' + ' + c) : g;
   }
   (async function _loadHeroModels() {
     try {
@@ -5398,14 +5415,22 @@
       });
       const gc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="grok"]');
       const cc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="claude"]');
+      const kc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="kimi"]');
       if (gc) gc.title = (_HERO_MODELS.grok || 'Grok') + ' · full report · ' + (_HERO_COST_EST.grok || '');
       if (cc) cc.title = (_HERO_MODELS.claude || 'Claude') + ' · full report · ' + (_HERO_COST_EST.claude || '');
+      if (kc) {
+        const km = (_HERO_MODELS.volume && _HERO_MODELS.volume.model) || 'kimi-k3';
+        kc.title = km + ' · full report · ' + (_HERO_COST_EST.kimi || '');
+      }
       const est = _HERO_MODELS.est;
       if (est) {
-        const rng = a => '$' + a[0].toFixed(2) + '–' + a[1].toFixed(2);
+        const rng = a => Array.isArray(a) && a[0] != null
+          ? ('$' + Number(a[0]).toFixed(2) + '–' + Number(a[1]).toFixed(2)) : '';
         if (est.grok_report)   _HERO_COST_EST.grok   = rng(est.grok_report);
         if (est.claude_report) _HERO_COST_EST.claude = rng(est.claude_report);
         if (est.both_report)   _HERO_COST_EST.both   = rng(est.both_report);
+        if (est.kimi_report)   _HERO_COST_EST.kimi   = rng(est.kimi_report);
+        else if (est.daily_brief_volume) _HERO_COST_EST.kimi = rng(est.daily_brief_volume);
         if (est.pulse_per_ticker) _PULSE_COST_PER_TICKER = est.pulse_per_ticker;
         if (typeof _updateHeroCost === 'function') _updateHeroCost();
         if (typeof _PULSE_PREFIXES !== 'undefined')
@@ -5424,7 +5449,7 @@
   const $heroLlm   = document.getElementById('hero-llm');
   const $heroGamma2 = document.getElementById('hero-gamma');
   const $heroCost  = document.getElementById('hero-cost-est');
-  let _HERO_COST_EST = { grok: '$0.30–0.60', claude: '$0.50–1.00', both: '$0.80–1.60' };
+  let _HERO_COST_EST = { grok: '$0.30–0.60', claude: '$0.50–1.00', kimi: '$0.10–0.40', both: '$0.80–1.60' };
   function _updateHeroCost() {
     if (!$heroCost) return;
     const eng = ($heroLlm && $heroLlm.value) || 'grok';

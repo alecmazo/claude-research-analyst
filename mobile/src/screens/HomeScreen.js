@@ -541,6 +541,7 @@ export default function HomeScreen({ navigation, route }) {
                   {[
                     { v: 'grok',   label: 'Grok' },
                     { v: 'claude', label: 'Claude' },
+                    { v: 'kimi',   label: 'Kimi' },
                     { v: 'both',   label: 'Both' },
                   ].map(opt => (
                     <TouchableOpacity
@@ -550,6 +551,7 @@ export default function HomeScreen({ navigation, route }) {
                         s.llmPickerOpt,
                         llmProvider === opt.v && (
                           opt.v === 'claude' ? s.llmPickerOptActiveClaude :
+                          opt.v === 'kimi'   ? s.llmPickerOptActiveKimi   :
                           opt.v === 'both'   ? s.llmPickerOptActiveBoth   :
                                                 s.llmPickerOptActiveGrok
                         ),
@@ -798,6 +800,7 @@ function makeStyles(t) {
   },
   llmPickerOptActiveGrok:   { backgroundColor: '#0A1628' },
   llmPickerOptActiveClaude: { backgroundColor: '#d97706' },
+  llmPickerOptActiveKimi:   { backgroundColor: '#166534' },
   llmPickerOptActiveBoth:   { backgroundColor: '#475569' },
   llmPickerOptText: {
     fontSize: 10, fontWeight: '700', color: t.textPrimary,

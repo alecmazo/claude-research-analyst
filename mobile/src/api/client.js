@@ -322,7 +322,7 @@ export const api = {
   getAgentic: (jobId) => request(`/api/research/agentic/${encodeURIComponent(jobId)}`),
 
   // ---------- Single-ticker analysis ----------
-  // llmProvider: 'grok' (default) | 'claude' | 'both'
+  // llmProvider: 'grok' (default) | 'claude' | 'kimi' | 'both'
   startAnalysis: (ticker, generateGamma = false, llmProvider = 'grok') =>
     request('/api/analyze', {
       method: 'POST',

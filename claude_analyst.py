@@ -268,16 +268,23 @@ MODEL_TASKS: dict[str, dict] = {
     "full_report": {
         "label": "Full equity report (Analyze)",
         "group": "Research",
-        "allowed": ("grok", "claude", "both"),
+        "allowed": ("grok", "claude", "kimi", "both"),
         "default": "grok",
         "note": "Per-run chips can still override. Live web/X only on Grok.",
     },
     "compare": {
         "label": "LLM Lab · compare report",
         "group": "Research",
-        "allowed": ("claude", "grok"),
+        "allowed": ("claude", "grok", "kimi"),
         "default": "claude",
         "note": "A/B second engine for an existing report.",
+    },
+    "podcast_script": {
+        "label": "Podcast script (narration engine)",
+        "group": "Media",
+        "allowed": ("kimi", "claude", "grok"),
+        "default": "kimi",
+        "note": "Kimi narrates; Rock=Grok + Claudia=Claude reports feed the debate.",
     },
     "daily_brief": {
         "label": "Daily Pulse (morning brief)",
@@ -323,13 +330,6 @@ MODEL_TASKS: dict[str, dict] = {
         "allowed": ("claude",),
         "default": "claude",
         "note": "Same agentic stack as Analyst — Claude only for now.",
-    },
-    "podcast_script": {
-        "label": "Podcast script",
-        "group": "Media",
-        "allowed": ("claude", "grok"),
-        "default": "claude",
-        "note": "Script LLM. TTS is separate (OpenAI audio).",
     },
 }
 # task_id → provider override from Settings (persisted in kv)
@@ -7204,21 +7204,31 @@ def call_claude(system_prompt: str, user_content: str,
 def call_llm(provider: str, system_prompt: str, user_content: str,
              *, live_search: bool = False, on_delta=None, usage_capture=None,
              should_cancel=None) -> str:
-    """Provider-routed LLM call. ``provider`` ∈ {'grok', 'claude'}.
+    """Provider-routed LLM call. ``provider`` ∈ {'grok', 'claude', 'kimi', 'volume'}.
 
     ``on_delta`` is forwarded to providers that support streaming (Claude).
-    Grok's call uses non-streaming chat.completions / Responses today so
-    the callback is ignored there — the report appears all at once when
-    the call returns.
+    Grok / Kimi use non-streaming chat.completions so the callback is ignored
+    there — the report appears all at once when the call returns.
 
-    Centralised so analyze_ticker stays clean and any future provider
-    (gpt-5, gemini, etc.) only needs one branch added here.
+    Kimi = volume host (Moonshot kimi-k3 by default). No live web/X search;
+    analysis is grounded in the gathered user_msg (SEC/yfinance/etc.).
     """
     p = (provider or "grok").lower().strip()
     if p == "claude":
         return call_claude(system_prompt, user_content, on_delta=on_delta,
                            usage_capture=usage_capture,
                            should_cancel=should_cancel)
+    if p in ("kimi", "volume"):
+        if should_cancel is not None and should_cancel():
+            raise ClaudeCancelled("cancelled before LLM call")
+        if not volume_llm_configured():
+            raise RuntimeError(
+                "Kimi / volume LLM not configured. Set KIMI_API_KEY on Railway."
+            )
+        return call_volume_llm(
+            system_prompt, user_content,
+            usage_capture=usage_capture,
+        )
     if p == "grok":
         # call_grok is non-streaming: honor a cancel that arrived before the
         # call; one in flight lands at the caller's next checkpoint instead.
@@ -8106,31 +8116,41 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
             pass
 
     # ── LLM call (provider-routed) ────────────────────────────────────────
-    # Grok = default; uses live web/X search to surface news past training cutoff.
-    # Claude = comparison path; works only from the gathered user_msg payload.
-    # Non-grok providers write to "{ticker}_DGA_Report_{provider}.md/.docx" so
-    # they DON'T overwrite the canonical Grok reports (which other features
-    # like the saved-reports table, Builder, Idea Generator depend on).
-    _suffix = "" if llm_provider == "grok" else f"_{llm_provider}"
-    _model_label = GROK_MODEL if llm_provider == "grok" else (CLAUDE_MODEL if llm_provider == "claude" else llm_provider)
-    print(f"   🧠 Calling {llm_provider.upper()} ({_model_label})"
-          + (" with live X/news/web search…" if llm_provider == "grok" else "…"))
+    # Grok = default; live web/X search past training cutoff.
+    # Claude / Kimi = alternate engines; grounded in gathered user_msg only
+    # (no live search). Non-grok providers write to
+    # "{ticker}_DGA_Report_{provider}.md/.docx" so they don't overwrite Grok.
+    _prov = (llm_provider or "grok").lower().strip()
+    if _prov == "volume":
+        _prov = "kimi"
+    _suffix = "" if _prov == "grok" else f"_{_prov}"
+    if _prov == "grok":
+        _model_label = GROK_MODEL
+    elif _prov == "claude":
+        _model_label = CLAUDE_MODEL
+    elif _prov == "kimi":
+        _model_label = VOLUME_LLM_MODEL
+    else:
+        _model_label = _prov
+    _live = (_prov == "grok")
+    print(f"   🧠 Calling {_prov.upper()} ({_model_label})"
+          + (" with live X/news/web search…" if _live else "…"))
     _ck()
     _emit_progress(on_progress, "grok", 0.40,
-                   f"{llm_provider.title()} ({_model_label}) — analyzing"
-                   + (" + live X/news search" if llm_provider == "grok" else ""))
-    _usage: dict = {}   # filled by call_grok/call_claude → {model, input/output_tokens, cost_usd}
+                   f"{_prov.title()} ({_model_label}) — analyzing"
+                   + (" + live X/news search" if _live else ""))
+    _usage: dict = {}   # filled by call_* → {model, input/output_tokens, cost_usd}
     try:
-        report_text = call_llm(llm_provider, system_prompt, user_msg,
-                               live_search=(llm_provider == "grok"),
+        report_text = call_llm(_prov, system_prompt, user_msg,
+                               live_search=_live,
                                on_delta=on_delta,
                                usage_capture=lambda u: _usage.update(u or {}),
                                should_cancel=should_cancel)
     except ClaudeCancelled:
         raise
     except Exception as exc:  # noqa: BLE001
-        print(f"   ❌ {llm_provider.upper()} API error: {exc}")
-        result["error"] = f"{llm_provider.title()}: {exc}"
+        print(f"   ❌ {_prov.upper()} API error: {exc}")
+        result["error"] = f"{_prov.title()}: {exc}"
         return result
 
     # Save markdown — suffixed for non-Grok providers so they don't overwrite.
@@ -8222,9 +8242,11 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
         "gamma_error": gamma_error,
         "summary": summary,
         "gdrive": gdrive_status,
+        "llm_provider":  _prov,
+        "model":         _usage.get("model") or _model_label,
         # Actual LLM spend for this run (from the provider's token usage).
         "cost_usd":      _usage.get("cost_usd"),
-        "cost_model":    _usage.get("model"),
+        "cost_model":    _usage.get("model") or _model_label,
         "input_tokens":  _usage.get("input_tokens"),
         "output_tokens": _usage.get("output_tokens"),
     })

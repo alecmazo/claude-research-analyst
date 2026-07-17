@@ -539,14 +539,16 @@ End with the sleeve block at this account's real market value so I can push it t
           <!-- The <select> keeps its id + value contract (runAnalysis / cost estimator
                read #hero-llm.value) but is hidden; the chips drive it. -->
           <select id="hero-llm" style="display:none;">
-            <option value="grok"   selected>Grok 4.20 (default)</option>
-            <option value="claude">Claude Opus 4.8</option>
-            <option value="both">Both (sequential ~5 min)</option>
+            <option value="grok"   selected>Grok (default · live search)</option>
+            <option value="claude">Claude</option>
+            <option value="kimi">Kimi K3</option>
+            <option value="both">Both Grok+Claude (~5 min)</option>
           </select>
-          <span id="hero-llm-chips" style="display:inline-flex;gap:4px;">
-            <button type="button" class="hero-llm-chip active" data-llm="grok" title="Grok (default)">Grok</button>
+          <span id="hero-llm-chips" style="display:inline-flex;gap:4px;flex-wrap:wrap;">
+            <button type="button" class="hero-llm-chip active" data-llm="grok" title="Grok · live web/X">Grok</button>
             <button type="button" class="hero-llm-chip" data-llm="claude" title="Claude">Claude</button>
-            <button type="button" class="hero-llm-chip" data-llm="both" title="Both (sequential ~5 min)">Both</button>
+            <button type="button" class="hero-llm-chip" data-llm="kimi" title="Kimi K3 · Moonshot">Kimi</button>
+            <button type="button" class="hero-llm-chip" data-llm="both" title="Both Grok + Claude">Both</button>
           </span>
           <span id="hero-model-tag" title="The exact model this engine will call (live from server config)"
                 style="font-size:8.5px;font-weight:700;color:var(--mid);background:rgba(0,0,0,0.04);border-radius:4px;padding:1px 6px;white-space:nowrap;">—</span>
@@ -815,9 +817,9 @@ End with the sleeve block at this account's real market value so I can push it t
       <div class="pc-section">
         <div class="pc-section-title">① Script Generator</div>
         <div class="pc-section-desc">
-          Pick a ticker with BOTH Grok + Claude reports. Generates dialogue
-          and renders it as styled chat bubbles. Read 2–3 samples before
-          building audio. <strong>~$0.20 / script</strong> (Claude Opus).
+          Pick a ticker with BOTH Grok + Claude reports. <strong>Kimi narrates</strong>
+          (host); Rock = Grok analyst, Claudia = Claude analyst. Dialogue rendered
+          as chat bubbles. <strong>~$0.10–0.25 / script</strong> on Kimi (fallback Claude).
         </div>
 
         <!-- Primary controls: Format · Ticker · [Generate] -->
@@ -2050,7 +2052,7 @@ End with the sleeve block at this account's real market value so I can push it t
           <p style="margin:0 0 10px;font-size:11px;color:#64748b;line-height:1.45;">
             Every wired provider below. Assign a model to <strong>each task</strong>.
             Desk jobs can use <strong>Kimi</strong> (cheap volume) or <strong>Grok</strong> (live search).
-            Full reports: Grok / Claude / both. Agentic tools stay Claude for now.
+            Full reports: Grok / Claude / <strong>Kimi</strong> / both. Podcast host = Kimi.
             Costs tracked per call. Survives redeploys.
           </p>
 

@@ -1602,7 +1602,7 @@ class CreateFundRequest(BaseModel):
 class AnalyzeRequest(BaseModel):
     ticker: str
     generate_gamma: bool = False
-    llm_provider:   str  = "grok"   # 'grok' | 'claude' | 'both'
+    llm_provider:   str  = "grok"   # 'grok' | 'claude' | 'kimi' | 'both'
 
 
 class JobStatus(BaseModel):
@@ -5320,7 +5320,10 @@ def _persist_analysis_text(
 
     Returns: (persisted: bool, char_count: int). Never raises.
     """
-    if provider not in ("grok", "claude"):
+    provider = (provider or "grok").lower().strip()
+    if provider == "volume":
+        provider = "kimi"
+    if provider not in ("grok", "claude", "kimi"):
         return False, 0
     _suffix  = "" if provider == "grok" else f"_{provider}"
     _md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report{_suffix}.md"
@@ -5369,18 +5372,18 @@ def _persist_analysis_text(
     except Exception:
         summary = {}
 
-    if provider == "claude":
+    if provider in ("claude", "kimi"):
         try:
             _db_upsert_report(
                 ticker, text, summary,
                 has_docx=False, has_pptx=False, gamma_url=None,
-                pptx_stale=None, provider="claude",
+                pptx_stale=None, provider=provider,
             )
-            print(f"✅ [persist] CLAUDE report for {ticker} "
+            print(f"✅ [persist] {provider.upper()} report for {ticker} "
                   f"({len(text):,} chars · price_target={summary.get('price_target')})")
             return True, len(text)
         except Exception as e:
-            print(f"❌ [persist] CLAUDE DB write failed for {ticker}: {e!s:.300}")
+            print(f"❌ [persist] {provider.upper()} DB write failed for {ticker}: {e!s:.300}")
             return False, len(text)
 
     # Grok path — capture artifact flags too
@@ -5521,19 +5524,15 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool,
     """Run a single-ticker analysis.
 
     llm_provider:
-      • 'grok'   — default; runs the existing pipeline, persists to the
-                   canonical analyst_reports columns
-      • 'claude' — runs analyze_ticker with llm_provider='claude'; saves
-                   {TICKER}_DGA_Report_claude.md + persists to the
-                   *_claude columns. Reuses Grok's cached user_msg so
-                   inputs are identical (no SEC re-fetch).
-      • 'both'   — runs Grok first, then Claude (sequentially, in this
-                   same job). The job's status stays 'running' until
-                   both complete. Each side's failure is reported
-                   independently in result['providers'].
+      • 'grok'   — default; live web/X; canonical analyst_reports columns
+      • 'claude' — alternate engine; {TICKER}_DGA_Report_claude.md + *_claude cols
+      • 'kimi'   — Kimi K3 (Moonshot); {TICKER}_DGA_Report_kimi.md + *_kimi cols
+      • 'both'   — Grok then Claude sequentially (job stays running until both done)
     """
     provider = (llm_provider or "grok").lower().strip()
-    if provider not in ("grok", "claude", "both"):
+    if provider == "volume":
+        provider = "kimi"
+    if provider not in ("grok", "claude", "kimi", "both"):
         provider = "grok"
 
     # Dispatch 'both' to the dedicated runner
@@ -5575,7 +5574,7 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool,
             verbose=False,
             on_progress=_record_progress,
             llm_provider=provider,
-            reuse_user_msg=(provider == "claude"),
+            reuse_user_msg=(provider in ("claude", "kimi")),
             should_cancel=_cancel_requested,
         )
     except analyst.ClaudeCancelled:
@@ -6406,6 +6405,8 @@ def config_models():
                                    round(analyst.estimate_grok_cost(g_model, 12_000, 3_000, 0), 2)],
             # Market pulse / per-ticker scan
             "pulse_volume":       [ _vc(2_000, 600), _vc(4_000, 1_200) ],
+            # Full Kimi equity report (same envelope as Claude, volume rates)
+            "kimi_report":        [ _vc(30_000, 8_000), _vc(45_000, 16_000) ],
             "agentic":            [0.05, 0.30],
             "strategist":         [0.30, 1.00],
             "volume_active":      vol_on,
@@ -6732,8 +6733,10 @@ def start_analysis(req: AnalyzeRequest, background_tasks: BackgroundTasks,
         raise HTTPException(status_code=422, detail="Invalid ticker symbol")
 
     provider = (req.llm_provider or "grok").lower().strip()
-    if provider not in ("grok", "claude", "both"):
-        raise HTTPException(status_code=422, detail="llm_provider must be 'grok' | 'claude' | 'both'")
+    if provider == "volume":
+        provider = "kimi"
+    if provider not in ("grok", "claude", "kimi", "both"):
+        raise HTTPException(status_code=422, detail="llm_provider must be 'grok' | 'claude' | 'kimi' | 'both'")
 
     # DEMO: no paid LLM call ever — synthesize a sample report instantly.
     if request is not None and _request_is_demo(request):
@@ -9779,6 +9782,35 @@ def _db_upsert_report(
                         claude_upside_pct   = EXCLUDED.claude_upside_pct,
                         archived            = FALSE,
                         last_attempt_at     = NOW(),
+                        last_attempt_status = 'success',
+                        last_attempt_error  = NULL
+                """, (
+                    ticker, md_text, report_date,
+                    summary.get("rating"), summary.get("price_target"),
+                    summary.get("upside_pct"),
+                ))
+                return
+
+            # ── Kimi path: parallel columns (does not overwrite Grok/Claude) ─
+            if provider == "kimi":
+                cur.execute("""
+                    INSERT INTO analyst_reports
+                        (ticker, generated_at, report_md, has_docx, has_pptx,
+                         report_md_kimi, kimi_generated_at, kimi_report_date,
+                         kimi_rating, kimi_price_target, kimi_upside_pct,
+                         last_attempt_at, last_attempt_status, last_attempt_error)
+                    VALUES (%s, NOW(), '', FALSE, FALSE,
+                            %s, NOW(), %s, %s, %s, %s,
+                            NOW(), 'success', NULL)
+                    ON CONFLICT (ticker) DO UPDATE SET
+                        report_md_kimi    = EXCLUDED.report_md_kimi,
+                        kimi_generated_at = NOW(),
+                        kimi_report_date  = EXCLUDED.kimi_report_date,
+                        kimi_rating       = EXCLUDED.kimi_rating,
+                        kimi_price_target = EXCLUDED.kimi_price_target,
+                        kimi_upside_pct   = EXCLUDED.kimi_upside_pct,
+                        archived          = FALSE,
+                        last_attempt_at   = NOW(),
                         last_attempt_status = 'success',
                         last_attempt_error  = NULL
                 """, (
@@ -12971,6 +13003,13 @@ def _ensure_analyst_reports_table(conn) -> None:
         # In-report as-of dates (UI shows under each ticker)
         ("report_date",         "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS report_date TEXT"),
         ("claude_report_date",  "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS claude_report_date TEXT"),
+        # Kimi parallel columns (3rd analyze engine)
+        ("report_md_kimi",      "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS report_md_kimi TEXT"),
+        ("kimi_generated_at",   "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS kimi_generated_at TIMESTAMP"),
+        ("kimi_rating",         "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS kimi_rating VARCHAR(30)"),
+        ("kimi_price_target",   "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS kimi_price_target NUMERIC"),
+        ("kimi_upside_pct",     "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS kimi_upside_pct NUMERIC"),
+        ("kimi_report_date",    "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS kimi_report_date TEXT"),
     ]:
         _safe(sql, f"add_{col_name}")
 
