@@ -13551,7 +13551,6 @@
     const $on = document.getElementById('volume-llm-enable');
     const $off = document.getElementById('volume-llm-rollback');
     const $ref = document.getElementById('volume-llm-refresh');
-    const $jobs = document.getElementById('volume-llm-jobs');
     const $prov = document.getElementById('model-providers');
     const $table = document.getElementById('model-routing-table');
     if (!$st && !$table) return;
@@ -13671,47 +13670,6 @@
       });
     }
 
-    function renderJobs(d) {
-      if (!$jobs) return;
-      const vol = (d && d.volume) || d || {};
-      const ids = vol.job_ids || Object.keys(vol.jobs || {}) || [];
-      const labels = vol.job_labels || {};
-      const jobs = vol.jobs || {};
-      const routes = vol.routes || (d && d.routes) || {};
-      const master = !!(vol.enabled != null ? vol.enabled : d && d.enabled);
-      const cfg = !!(vol.configured != null ? vol.configured : d && d.configured);
-      if (!ids.length) {
-        $jobs.innerHTML = '<div style="font-size:11px;color:#94a3b8;">No desk jobs.</div>';
-        return;
-      }
-      $jobs.innerHTML = ids.map(function (id) {
-        const on = jobs[id] !== false;
-        const route = routes[id] || (master && on ? 'kimi' : 'grok');
-        const lab = labels[id] || id;
-        const disabled = !cfg || !master;
-        return '<label style="display:flex;align-items:center;gap:8px;padding:7px 10px;'
-          + 'background:var(--bg-elevated,#fff);border:1px solid var(--border-subtle,#e2e8f0);'
-          + 'border-radius:8px;cursor:' + (disabled ? 'not-allowed' : 'pointer') + ';'
-          + 'opacity:' + (disabled ? '0.55' : '1') + ';">'
-          + '<input type="checkbox" class="vol-job-toggle" data-job="' + id + '" '
-          + (on ? 'checked ' : '') + (disabled ? 'disabled ' : '')
-          + 'style="width:15px;height:15px;accent-color:var(--blue,#0ea5e9);flex-shrink:0;">'
-          + '<span style="flex:1;min-width:0;">'
-          + '<span style="display:block;font-size:11.5px;font-weight:700;color:var(--text-primary,#0f172a);">' + lab + '</span>'
-          + '<span style="font-size:10px;color:#94a3b8;">now → <code>' + route + '</code></span>'
-          + '</span></label>';
-      }).join('');
-      $jobs.querySelectorAll('.vol-job-toggle').forEach(function (cb) {
-        cb.addEventListener('change', function () {
-          const job = cb.getAttribute('data-job');
-          if (!job) return;
-          const body = { jobs: {} };
-          body.jobs[job] = !!cb.checked;
-          setVolumeConfig(body);
-        });
-      });
-    }
-
     async function refreshCatalog(d) {
       try {
         const routing = (d && d.routing) || d || {};
@@ -13804,7 +13762,6 @@
         if ($off) $off.disabled = !cfg || !en;
         renderProviders(routing.providers || {});
         renderRoutingTable(routing);
-        renderJobs(Object.assign({}, vol, { volume: vol }));
         await refreshCatalog(Object.assign({}, routing, { volume: vol, routing: routing }));
       } catch (e) {
         if ($st) $st.textContent = 'Could not load model routing: ' + (e.message || e);
