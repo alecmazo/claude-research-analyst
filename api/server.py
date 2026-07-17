@@ -6334,7 +6334,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui78-20260717-sort"
+WEB_BUILD_VERSION = "ui79-20260717-hydrate-stamps"
 
 
 @app.get("/api/build")
@@ -9742,6 +9742,8 @@ def _db_upsert_report(
     gamma_url: str | None = None,
     pptx_stale: bool | None = None,
     provider: str = "grok",
+    *,
+    touch_run_at: bool = True,
 ) -> None:
     """Upsert one analyst report row into PostgreSQL.
 
@@ -9756,6 +9758,12 @@ def _db_upsert_report(
       • None   — preserve existing value (don't touch the column)
       • True   — mark deck as old/stale (report rerun without Gamma)
       • False  — deck regenerated alongside the report (in sync)
+
+    touch_run_at:
+      • True  (default) — real Analyze run: stamp generated_at / provider_* / last_attempt
+      • False — hydrate / recovery re-import: refresh content fields but **never**
+        overwrite analysis timestamps (startup used to bulk-stamp NOW() and
+        scramble Saved Reports sort order so a fresh CEG sat 6th).
 
     Entirely wrapped in try/except — never raises, so a DB failure never
     affects the job result or any calling code.
@@ -9772,6 +9780,9 @@ def _db_upsert_report(
         _ensure_analyst_reports_table_schema()
     except Exception:
         pass
+    # When touch_run_at is False (hydrate), keep prior analysis stamps so
+    # Saved Reports order reflects real Analyze runs, not deploy re-imports.
+    _touch = bool(touch_run_at)
     try:
         with _fund_conn() as conn, conn.cursor() as cur:
             # ── Claude path: only touches the *_claude columns ──────────
@@ -9787,19 +9798,24 @@ def _db_upsert_report(
                             NOW(), 'success', NULL)
                     ON CONFLICT (ticker) DO UPDATE SET
                         report_md_claude    = EXCLUDED.report_md_claude,
-                        claude_generated_at = NOW(),
+                        claude_generated_at = CASE WHEN %s THEN NOW()
+                                                   ELSE COALESCE(analyst_reports.claude_generated_at, NOW()) END,
                         claude_report_date  = EXCLUDED.claude_report_date,
                         claude_rating       = EXCLUDED.claude_rating,
                         claude_price_target = EXCLUDED.claude_price_target,
                         claude_upside_pct   = EXCLUDED.claude_upside_pct,
                         archived            = FALSE,
-                        last_attempt_at     = NOW(),
-                        last_attempt_status = 'success',
-                        last_attempt_error  = NULL
+                        last_attempt_at     = CASE WHEN %s THEN NOW()
+                                                   ELSE analyst_reports.last_attempt_at END,
+                        last_attempt_status = CASE WHEN %s THEN 'success'
+                                                   ELSE analyst_reports.last_attempt_status END,
+                        last_attempt_error  = CASE WHEN %s THEN NULL
+                                                   ELSE analyst_reports.last_attempt_error END
                 """, (
                     ticker, md_text, report_date,
                     summary.get("rating"), summary.get("price_target"),
                     summary.get("upside_pct"),
+                    _touch, _touch, _touch, _touch,
                 ))
                 return
 
@@ -9816,19 +9832,24 @@ def _db_upsert_report(
                             NOW(), 'success', NULL)
                     ON CONFLICT (ticker) DO UPDATE SET
                         report_md_kimi    = EXCLUDED.report_md_kimi,
-                        kimi_generated_at = NOW(),
+                        kimi_generated_at = CASE WHEN %s THEN NOW()
+                                                 ELSE COALESCE(analyst_reports.kimi_generated_at, NOW()) END,
                         kimi_report_date  = EXCLUDED.kimi_report_date,
                         kimi_rating       = EXCLUDED.kimi_rating,
                         kimi_price_target = EXCLUDED.kimi_price_target,
                         kimi_upside_pct   = EXCLUDED.kimi_upside_pct,
                         archived          = FALSE,
-                        last_attempt_at   = NOW(),
-                        last_attempt_status = 'success',
-                        last_attempt_error  = NULL
+                        last_attempt_at   = CASE WHEN %s THEN NOW()
+                                                 ELSE analyst_reports.last_attempt_at END,
+                        last_attempt_status = CASE WHEN %s THEN 'success'
+                                                   ELSE analyst_reports.last_attempt_status END,
+                        last_attempt_error  = CASE WHEN %s THEN NULL
+                                                   ELSE analyst_reports.last_attempt_error END
                 """, (
                     ticker, md_text, report_date,
                     summary.get("rating"), summary.get("price_target"),
                     summary.get("upside_pct"),
+                    _touch, _touch, _touch, _touch,
                 ))
                 return
 
@@ -9845,19 +9866,24 @@ def _db_upsert_report(
                             NOW(), 'success', NULL)
                     ON CONFLICT (ticker) DO UPDATE SET
                         report_md_deepseek    = EXCLUDED.report_md_deepseek,
-                        deepseek_generated_at = NOW(),
+                        deepseek_generated_at = CASE WHEN %s THEN NOW()
+                                                     ELSE COALESCE(analyst_reports.deepseek_generated_at, NOW()) END,
                         deepseek_report_date  = EXCLUDED.deepseek_report_date,
                         deepseek_rating       = EXCLUDED.deepseek_rating,
                         deepseek_price_target = EXCLUDED.deepseek_price_target,
                         deepseek_upside_pct   = EXCLUDED.deepseek_upside_pct,
                         archived              = FALSE,
-                        last_attempt_at       = NOW(),
-                        last_attempt_status   = 'success',
-                        last_attempt_error    = NULL
+                        last_attempt_at       = CASE WHEN %s THEN NOW()
+                                                     ELSE analyst_reports.last_attempt_at END,
+                        last_attempt_status   = CASE WHEN %s THEN 'success'
+                                                     ELSE analyst_reports.last_attempt_status END,
+                        last_attempt_error    = CASE WHEN %s THEN NULL
+                                                     ELSE analyst_reports.last_attempt_error END
                 """, (
                     ticker, md_text, report_date,
                     summary.get("rating"), summary.get("price_target"),
                     summary.get("upside_pct"),
+                    _touch, _touch, _touch, _touch,
                 ))
                 return
 
@@ -9872,7 +9898,8 @@ def _db_upsert_report(
                     VALUES (%s, NOW(), %s, %s, %s, %s, %s, %s, %s, %s,
                             NOW(), 'success', NULL)
                     ON CONFLICT (ticker) DO UPDATE SET
-                        generated_at        = NOW(),
+                        generated_at        = CASE WHEN %s THEN NOW()
+                                                   ELSE COALESCE(analyst_reports.generated_at, NOW()) END,
                         report_md           = EXCLUDED.report_md,
                         has_docx            = EXCLUDED.has_docx,
                         has_pptx            = EXCLUDED.has_pptx,
@@ -9882,13 +9909,17 @@ def _db_upsert_report(
                         gamma_url           = EXCLUDED.gamma_url,
                         report_date         = EXCLUDED.report_date,
                         archived            = FALSE,
-                        last_attempt_at     = NOW(),
-                        last_attempt_status = 'success',
-                        last_attempt_error  = NULL
+                        last_attempt_at     = CASE WHEN %s THEN NOW()
+                                                   ELSE analyst_reports.last_attempt_at END,
+                        last_attempt_status = CASE WHEN %s THEN 'success'
+                                                   ELSE analyst_reports.last_attempt_status END,
+                        last_attempt_error  = CASE WHEN %s THEN NULL
+                                                   ELSE analyst_reports.last_attempt_error END
                 """, (
                     ticker, md_text, has_docx, has_pptx,
                     summary.get("rating"), summary.get("price_target"),
                     summary.get("upside_pct"), gamma_url, report_date,
+                    _touch, _touch, _touch, _touch,
                 ))
             else:
                 # Path B: explicitly set pptx_stale
@@ -9900,7 +9931,8 @@ def _db_upsert_report(
                     VALUES (%s, NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             NOW(), 'success', NULL)
                     ON CONFLICT (ticker) DO UPDATE SET
-                        generated_at        = NOW(),
+                        generated_at        = CASE WHEN %s THEN NOW()
+                                                   ELSE COALESCE(analyst_reports.generated_at, NOW()) END,
                         report_md           = EXCLUDED.report_md,
                         has_docx            = EXCLUDED.has_docx,
                         has_pptx            = EXCLUDED.has_pptx,
@@ -9911,13 +9943,17 @@ def _db_upsert_report(
                         pptx_stale          = EXCLUDED.pptx_stale,
                         report_date         = EXCLUDED.report_date,
                         archived            = FALSE,
-                        last_attempt_at     = NOW(),
-                        last_attempt_status = 'success',
-                        last_attempt_error  = NULL
+                        last_attempt_at     = CASE WHEN %s THEN NOW()
+                                                   ELSE analyst_reports.last_attempt_at END,
+                        last_attempt_status = CASE WHEN %s THEN 'success'
+                                                   ELSE analyst_reports.last_attempt_status END,
+                        last_attempt_error  = CASE WHEN %s THEN NULL
+                                                   ELSE analyst_reports.last_attempt_error END
                 """, (
                     ticker, md_text, has_docx, has_pptx,
                     summary.get("rating"), summary.get("price_target"),
                     summary.get("upside_pct"), gamma_url, bool(pptx_stale), report_date,
+                    _touch, _touch, _touch, _touch,
                 ))
     except Exception as _e:
         # LOUD log — easy to grep in Railway logs. Previous version used
@@ -9938,6 +9974,7 @@ def _db_upsert_report(
                     has_docx=has_docx, has_pptx=has_pptx,
                     gamma_url=gamma_url, pptx_stale=pptx_stale,
                     provider=provider,
+                    touch_run_at=touch_run_at,
                 )
             except Exception as _e2:
                 print(f"❌❌❌ retry after schema-fix ALSO failed for {ticker}: {_e2!s:.300}", flush=True)
@@ -13524,9 +13561,12 @@ def _apply_self_migrations() -> None:
 
 
 def _hydrate_analyst_reports_to_db() -> None:
-    """Daemon thread: scan STOCKS_FOLDER for *_DGA_Report.md files and upsert
-    each one into PostgreSQL. Runs once at startup so existing reports are
-    backfilled after a Railway redeploy. Idempotent (ON CONFLICT DO UPDATE).
+    """Daemon thread: scan STOCKS_FOLDER for *_DGA_Report.md files missing from
+    PostgreSQL and insert them. Runs once at startup after Railway redeploy.
+
+    Critical: only **inserts missing** rows. Never re-upserts existing reports —
+    a full re-upsert used to stamp generated_at=NOW() on every ticker at deploy
+    and scrambled Saved Reports order (fresh Analyze e.g. CEG buried mid-list).
     """
     if not _PSYCOPG2_OK or not os.environ.get("DATABASE_URL"):
         return
@@ -13537,19 +13577,36 @@ def _hydrate_analyst_reports_to_db() -> None:
         md_files = [f for f in md_files if f.parent == folder]
         if not md_files:
             return
-        # Skip tickers that are archived in DB
+        # Tickers already in DB (any content) — do not re-touch timestamps
+        existing: set[str] = set()
         archived_set: set[str] = set()
-        if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
-            try:
-                with _fund_conn() as conn, conn.cursor() as cur:
-                    cur.execute("SELECT ticker FROM analyst_reports WHERE archived = TRUE")
-                    archived_set = {r[0] for r in cur.fetchall()}
-            except Exception:
-                pass
-        md_files = [f for f in md_files if f.name.replace("_DGA_Report.md", "").upper() not in archived_set]
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT ticker, archived,
+                           COALESCE(LENGTH(report_md), 0) AS n
+                      FROM analyst_reports
+                """)
+                for row in cur.fetchall() or []:
+                    tk = (row[0] or "").upper()
+                    if not tk:
+                        continue
+                    if row[1]:
+                        archived_set.add(tk)
+                    if int(row[2] or 0) > 50:
+                        existing.add(tk)
+        except Exception as _e:
+            print(f"[analyst_reports] hydrate existing-lookup failed: {_e!s:.160}", flush=True)
+        md_files = [
+            f for f in md_files
+            if f.name.replace("_DGA_Report.md", "").upper() not in archived_set
+            and f.name.replace("_DGA_Report.md", "").upper() not in existing
+        ]
         if not md_files:
+            print("[analyst_reports] hydrate: nothing missing — skip (preserve analysis stamps)",
+                  flush=True)
             return
-        print(f"[analyst_reports] hydrating {len(md_files)} report(s) to DB…")
+        print(f"[analyst_reports] hydrating {len(md_files)} missing report(s) to DB…", flush=True)
         for md_file in md_files:
             try:
                 ticker = md_file.name.replace("_DGA_Report.md", "")
@@ -13565,10 +13622,15 @@ def _hydrate_analyst_reports_to_db() -> None:
                         gamma_url = entry.get("gamma_url")
                 except Exception:
                     pass
-                _db_upsert_report(ticker, md_text, summary, has_docx, has_pptx, gamma_url)
+                # touch_run_at=False: if a race inserts the row first, still
+                # do not overwrite a real Analyze timestamp.
+                _db_upsert_report(
+                    ticker, md_text, summary, has_docx, has_pptx, gamma_url,
+                    touch_run_at=False,
+                )
             except Exception as _e:
                 print(f"[analyst_reports] hydration failed for {md_file.name} (non-fatal): {_e!s:.200}")
-        print("[analyst_reports] hydration complete")
+        print("[analyst_reports] hydration complete", flush=True)
     except Exception as _e:
         print(f"[analyst_reports] hydration thread error (non-fatal): {_e!s:.200}")
 
