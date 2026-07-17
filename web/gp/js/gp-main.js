@@ -5488,8 +5488,9 @@
   }
 
   // Multi-select engines on Analyze card (each run → separate Saved Report)
-  const _HERO_ENGINES = ['grok', 'claude', 'kimi', 'deepseek'];
-  const _HERO_ENG_KEY = 'dga.hero.engines.v1';
+  // Kimi deliberately excluded — full reports only: Grok / Claude / DeepSeek.
+  const _HERO_ENGINES = ['grok', 'claude', 'deepseek'];
+  const _HERO_ENG_KEY = 'dga.hero.engines.v2';
 
   function _heroSelectedEngines() {
     const chips = document.querySelectorAll('#hero-llm-chips .hero-llm-chip.active');
@@ -5503,7 +5504,6 @@
 
   function _heroActFor(eng) {
     if (eng === 'claude') return 'report_claude';
-    if (eng === 'kimi') return 'report_kimi';
     if (eng === 'deepseek') return 'report_deepseek';
     return 'report_grok';
   }
@@ -5517,9 +5517,14 @@
   function _heroRestoreEngines() {
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem(_HERO_ENG_KEY) || 'null'); } catch (_) {}
+    // Migrate old v1 prefs that may still list kimi
+    if (!Array.isArray(saved) || !saved.length) {
+      try { saved = JSON.parse(localStorage.getItem('dga.hero.engines.v1') || 'null'); } catch (_) {}
+    }
     if (!Array.isArray(saved) || !saved.length) return;
     const set = {};
     saved.forEach(function (e) {
+      if (e === 'kimi') return; // retired from Analyze
       if (_HERO_ENGINES.indexOf(e) >= 0) set[e] = true;
     });
     if (!Object.keys(set).length) return;
@@ -5736,14 +5741,9 @@
     if (!tag) return;
     const g = (_HERO_MODELS && _HERO_MODELS.grok) || 'grok';
     const c = (_HERO_MODELS && _HERO_MODELS.claude) || 'claude';
-    const k = (_HERO_MODELS && (
-      (_HERO_MODELS.routing && _HERO_MODELS.routing.kimi_model)
-      || (_HERO_MODELS.volume && _HERO_MODELS.volume.kimi_model)
-      || (_HERO_MODELS.volume && _HERO_MODELS.volume.model)
-    )) || 'kimi-k3';
     const ds = (_HERO_MODELS && _HERO_MODELS.routing && _HERO_MODELS.routing.deepseek_model)
       || 'deepseek-chat';
-    const map = { grok: g, claude: c, kimi: k, deepseek: ds };
+    const map = { grok: g, claude: c, deepseek: ds };
     const sel = _heroSelectedEngines();
     tag.textContent = sel.map(function (e) { return map[e] || e; }).join(' + ') || '—';
     tag.title = sel.length + ' engine' + (sel.length === 1 ? '' : 's')
@@ -5769,14 +5769,14 @@
       }
       const gc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="grok"]');
       const cc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="claude"]');
-      const kc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="kimi"]');
       const dc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="deepseek"]');
+      // Hide any leftover Kimi chip from older HTML caches
+      document.querySelectorAll('#hero-llm-chips .hero-llm-chip[data-llm="kimi"]').forEach(function (el) {
+        el.style.display = 'none';
+        el.classList.remove('active');
+      });
       if (gc) gc.title = (_HERO_MODELS.grok || 'Grok') + ' · full report · ' + (_HERO_COST_EST.grok || '') + ' · toggle multi-select';
       if (cc) cc.title = (_HERO_MODELS.claude || 'Claude') + ' · full report · ' + (_HERO_COST_EST.claude || '') + ' · toggle multi-select';
-      if (kc) {
-        const km = (_HERO_MODELS.routing && _HERO_MODELS.routing.kimi_model) || 'kimi-k3';
-        kc.title = km + ' · full report · ' + (_HERO_COST_EST.kimi || '') + ' · toggle multi-select';
-      }
       if (dc) {
         const dm = (_HERO_MODELS.routing && _HERO_MODELS.routing.deepseek_model) || 'deepseek-chat';
         dc.title = dm + ' · full report · ' + (_HERO_COST_EST.deepseek || '') + ' · toggle multi-select';
@@ -5787,7 +5787,6 @@
           ? ('$' + Number(a[0]).toFixed(2) + '–' + Number(a[1]).toFixed(2)) : '';
         if (est.grok_report)     _HERO_COST_EST.grok     = rng(est.grok_report);
         if (est.claude_report)   _HERO_COST_EST.claude   = rng(est.claude_report);
-        if (est.kimi_report)     _HERO_COST_EST.kimi     = rng(est.kimi_report);
         if (est.deepseek_report) _HERO_COST_EST.deepseek = rng(est.deepseek_report);
         if (est.pulse_per_ticker) _PULSE_COST_PER_TICKER = est.pulse_per_ticker;
         if (typeof _updateHeroCost === 'function') _updateHeroCost();
@@ -5802,7 +5801,7 @@
   const $heroCost  = document.getElementById('hero-cost-est');
   let _HERO_COST_EST = {
     grok: '$0.30–0.60', claude: '$0.50–1.00',
-    kimi: '$0.15–0.60', deepseek: '$0.01–0.05',
+    deepseek: '$0.01–0.05',
   };
   function _updateHeroCost() {
     if (!$heroCost) return;
@@ -9573,6 +9572,74 @@
   let _pulseScannedAt = null;
   let _pulseWlCount   = null;            // cached watchlist size for the estimate
   let _pulseRunning   = false;
+  // Per-ticker pulse entries persist forever until re-scanned. Anything older
+  // than this is marked STALE and auto-rescanned when the user opens it.
+  const _PULSE_STALE_MS = 18 * 60 * 60 * 1000; // 18 hours
+  const _pulseRescanning = {};             // ticker → true while single rescan in flight
+
+  function _pulseAgeMs(res) {
+    const sa = res && (res._scanned_at || res.scanned_at);
+    if (!sa) return Infinity;
+    const t = new Date(sa).getTime();
+    return isNaN(t) ? Infinity : (Date.now() - t);
+  }
+  function _pulseIsStale(res) {
+    return _pulseAgeMs(res) > _PULSE_STALE_MS;
+  }
+  function _pulseAgeLabel(res) {
+    const ms = _pulseAgeMs(res);
+    if (!isFinite(ms)) return 'unknown age';
+    const m = Math.round(ms / 60000);
+    if (m < 60) return m + 'm ago';
+    if (m < 60 * 48) return Math.round(m / 60) + 'h ago';
+    return Math.round(m / 1440) + 'd ago';
+  }
+
+  /** Kick a single-ticker rescan; merges into _pulseLatest when done. */
+  function _pulseRescanTicker(tk, opts) {
+    opts = opts || {};
+    const silent = !!opts.silent;
+    if (!tk || _pulseRescanning[tk]) return Promise.resolve(null);
+    _pulseRescanning[tk] = true;
+    if (!silent) {
+      try {
+        window.toast && window.toast('Rescanning ' + tk + ' (pulse was stale)…', { type: 'info', ttl: 3500 });
+      } catch (_) {}
+    }
+    return window.dgaFetch('/api/scan/ticker/' + encodeURIComponent(tk), { method: 'POST' })
+      .then(function (r) {
+        if (!r.ok) return r.json().then(function (e) { throw new Error((e && e.detail) || r.status); });
+        return r.json();
+      })
+      .then(function (job) {
+        return new Promise(function (resolve, reject) {
+          _pollScanJob(job.job_id,
+            function (doneTk, res) {
+              if (doneTk) {
+                _pulseLatest[doneTk] = res;
+                _pulseScannedAt = new Date().toISOString();
+              }
+            },
+            function () {
+              delete _pulseRescanning[tk];
+              _pulseRenderAll();
+              if (typeof opts.onDone === 'function') opts.onDone(_pulseLatest[tk]);
+              resolve(_pulseLatest[tk] || null);
+            },
+            function (err) {
+              delete _pulseRescanning[tk];
+              if (typeof opts.onFail === 'function') opts.onFail(err);
+              reject(err);
+            });
+        });
+      })
+      .catch(function (err) {
+        delete _pulseRescanning[tk];
+        console.warn('[pulse rescan]', tk, err);
+        if (typeof opts.onFail === 'function') opts.onFail(err);
+        return null;
+      });
+  }
 
   function _pulseExplainText() {
     const meta = llmDescribe('pulse');
@@ -9583,9 +9650,8 @@
       + 'tagging each Bullish / Bearish / Neutral with a one-line driver. '
       + 'Engine: ' + (meta.model || '—') + ' · ' + (meta.cost || '')
       + (meta.note ? ' · ' + meta.note : '')
-      + '. Results persist until the next run — scheduled in Settings → Automation, '
-      + 'or run manually with Run Pulse. Opening this card never starts a scan. '
-      + 'Change engine in Settings → Models.';
+      + '. Per-ticker results older than ~18h are marked STALE — opening one auto-rescans. '
+      + 'Full Run Pulse refreshes the whole watchlist. Change engine in Settings → Models.';
   }
 
   function _pulsePerTickerUsd() {
@@ -9726,33 +9792,73 @@
         + 'No pulse yet — click Run Pulse to scan your watchlist.</div>';
       return;
     }
-    entries.sort(function(a, b) { return a[0] < b[0] ? -1 : 1; });
+    // Fresh first, then stale (by age desc within each group), alpha within fresh.
+    entries.sort(function(a, b) {
+      const sa = _pulseIsStale(a[1]) ? 1 : 0;
+      const sb = _pulseIsStale(b[1]) ? 1 : 0;
+      if (sa !== sb) return sa - sb;
+      if (sa === 1) return _pulseAgeMs(b[1]) - _pulseAgeMs(a[1]);
+      return a[0] < b[0] ? -1 : 1;
+    });
     rows.innerHTML = entries.map(function(pair) {
       const tk = pair[0], res = pair[1] || {};
       const sent = String(res.sentiment || 'UNKNOWN').toUpperCase();
       const sentCls = (sent === 'BULLISH' || sent === 'BEARISH' || sent === 'NEUTRAL') ? sent : 'UNKNOWN';
+      const stale = _pulseIsStale(res);
+      const ageLbl = _pulseAgeLabel(res);
       const sum = res.error ? ('⚠ ' + res.error) : (_pulseSummary(res.markdown) || 'Scan result available.');
       const day = res.pct_change;
-      return '<div class="pulse-row" data-pulse-tk="' + _sieEsc(tk) + '" title="Click to expand the full scan">'
+      const rescanning = !!_pulseRescanning[tk];
+      return '<div class="pulse-row' + (stale ? ' pulse-row-stale' : '') + '" data-pulse-tk="' + _sieEsc(tk) + '" title="'
+        + (stale ? 'STALE (' + ageLbl + ') — click to rescan' : 'Click to expand · scanned ' + ageLbl)
+        + '">'
         +   '<span class="pulse-tk">' + _sieEsc(tk) + '</span>'
         +   '<span class="pulse-pill ' + sentCls + '">' + sentCls + '</span>'
         +   (day != null ? '<span class="pulse-day ' + cssClass(day) + '">' + fmtPct(day) + '</span>' : '')
-        +   '<span class="pulse-sum">' + _sieEsc(sum) + '</span>'
+        +   (stale
+              ? '<span class="pulse-stale-badge" style="font-size:8px;font-weight:900;letter-spacing:0.4px;color:#991b1b;background:#fee2e2;border:1px solid #fecaca;border-radius:4px;padding:1px 5px;white-space:nowrap;">STALE · ' + _sieEsc(ageLbl) + '</span>'
+              : '<span class="pulse-age" style="font-size:8.5px;color:var(--dim);white-space:nowrap;">' + _sieEsc(ageLbl) + '</span>')
+        +   '<span class="pulse-sum">' + _sieEsc(rescanning ? '⏳ Rescanning…' : sum) + '</span>'
         + '</div>'
         + '<div class="pulse-detail"></div>';
     }).join('');
-    // Row click → toggle full markdown inline (accordion)
+    // Row click → expand; auto-rescan when stale so users never sit on May news.
     rows.querySelectorAll('.pulse-row').forEach(function(row) {
       row.addEventListener('click', function() {
+        const tk = row.getAttribute('data-pulse-tk');
         const det = row.nextElementSibling;
         if (!det || !det.classList.contains('pulse-detail')) return;
-        if (det.classList.contains('open')) { det.classList.remove('open'); return; }
-        if (!det.dataset.filled) {
-          const res = (_pulseLatest || {})[row.getAttribute('data-pulse-tk')] || {};
-          det.innerHTML = _pulseMdHtml(res.markdown || res.error || 'No detail available.');
-          det.dataset.filled = '1';
+        if (det.classList.contains('open') && !_pulseRescanning[tk]) {
+          det.classList.remove('open');
+          return;
         }
-        det.classList.add('open');
+        const res = (_pulseLatest || {})[tk] || {};
+        const fillDetail = function (r) {
+          const staleNow = _pulseIsStale(r);
+          const age = _pulseAgeLabel(r);
+          const banner = staleNow
+            ? '<div style="margin:0 0 10px;padding:8px 10px;border-radius:6px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-size:11px;font-weight:700;">'
+              + '⚠ Stale pulse · scanned ' + _sieEsc(age) + ' · refreshing…</div>'
+            : '<div style="margin:0 0 8px;font-size:10px;color:var(--dim);">Scanned ' + _sieEsc(age) + '</div>';
+          det.innerHTML = banner + _pulseMdHtml((r && (r.markdown || r.error)) || 'No detail available.');
+          det.dataset.filled = '1';
+          det.classList.add('open');
+        };
+        fillDetail(res);
+        if (_pulseIsStale(res) || !res.markdown) {
+          det.innerHTML = '<div style="padding:8px 0;font-size:11px;color:var(--mid);">'
+            + '<span class="spin">⟳</span> Pulse is stale (' + _sieEsc(_pulseAgeLabel(res))
+            + ') — rescanning ' + _sieEsc(tk) + '…</div>';
+          det.classList.add('open');
+          _pulseRescanTicker(tk, {
+            onDone: function (fresh) { fillDetail(fresh || (_pulseLatest[tk] || {})); },
+            onFail: function (err) {
+              det.innerHTML = '<div style="color:#dc2626;font-size:11px;margin-bottom:8px;">Rescan failed: '
+                + _sieEsc(String(err || 'unknown')) + '</div>'
+                + _pulseMdHtml(res.markdown || '');
+            },
+          });
+        }
       });
     });
   }
@@ -16898,10 +17004,16 @@
     const existing = document.getElementById('pulse-detail-modal');
     if (existing) existing.remove();
 
+    res = res || {};
     const sent    = (res.sentiment || 'NEUTRAL').toUpperCase();
     const sentCls = sent === 'BULLISH' ? 'low' : sent === 'BEARISH' ? 'high' : 'mid';
     const md      = res.markdown || res.summary || 'No detail available.';
-    const scannedAt = res._scanned_at ? new Date(res._scanned_at).toLocaleString('en-US', _PT) + ' PT' : '';
+    const scannedIso = res._scanned_at || res.scanned_at || '';
+    const scannedAt = scannedIso
+      ? new Date(scannedIso).toLocaleString('en-US', _PT) + ' PT'
+      : '';
+    const stale = (typeof _pulseIsStale === 'function') ? _pulseIsStale(res) : false;
+    const ageLbl = (typeof _pulseAgeLabel === 'function') ? _pulseAgeLabel(res) : '';
 
     // Convert markdown to simple HTML (bold, headers, lists, links)
     function _mdToHtml(text) {
@@ -16929,6 +17041,14 @@
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9000;display:flex;align-items:center;justify-content:center;';
 
     const maxBtnId = 'pdm-max-btn-' + Date.now();
+    const bodyId = 'pdm-body-' + Date.now();
+    const rescanId = 'pdm-rescan-' + Date.now();
+    const staleBanner = stale
+      ? `<div id="pdm-stale-banner" style="margin:0 0 12px;padding:9px 11px;border-radius:7px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-size:11.5px;font-weight:700;line-height:1.45;">
+          ⚠ Stale pulse · scanned ${ageLbl || scannedAt || 'long ago'} (May/old news is from the last run, not today).
+          Auto-rescanning with current Settings → Models engine…
+        </div>`
+      : '';
     overlay.innerHTML = `
       <div class="dga-dialog" style="width:min(640px,92vw);height:min(72vh,600px);">
         <div class="dga-dialog-handle" style="display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid #e2e8f0;">
@@ -16936,14 +17056,17 @@
           <span class="news-impact ${sentCls}" style="font-size:9px;">${sent}</span>
           ${res.price != null ? `<span style="font-size:12px;color:#475569;">$${fmtPx(res.price)}</span>` : ''}
           ${res.pct_change != null ? `<span class="${cssClass(res.pct_change)}" style="font-size:11px;">${fmtPct(res.pct_change)}</span>` : ''}
-          ${scannedAt ? `<span style="font-size:10px;color:var(--dim);">Scanned ${scannedAt}</span>` : ''}
+          ${scannedAt ? `<span style="font-size:10px;color:${stale ? '#991b1b' : 'var(--dim)'};font-weight:${stale ? 700 : 400};">Scanned ${scannedAt}${stale ? ' · STALE' : ''}</span>` : ''}
           <span style="margin-left:auto;display:flex;gap:6px;align-items:center;">
+            <button id="${rescanId}" type="button" title="Rescan this ticker now"
+              style="background:#ecfeff;border:1px solid #a5f3fc;color:#0e7490;border-radius:5px;padding:3px 9px;font-size:10px;font-weight:800;cursor:pointer;">📡 Rescan</button>
             <button id="${maxBtnId}" class="dga-max-btn" title="Expand / restore">⤢</button>
             <button onclick="document.getElementById('pulse-detail-modal').remove()"
               style="background:rgba(0,0,0,0.05);border:1px solid #e2e8f0;color:#475569;border-radius:5px;padding:3px 11px;font-size:14px;cursor:pointer;line-height:1.4;">&times;</button>
           </span>
         </div>
-        <div class="dga-dialog-body" style="padding:16px 18px;font-size:12px;color:var(--text-secondary);line-height:1.7;">
+        <div class="dga-dialog-body" id="${bodyId}" style="padding:16px 18px;font-size:12px;color:var(--text-secondary);line-height:1.7;">
+          ${staleBanner}
           ${_mdToHtml(md)}
         </div>
       </div>`;
@@ -16951,6 +17074,54 @@
     // Close on backdrop click
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
     document.body.appendChild(overlay);
+
+    const bodyEl = document.getElementById(bodyId);
+    function _paintFresh(fresh) {
+      if (!bodyEl || !document.getElementById('pulse-detail-modal')) return;
+      const r = fresh || {};
+      const fSent = (r.sentiment || 'NEUTRAL').toUpperCase();
+      const fMd = r.markdown || r.summary || 'No detail available.';
+      const fIso = r._scanned_at || r.scanned_at || '';
+      const fAge = (typeof _pulseAgeLabel === 'function') ? _pulseAgeLabel(r) : '';
+      bodyEl.innerHTML =
+        '<div style="margin:0 0 10px;font-size:10px;color:#166534;font-weight:700;">✓ Fresh scan · ' + (fAge || fIso || 'just now')
+        + (fSent ? ' · ' + fSent : '') + '</div>'
+        + _mdToHtml(fMd);
+    }
+
+    function _doRescan() {
+      const btn = document.getElementById(rescanId);
+      if (btn) { btn.disabled = true; btn.textContent = '⏳…'; }
+      if (bodyEl) {
+        bodyEl.insertAdjacentHTML('afterbegin',
+          '<div id="pdm-rescanning" style="margin:0 0 10px;padding:8px 10px;border-radius:6px;background:#ecfeff;border:1px solid #a5f3fc;color:#0e7490;font-size:11px;font-weight:700;">'
+          + '<span class="spin">⟳</span> Rescanning ' + ticker + '…</div>');
+      }
+      if (typeof _pulseRescanTicker === 'function') {
+        _pulseRescanTicker(ticker, {
+          onDone: function (fresh) {
+            _paintFresh(fresh || (_pulseLatest && _pulseLatest[ticker]));
+            if (btn) { btn.disabled = false; btn.textContent = '📡 Rescan'; }
+          },
+          onFail: function (err) {
+            const ban = document.getElementById('pdm-rescanning');
+            if (ban) ban.outerHTML = '<div style="margin:0 0 10px;color:#dc2626;font-size:11px;font-weight:700;">Rescan failed: '
+              + String(err || 'unknown') + '</div>';
+            if (btn) { btn.disabled = false; btn.textContent = '📡 Rescan'; }
+          },
+        });
+      }
+    }
+
+    const rescanBtn = document.getElementById(rescanId);
+    if (rescanBtn) rescanBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      _doRescan();
+    });
+    // Auto-rescan when the stored pulse is stale (e.g. AAPL still on May news).
+    if (stale && typeof _pulseRescanTicker === 'function') {
+      _doRescan();
+    }
 
     // Wire drag + maximize
     const dlg    = overlay.querySelector('.dga-dialog');

@@ -302,16 +302,16 @@ MODEL_TASKS: dict[str, dict] = {
     "full_report": {
         "label": "Full equity report (Analyze)",
         "group": "Research",
-        "allowed": ("grok", "claude", "kimi", "deepseek"),
+        "allowed": ("grok", "claude", "deepseek"),
         "default": "grok",
-        "note": "Analyze card multi-selects engines; each run saves its own report.",
+        "note": "Analyze card multi-selects engines; each run saves its own report. Kimi is not offered for full reports.",
     },
     "compare": {
         "label": "LLM Lab · compare report",
         "group": "Research",
-        "allowed": ("claude", "grok", "kimi", "deepseek"),
+        "allowed": ("claude", "grok", "deepseek"),
         "default": "claude",
-        "note": "A/B second engine for an existing report.",
+        "note": "A/B second engine for an existing report. Kimi not available.",
     },
     "podcast_script": {
         "label": "Podcast script (narration engine)",
@@ -354,16 +354,16 @@ MODEL_TASKS: dict[str, dict] = {
     "agentic": {
         "label": "DGA Capital Analyst (agentic Q&A)",
         "group": "Agents",
-        "allowed": ("claude", "grok", "kimi", "deepseek"),
+        "allowed": ("claude", "grok", "deepseek"),
         "default": "claude",
-        "note": "Tool-use agent. Pick Grok 4.5, Claude 4.8, Kimi K3, or DeepSeek.",
+        "note": "Tool-use agent. Pick Grok 4.5, Claude 4.8, or DeepSeek. Kimi not available for agents.",
     },
     "strategist": {
         "label": "Portfolio Strategist",
         "group": "Agents",
-        "allowed": ("claude", "grok", "kimi", "deepseek"),
+        "allowed": ("claude", "grok", "deepseek"),
         "default": "claude",
-        "note": "Same tool-use loop as Analyst — choose any wired engine.",
+        "note": "Same tool-use loop as Analyst — Grok / Claude / DeepSeek only.",
     },
 }
 # task_id → provider override from Settings (persisted in kv)
@@ -2058,14 +2058,17 @@ For each stock scan request you receive, produce a concise daily market digest f
 
 Rules:
 - Be SPECIFIC: exact dates, exact dollar amounts, exact % figures, and source URLs where possible
-- Be CURRENT: items from TODAY and YESTERDAY rank first; do not lead with 30-day-old news
+- Be CURRENT: items from TODAY and YESTERDAY rank first; do not lead with week-old or month-old news
+- The DATE line is authoritative. Never back-date "Today's Move" or news bullets to older months
+- If FREE HEADLINES are older than ~48h, say so explicitly and do not present them as today's catalysts
 - Be CONCISE: the entire response must fit in under 500 words
 - NEVER invent news. If no confirmed source exists for a fact, mark it "(unconfirmed)"
 - For price movement: name the SINGLE most important driver, not generic "market sentiment"
 - Tag every news item: [HIGH], [MED], or [LOW] by its market impact on this stock
 - [HIGH] = material to a PM today: CEO change, earnings, M&A, regulatory ruling, large guidance revision
 - [MED] = noteworthy: analyst action, product launch, partnership, material insider trade
-- [LOW] = background: sector commentary, conference attendance, minor data point"""
+- [LOW] = background: sector commentary, conference attendance, minor data point
+- Every news bullet MUST use the headline's real publish date (from FREE HEADLINES). If no date is given, use "undated" — never invent a YYYY-MM-DD"""
 
 _SCAN_USER_TEMPLATE = """\
 DATE: {today}
@@ -2195,10 +2198,19 @@ def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
     if use_vol:
         headlines = _free_ticker_headlines(ticker, limit=6)
         if headlines:
-            lines = ["FREE HEADLINES (ground truth — do not invent beyond these):"]
+            lines = [
+                "FREE HEADLINES (ground truth — do not invent beyond these).",
+                f"Scan DATE is {today}. Prefer items with pub dates on/near that day.",
+            ]
             for h in headlines:
+                pub = (h.get("pub") or "").strip()
+                pub_bit = ""
+                if pub:
+                    # Keep RSS pubDate readable; LLM must not invent dates.
+                    pub_bit = f"  [pub={pub}]"
                 lines.append(
                     f"  · {h.get('title', '')}"
+                    + pub_bit
                     + (f"  ({h.get('publisher')})" if h.get("publisher") else "")
                     + (f"  {h.get('url')}" if h.get("url") else "")
                 )

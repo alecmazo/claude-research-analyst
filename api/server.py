@@ -1602,7 +1602,7 @@ class CreateFundRequest(BaseModel):
 class AnalyzeRequest(BaseModel):
     ticker: str
     generate_gamma: bool = False
-    llm_provider:   str  = "grok"   # 'grok' | 'claude' | 'kimi' | 'both'
+    llm_provider:   str  = "grok"   # 'grok' | 'claude' | 'deepseek' | 'both' (kimi not allowed)
 
 
 class JobStatus(BaseModel):
@@ -5527,15 +5527,23 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool,
     """Run a single-ticker analysis.
 
     llm_provider:
-      • 'grok'   — default; live web/X; canonical analyst_reports columns
-      • 'claude' — alternate engine; {TICKER}_DGA_Report_claude.md + *_claude cols
-      • 'kimi'   — Kimi K3 (Moonshot); {TICKER}_DGA_Report_kimi.md + *_kimi cols
-      • 'both'   — Grok then Claude sequentially (job stays running until both done)
+      • 'grok'     — default; live web/X; canonical analyst_reports columns
+      • 'claude'   — alternate engine; {TICKER}_DGA_Report_claude.md + *_claude cols
+      • 'deepseek' — DeepSeek V4 Flash; {TICKER}_DGA_Report_deepseek.md + *_deepseek cols
+      • 'both'     — Grok then Claude sequentially (job stays running until both done)
+      Kimi is not accepted for full equity reports / Analyze.
     """
     provider = (llm_provider or "grok").lower().strip()
     if provider == "volume":
-        provider = "kimi"
-    if provider not in ("grok", "claude", "kimi", "deepseek", "both"):
+        provider = "deepseek"
+    if provider == "kimi":
+        # Defense-in-depth: endpoint already 422s; worker must not spend on Kimi.
+        with _jobs_lock:
+            if job_id in _jobs:
+                _jobs[job_id]["status"] = "failed"
+                _jobs[job_id]["error"] = "Kimi is not available for Analyze / full reports"
+        return
+    if provider not in ("grok", "claude", "deepseek", "both"):
         provider = "grok"
 
     # Dispatch 'both' to the dedicated runner
@@ -6334,7 +6342,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui85-20260717-kimi-temp"
+WEB_BUILD_VERSION = "ui86-20260717-no-kimi-pulse-stale"
 
 
 @app.get("/api/build")
@@ -6746,9 +6754,15 @@ def start_analysis(req: AnalyzeRequest, background_tasks: BackgroundTasks,
 
     provider = (req.llm_provider or "grok").lower().strip()
     if provider == "volume":
-        provider = "kimi"
-    if provider not in ("grok", "claude", "kimi", "deepseek", "both"):
-        raise HTTPException(status_code=422, detail="llm_provider must be 'grok' | 'claude' | 'kimi' | 'deepseek' | 'both'")
+        # Volume alias used to map to Kimi; full reports no longer accept Kimi.
+        provider = "deepseek"
+    if provider == "kimi":
+        raise HTTPException(
+            status_code=422,
+            detail="Kimi is not available for Analyze / full reports. Use grok, claude, or deepseek.",
+        )
+    if provider not in ("grok", "claude", "deepseek", "both"):
+        raise HTTPException(status_code=422, detail="llm_provider must be 'grok' | 'claude' | 'deepseek' | 'both'")
 
     # DEMO: no paid LLM call ever — synthesize a sample report instantly.
     if request is not None and _request_is_demo(request):
@@ -21881,18 +21895,20 @@ def _render_strategist_review_pdf(review: dict) -> bytes:
 
 
 def _agent_route_and_model(mode: str = "agentic") -> tuple[str, str]:
-    """Resolve Settings task route → (provider, model_id) for agentic/strategist."""
+    """Resolve Settings task route → (provider, model_id) for agentic/strategist.
+
+    Kimi is not offered for agentic/strategist — fall back to Claude.
+    """
     task = "strategist" if mode == "strategist" else "agentic"
     try:
         prov = (analyst.get_task_route(task) or "claude").lower().strip()
     except Exception:
         prov = "claude"
-    if prov == "volume":
-        prov = "kimi"
+    if prov in ("volume", "kimi"):
+        # Advanced agents no longer route through Kimi
+        prov = "claude"
     if prov == "grok":
         return "grok", getattr(analyst, "GROK_MODEL", None) or _AGENTIC_MODEL
-    if prov == "kimi":
-        return "kimi", getattr(analyst, "KIMI_MODEL", "kimi-k3")
     if prov == "deepseek":
         return "deepseek", getattr(analyst, "DEEPSEEK_MODEL", "deepseek-chat")
     # default Claude

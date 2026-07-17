@@ -244,7 +244,7 @@
       <div style="padding:14px 16px;">
         <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.55;margin-bottom:10px;">
           Ask an open-ended research question. The agent (Settings → Models · Agents:
-          Grok 4.5 / Claude 4.8 / Kimi K3 / DeepSeek) pulls live quotes,
+          Grok 4.5 / Claude 4.8 / DeepSeek) pulls live quotes,
           saved reports, sector data, and news — then answers
           with cited numbers. <em>Multi-step; ~$0.05–0.30 depending on depth.</em>
         </div>
@@ -541,7 +541,6 @@ End with the sleeve block at this account's real market value so I can push it t
           <span id="hero-llm-chips" style="display:inline-flex;gap:4px;flex-wrap:wrap;" role="group" aria-label="Select analysis engines">
             <button type="button" class="hero-llm-chip active" data-llm="grok" title="Grok · live web/X · toggle on/off">Grok</button>
             <button type="button" class="hero-llm-chip" data-llm="claude" title="Claude · toggle on/off">Claude</button>
-            <button type="button" class="hero-llm-chip" data-llm="kimi" title="Kimi K3 · toggle on/off">Kimi</button>
             <button type="button" class="hero-llm-chip" data-llm="deepseek" title="DeepSeek · toggle on/off">DeepSeek</button>
           </span>
           <span id="hero-model-tag" title="Models for the selected engines"
@@ -2047,7 +2046,7 @@ End with the sleeve block at this account's real market value so I can push it t
             Every wired provider below. Assign a model to <strong>each task</strong> —
             those choices drive labels and costs on the desk (Market Pulse, Prioritize, Daily Pulse, Agents, etc.).
             Desk jobs: <strong>Kimi K3</strong> / <strong>DeepSeek</strong> (cheap) or <strong>Grok</strong> (live search).
-            Full reports + Agents: Grok 4.5 · Claude Opus 4.8 · Kimi K3 · DeepSeek.
+            Full reports + Agents: Grok 4.5 · Claude Opus 4.8 · DeepSeek (Kimi not offered for Analyze / agents).
             Costs tracked per call. Survives redeploys.
           </p>
 
@@ -2076,7 +2075,7 @@ End with the sleeve block at this account's real market value so I can push it t
             <code>KIMI_API_KEY</code> (Moonshot · <strong>Kimi K3</strong> · $3/$15 MTok),
             <code>DEEPSEEK_API_KEY</code> (or legacy <code>VOLUME_LLM_API_KEY</code> · deepseek-chat · $0.14/$0.28 MTok).
             Optional: <code>GROK_MODEL</code>, <code>CLAUDE_MODEL</code>, <code>KIMI_MODEL</code>, <code>AGENTIC_MODEL</code> (Claude default id).
-            <strong>Kimi K3 ≠ DeepSeek</strong>. Agents (Analyst + Strategist) use the same per-task dropdowns.
+            <strong>Kimi K3 ≠ DeepSeek</strong>. Agents / full reports: Grok · Claude · DeepSeek only (Kimi desk/podcast only).
           </div>
         </div>
       </section>
