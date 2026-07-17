@@ -1459,7 +1459,23 @@
       </div>`;
       return;
     }
-    rows.innerHTML = tickers.map(tk => {
+    // Largest absolute day-move first (up or down); missing quotes last.
+    const ordered = (tickers || []).slice().sort(function (a, b) {
+      const qa = (quotes && quotes[a]) || {};
+      const qb = (quotes && quotes[b]) || {};
+      const pa = qa.pct != null ? Number(qa.pct) : null;
+      const pb = qb.pct != null ? Number(qb.pct) : null;
+      const aOk = pa != null && !isNaN(pa);
+      const bOk = pb != null && !isNaN(pb);
+      if (aOk && !bOk) return -1;
+      if (!aOk && bOk) return 1;
+      if (aOk && bOk) {
+        const d = Math.abs(pb) - Math.abs(pa);
+        if (d !== 0) return d;
+      }
+      return String(a).localeCompare(String(b));
+    });
+    rows.innerHTML = ordered.map(tk => {
       const q = quotes[tk] || {};
       const earn = earnings[tk] || null;
       const hasRep = !!(reports[tk] || (earn && earn.has_report));
@@ -4971,33 +4987,34 @@
   }
 
   // Sort state for reports table (persists across re-renders within the session)
-  // Default: 'date' = freshest report first (as-of / content date, then run time).
+  // Default: 'date' = most recent *analysis run* first (generated_at / engines).
   // Click TGT/Upside to switch to upside sort.
   let _repSortMode = 'date';   // 'date' | 'upside'
   let _repSortDir  = 'desc';
 
-  /** Sort key components for "freshest report first".
-   * Prefer report_date / claude_report_date. Rows with an as-of outrank
-   * bulk-stamped generated_at-only rows. Returns { tier, ms } where tier
-   * 1 = has content date, 0 = pipeline ts only. */
+  /** Sort key for "most recent analysis first".
+   * Uses pipeline finish times (when you actually ran Analyze), not the
+   * narrative as-of date in the report header. */
   function _repFreshness(rep) {
-    if (!rep) return { tier: 0, ms: 0 };
+    if (!rep) return { tier: 1, ms: 0 };
     function _ms(v) {
       if (v == null || v === '') return 0;
       const t = new Date(v).getTime();
       return (!isNaN(t) && t > 0) ? t : 0;
     }
-    const content = Math.max(_ms(rep.report_date), _ms(rep.claude_report_date));
-    if (content > 0) return { tier: 1, ms: content };
     const gen = Math.max(
-      _ms(rep.claude_generated_at),
       _ms(rep.generated_at),
+      _ms(rep.claude_generated_at),
+      _ms(rep.kimi_generated_at),
+      _ms(rep.deepseek_generated_at),
       _ms(rep.last_attempt_at)
     );
-    return { tier: 0, ms: gen };
+    // content date is tie-break only (bulk hydrate can share a gen stamp)
+    const content = Math.max(_ms(rep.report_date), _ms(rep.claude_report_date));
+    return { tier: 1, ms: gen || content };
   }
 
-  /** Epoch ms used for display / data-run-at (content date preferred). */
+  /** Epoch ms of last analysis run (for display / data-run-at). */
   function _repRunAtMs(rep) {
     const f = _repFreshness(rep);
     return f.ms || 0;
@@ -5048,12 +5065,13 @@
     const tbody = document.getElementById('reports-tbody');
     document.getElementById('reports-count').textContent = String(reports.length);
 
-    // Freshest report first (as-of date → oldest) unless upside mode.
+    // Most recent analysis run first (newest → oldest) unless upside mode.
     if (_repSortMode !== 'upside') {
       reports = reports.slice().sort(function(a, b) {
         const fa = _repFreshness(a), fb = _repFreshness(b);
-        if (fb.tier !== fa.tier) return fb.tier - fa.tier;
-        return fb.ms - fa.ms;
+        if (fb.ms !== fa.ms) return fb.ms - fa.ms;
+        // Stable secondary: ticker
+        return String(a.ticker || '').localeCompare(String(b.ticker || ''));
       });
     }
 

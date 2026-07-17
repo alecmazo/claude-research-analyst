@@ -3416,15 +3416,18 @@ def watchlist_get(request: Request):
         earnings[tk]["has_report"] = tk in report_tickers
     reports_map = {tk: True for tk in report_tickers}
 
-    # Sort: earnings imminent first (soonest), then alpha — only when we have data
-    def _wl_sort_key(tk: str):
-        ev = earnings.get(tk)
-        if ev is not None:
-            du = int(ev.get("days_until") if ev.get("days_until") is not None else 99)
-            return (0 if du >= 0 else 1, abs(du), tk)
-        return (2, 99, tk)
+    # Largest absolute day-move first (up or down). Earnings chips still show
+    # on rows; they no longer reorder the list above movers.
+    def _wl_move_key(tk: str):
+        pct = (quotes.get(tk) or {}).get("pct")
+        if pct is None:
+            return (1, 0.0, str(tk))
+        try:
+            return (0, -abs(float(pct)), str(tk))
+        except (TypeError, ValueError):
+            return (1, 0.0, str(tk))
 
-    tickers_sorted = sorted(tickers, key=_wl_sort_key) if earnings else list(tickers)
+    tickers_sorted = sorted(tickers, key=_wl_move_key)
 
     return {
         "tickers": tickers_sorted,
@@ -6331,7 +6334,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui77-20260717-routes"
+WEB_BUILD_VERSION = "ui78-20260717-sort"
 
 
 @app.get("/api/build")
@@ -10385,21 +10388,20 @@ def _parse_report_date_ts(val) -> float:
 
 
 def _report_freshness_key(row: dict) -> tuple:
-    """Sort key for saved reports — freshest content first.
+    """Sort key for saved reports — most recent *analysis run* first.
 
-    Prefer the report's *as-of* date (what the analysis covers). Pipeline
-    ``generated_at`` is often bulk-stamped by hydration (same second for every
-    row) so it is only a fallback when no as-of exists. Rows *with* an as-of
-    always rank above rows without one, so bulk stamps don't float empty
-    as-of rows to the top.
+    Desk expectation: re-running CEG (or any engine) floats that ticker to the
+    top. Use pipeline timestamps (when the analysis finished), not the narrative
+    as-of date in the report header (which can lag the run and hide fresh work).
     """
-    content = 0.0
-    for k in ("report_date", "claude_report_date"):
-        content = max(content, _parse_report_date_ts(row.get(k)))
-    if content > 0:
-        return (1, content)
     gen = 0.0
-    for k in ("claude_generated_at", "generated_at", "last_attempt_at"):
+    for k in (
+        "generated_at",
+        "claude_generated_at",
+        "kimi_generated_at",
+        "deepseek_generated_at",
+        "last_attempt_at",
+    ):
         v = row.get(k)
         if v is None:
             continue
@@ -10410,7 +10412,11 @@ def _report_freshness_key(row: dict) -> tuple:
                 pass
         else:
             gen = max(gen, _parse_report_date_ts(v))
-    return (0, gen)
+    # Tie-break on as-of only when run stamps collide (e.g. bulk hydrate)
+    content = 0.0
+    for k in ("report_date", "claude_report_date", "kimi_report_date", "deepseek_report_date"):
+        content = max(content, _parse_report_date_ts(row.get(k)))
+    return (gen, content)
 
 
 @app.get("/api/reports")
@@ -10467,12 +10473,15 @@ def list_reports(request: Request = None):
                            last_attempt_at, last_attempt_status, last_attempt_error,
                            claude_generated_at, claude_rating,
                            claude_price_target, claude_upside_pct,
-                           report_date, claude_report_date
+                           report_date, claude_report_date,
+                           kimi_generated_at, deepseek_generated_at
                     FROM analyst_reports
                     WHERE archived IS NOT TRUE
                     ORDER BY GREATEST(
                       COALESCE(generated_at, TIMESTAMP '1970-01-01'),
                       COALESCE(claude_generated_at, TIMESTAMP '1970-01-01'),
+                      COALESCE(kimi_generated_at, TIMESTAMP '1970-01-01'),
+                      COALESCE(deepseek_generated_at, TIMESTAMP '1970-01-01'),
                       COALESCE(last_attempt_at, TIMESTAMP '1970-01-01')
                     ) DESC NULLS LAST
                 """)
@@ -10488,11 +10497,19 @@ def list_reports(request: Request = None):
                     # can click in and read the report regardless.
                     has_grok   = bool(r["generated_at"])
                     has_claude = bool(r["claude_generated_at"])
+                    has_kimi   = bool(r.get("kimi_generated_at"))
+                    has_ds     = bool(r.get("deepseek_generated_at"))
                     providers = []
                     if has_grok:   providers.append("grok")
                     if has_claude: providers.append("claude")
-                    provider_badge = "BOTH" if (has_grok and has_claude) else (
-                        "CLAUDE" if has_claude else ("GROK" if has_grok else "—"))
+                    if has_kimi:   providers.append("kimi")
+                    if has_ds:     providers.append("deepseek")
+                    if len(providers) > 1:
+                        provider_badge = "MULTI"
+                    elif providers:
+                        provider_badge = providers[0].upper()
+                    else:
+                        provider_badge = "—"
 
                     # Effective (less aggressive) price target / upside for
                     # downstream EV math (Builder, rebalance, etc.). When both
@@ -10530,13 +10547,20 @@ def list_reports(request: Request = None):
                         "claude_price_target": pt_c,
                         "claude_upside_pct":   up_c,
                         "claude_generated_at": r["claude_generated_at"].isoformat() if r["claude_generated_at"] else None,
+                        "kimi_generated_at": (
+                            r["kimi_generated_at"].isoformat()
+                            if r.get("kimi_generated_at") else None
+                        ),
+                        "deepseek_generated_at": (
+                            r["deepseek_generated_at"].isoformat()
+                            if r.get("deepseek_generated_at") else None
+                        ),
                         "claude_rating":       r["claude_rating"],
                         "providers":           providers,
                         "provider_badge":      provider_badge,
                         # As-of dates pulled from each LLM's report header
-                        # ('DGA CAPITAL RESEARCH | May 22, 2026'). These are
-                        # what the user sees under the ticker — distinct from
-                        # generated_at (DB upload time).
+                        # ('DGA CAPITAL RESEARCH | May 22, 2026'). Display only —
+                        # sort order uses analysis run timestamps above.
                         "report_date":         r.get("report_date"),
                         "claude_report_date":  r.get("claude_report_date"),
                         "current_price":       None,
@@ -10593,7 +10617,7 @@ def list_reports(request: Request = None):
                                     pass
                 except Exception as e:
                     print(f"[list_reports] live quote enrich failed: {e!s:.140}", flush=True)
-                # Freshest content first (as-of date), not bulk hydration stamp.
+                # Most recent analysis run first (not narrative as-of date).
                 out.sort(key=_report_freshness_key, reverse=True)
                 return out
         except Exception as _e:
