@@ -1021,6 +1021,22 @@
     return (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(2);
   }
 
+  function _earnFmtRev(v) {
+    if (v == null || isNaN(Number(v))) return '—';
+    const n = Math.abs(Number(v));
+    const sign = Number(v) < 0 ? '-' : '';
+    if (n >= 1e9) return sign + '$' + (n / 1e9).toFixed(2) + 'B';
+    if (n >= 1e6) return sign + '$' + (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return sign + '$' + (n / 1e3).toFixed(0) + 'K';
+    return sign + '$' + n.toFixed(0);
+  }
+
+  function _earnSurpriseTxt(pct) {
+    if (pct == null || isNaN(Number(pct))) return '—';
+    const n = Number(pct);
+    return (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
+  }
+
   function _earnBeatBadge(beat, surprisePct) {
     if (!beat) return '<span class="earn-badge earn-pending">PENDING</span>';
     if (beat === 'beat') {
@@ -1116,25 +1132,53 @@
             : ''))
         : '—';
 
+      // Metric grid: Actual EPS | Consensus EPS | EPS Surprise
+      //                Actual Rev | Consensus Rev | Rev Surprise
+      const hasEps = res.eps_actual != null || res.eps_estimate != null;
+      const hasRev = res.revenue_actual != null || res.revenue_estimate != null;
+      const epsClr = beat === 'beat' ? '#166534' : (beat === 'miss' ? '#b91c1c' : 'var(--text-primary)');
+      const revBeat = res.revenue_beat || null;
+      const revClr = revBeat === 'beat' ? '#166534' : (revBeat === 'miss' ? '#b91c1c' : 'var(--text-primary)');
       let hero = '';
-      if (status === 'reported' && (res.eps_actual != null || res.eps_estimate != null)) {
+      if (status === 'reported' && (hasEps || hasRev)) {
         hero =
-          '<div class="earn-hero">' +
+          '<div class="earn-hero earn-hero-pair">' +
+            // EPS row
             '<div class="earn-metric"><div class="earn-metric-lbl">Actual EPS</div>' +
               '<div class="earn-metric-val">' + _earnFmtEps(res.eps_actual) + '</div></div>' +
-            '<div class="earn-metric"><div class="earn-metric-lbl">Consensus</div>' +
+            '<div class="earn-metric"><div class="earn-metric-lbl">Consensus EPS</div>' +
               '<div class="earn-metric-val">' + _earnFmtEps(res.eps_estimate) + '</div></div>' +
-            '<div class="earn-metric"><div class="earn-metric-lbl">Surprise</div>' +
-              '<div class="earn-metric-val">' +
-                (res.surprise_pct != null
-                  ? ((Number(res.surprise_pct) >= 0 ? '+' : '') + Number(res.surprise_pct).toFixed(1) + '%')
-                  : '—') +
+            '<div class="earn-metric"><div class="earn-metric-lbl">EPS Surprise</div>' +
+              '<div class="earn-metric-val" style="color:' + epsClr + ';">' +
+                _earnSurpriseTxt(res.surprise_pct) +
+              '</div></div>' +
+            // Revenue row
+            '<div class="earn-metric"><div class="earn-metric-lbl">Actual Revenue</div>' +
+              '<div class="earn-metric-val" style="font-size:15px;">' + _earnFmtRev(res.revenue_actual) + '</div></div>' +
+            '<div class="earn-metric"><div class="earn-metric-lbl">Consensus Revenue</div>' +
+              '<div class="earn-metric-val" style="font-size:15px;">' + _earnFmtRev(res.revenue_estimate) + '</div></div>' +
+            '<div class="earn-metric"><div class="earn-metric-lbl">Rev Surprise</div>' +
+              '<div class="earn-metric-val" style="font-size:15px;color:' + revClr + ';">' +
+                _earnSurpriseTxt(res.revenue_surprise_pct) +
               '</div></div>' +
           '</div>' +
-          '<div style="margin-top:10px;text-align:center;">' + _earnBeatBadge(beat, res.surprise_pct) + '</div>';
+          '<div style="margin-top:10px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">' +
+            _earnBeatBadge(beat, res.surprise_pct) +
+            (revBeat
+              ? ('<span class="earn-badge ' +
+                  (revBeat === 'beat' ? 'earn-beat' : revBeat === 'miss' ? 'earn-miss' : 'earn-inline') +
+                  '">REV ' +
+                  (revBeat === 'beat' ? 'BEAT' : revBeat === 'miss' ? 'MISS' : 'IN-LINE') +
+                  (res.revenue_surprise_pct != null
+                    ? (' ' + _earnSurpriseTxt(res.revenue_surprise_pct)) : '') +
+                  '</span>')
+              : '') +
+          '</div>';
       } else {
         hero =
-          '<div class="earn-hero earn-hero-pending">' +
+          '<div class="earn-hero earn-hero-pair earn-hero-pending">' +
+            '<div class="earn-metric"><div class="earn-metric-lbl">Actual EPS</div>' +
+              '<div class="earn-metric-val">' + _earnFmtEps(res.eps_actual) + '</div></div>' +
             '<div class="earn-metric"><div class="earn-metric-lbl">Consensus EPS</div>' +
               '<div class="earn-metric-val">' + _earnFmtEps(res.eps_estimate) + '</div></div>' +
             '<div class="earn-metric"><div class="earn-metric-lbl">Status</div>' +
@@ -1143,11 +1187,19 @@
                   ? 'Printed · results lagging'
                   : 'Not yet reported') +
               '</div></div>' +
+            '<div class="earn-metric"><div class="earn-metric-lbl">Actual Revenue</div>' +
+              '<div class="earn-metric-val" style="font-size:15px;">' + _earnFmtRev(res.revenue_actual) + '</div></div>' +
+            '<div class="earn-metric"><div class="earn-metric-lbl">Consensus Revenue</div>' +
+              '<div class="earn-metric-val" style="font-size:15px;">' + _earnFmtRev(res.revenue_estimate) + '</div></div>' +
+            '<div class="earn-metric"><div class="earn-metric-lbl">Rev Surprise</div>' +
+              '<div class="earn-metric-val" style="font-size:15px;">' +
+                _earnSurpriseTxt(res.revenue_surprise_pct) +
+              '</div></div>' +
           '</div>' +
           '<div style="margin-top:8px;font-size:11px;color:var(--dim);text-align:center;">' +
             (status === 'pending_update'
               ? 'Session window has passed (BMO/AMC). Pulling free beat/miss from Yahoo + Nasdaq — refresh shortly if blank.'
-              : 'Beat / miss appears after the company prints (Yahoo same-day · Nasdaq may lag).') +
+              : 'Actuals appear after the print (Yahoo quarterly stmt · Nasdaq EPS).') +
           '</div>';
       }
 

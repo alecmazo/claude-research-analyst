@@ -991,12 +991,53 @@ def earnings_card(symbol: str, horizon_days: int = 5,
     except Exception as e:
         print(f"[market_data] calendar context {sym}: {e!s:.100}", flush=True)
 
+    # Actual quarterly revenue (+ EPS fallback) from Yahoo income stmt (free)
+    actuals: dict = {}
+    try:
+        fq_hint = (
+            (upcoming or {}).get("fiscal_quarter")
+            or (result or {}).get("fiscal_quarter")
+            or ""
+        )
+        actuals = yfinance_quarterly_actuals(sym, fiscal_quarter_hint=fq_hint) or {}
+    except Exception as e:
+        print(f"[market_data] quarterly actuals {sym}: {e!s:.100}", flush=True)
+
+    eps_actual_final = (result or {}).get("eps_actual")
+    if eps_actual_final is None and actuals.get("eps_actual") is not None:
+        eps_actual_final = actuals.get("eps_actual")
+        if status in ("scheduled", "pending_update", "unknown") and eps_actual_final is not None:
+            status = "reported"
+            result_source = (result_source or "") + "+yf_stmt" if result_source else "yf_stmt"
+    rev_actual = actuals.get("revenue_actual")
+    rev_estimate = street_range.get("revenue_avg")
+    rev_surprise_pct = None
+    rev_beat = None
+    if rev_actual is not None and rev_estimate not in (None, 0):
+        try:
+            ra, re_ = float(rev_actual), float(rev_estimate)
+            rev_surprise_pct = round((ra - re_) / abs(re_) * 100.0, 2)
+            rev_beat = _beat_from_eps(ra, re_)  # same > / < / = logic
+        except Exception:
+            pass
+
+    # Recompute EPS beat if we filled actual from statement
+    if beat is None and eps_actual_final is not None and eps_est is not None:
+        beat = _beat_from_eps(eps_actual_final, eps_est)
+    if surprise_pct is None and eps_actual_final is not None and eps_est not in (None, 0):
+        try:
+            surprise_pct = round(
+                (float(eps_actual_final) - float(eps_est))
+                / abs(float(eps_est)) * 100.0, 2)
+        except Exception:
+            pass
+
     notes = build_earnings_notes(
         symbol=sym,
         status=status,
         beat=beat,
         surprise_pct=surprise_pct,
-        eps_actual=(result or {}).get("eps_actual"),
+        eps_actual=eps_actual_final,
         eps_estimate=eps_est,
         history=history,
         event={
@@ -1009,6 +1050,10 @@ def earnings_card(symbol: str, horizon_days: int = 5,
             "name": (upcoming or {}).get("name") or "",
         },
         street=street_range,
+        revenue_actual=rev_actual,
+        revenue_estimate=rev_estimate,
+        revenue_surprise_pct=rev_surprise_pct,
+        revenue_beat=rev_beat,
     )
 
     return {
@@ -1024,28 +1069,132 @@ def earnings_card(symbol: str, horizon_days: int = 5,
             "fiscal_quarter": (
                 (upcoming or {}).get("fiscal_quarter")
                 or (result or {}).get("fiscal_quarter")
+                or actuals.get("period_label")
                 or ""
             ),
             "name": (upcoming or {}).get("name") or "",
-        } if (upcoming or result) else None,
+        } if (upcoming or result or actuals) else None,
         "result": {
-            "eps_actual": (result or {}).get("eps_actual"),
+            "eps_actual": eps_actual_final,
             "eps_estimate": eps_est,
             "surprise_pct": surprise_pct,
             "beat": beat,  # beat | miss | inline | null
             "date_reported": (result or {}).get("date_reported"),
-            "fiscal_quarter": (result or {}).get("fiscal_quarter"),
+            "fiscal_quarter": (result or {}).get("fiscal_quarter") or actuals.get("period_label"),
             "eps_high": street_range.get("eps_high"),
             "eps_low": street_range.get("eps_low"),
             "eps_avg": street_range.get("eps_avg"),
-            "revenue_estimate": street_range.get("revenue_avg"),
+            # Revenue: actual (Yahoo quarterly stmt) next to consensus (calendar)
+            "revenue_actual": rev_actual,
+            "revenue_estimate": rev_estimate,
             "revenue_high": street_range.get("revenue_high"),
             "revenue_low": street_range.get("revenue_low"),
-        } if (result or eps_est is not None or street_range) else None,
+            "revenue_surprise_pct": rev_surprise_pct,
+            "revenue_beat": rev_beat,
+            "period_end": actuals.get("period_end"),
+        } if (result or eps_est is not None or street_range or actuals) else None,
         "history": history[:8],
         "notes": notes,
         "cost": "free · no LLM",
     }
+
+
+def yfinance_quarterly_actuals(symbol: str, fiscal_quarter_hint: str = "") -> dict:
+    """Actual diluted EPS + total revenue from Yahoo quarterly income statement.
+
+    Free, no LLM. Matches fiscal_quarter_hint (e.g. 'Jun 2026' / 'Jun/2026')
+    when possible; otherwise the most recent quarter with non-null EPS or revenue.
+    """
+    import time as _time
+    from datetime import datetime
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return {}
+    hit = _EARNINGS_DETAIL_CACHE.get(("yf_qact", sym, fiscal_quarter_hint or ""))
+    if hit and _time.time() - hit[0] < 900:
+        return hit[1]
+    out: dict = {}
+    try:
+        import yfinance as yf
+        import math
+        t = yf.Ticker(sym)
+        df = getattr(t, "quarterly_income_stmt", None)
+        if df is None or getattr(df, "empty", True):
+            _EARNINGS_DETAIL_CACHE[("yf_qact", sym, fiscal_quarter_hint or "")] = (_time.time(), {})
+            return {}
+
+        def _num(v):
+            try:
+                if v is None:
+                    return None
+                f = float(v)
+                if math.isnan(f) or math.isinf(f):
+                    return None
+                return f
+            except Exception:
+                return None
+
+        def _label(col) -> str:
+            try:
+                if hasattr(col, "to_pydatetime"):
+                    d = col.to_pydatetime()
+                elif hasattr(col, "month"):
+                    d = col
+                else:
+                    d = datetime.fromisoformat(str(col)[:10])
+                return d.strftime("%b %Y")  # e.g. Jun 2026
+            except Exception:
+                return str(col)[:12]
+
+        def _iso(col) -> str:
+            try:
+                if hasattr(col, "date"):
+                    return col.date().isoformat()
+                return str(col)[:10]
+            except Exception:
+                return ""
+
+        hint = (fiscal_quarter_hint or "").replace("/", " ").strip().lower()
+        # Prefer columns matching the fiscal quarter hint
+        cols = list(df.columns)
+        ordered = cols
+        if hint:
+            matched = [c for c in cols if hint[:3] in _label(c).lower()
+                       or any(tok in _label(c).lower() for tok in hint.split() if len(tok) >= 3)]
+            if matched:
+                ordered = matched + [c for c in cols if c not in matched]
+
+        for col in ordered:
+            rev = None
+            eps = None
+            for rev_key in ("Total Revenue", "Operating Revenue", "TotalRevenue", "Revenue"):
+                if rev_key in df.index:
+                    rev = _num(df.loc[rev_key, col])
+                    if rev is not None:
+                        break
+            for eps_key in ("Diluted EPS", "Basic EPS", "DilutedEPS", "BasicEPS"):
+                if eps_key in df.index:
+                    eps = _num(df.loc[eps_key, col])
+                    if eps is not None:
+                        break
+            if rev is None and eps is None:
+                continue
+            out = {
+                "period_end": _iso(col),
+                "period_label": _label(col),
+                "revenue_actual": rev,
+                "eps_actual": eps,
+                "source": "yfinance_quarterly_income",
+            }
+            # If we matched the hint quarter, stop; else keep first non-empty
+            if not hint or col in (matched if hint else []):
+                break
+            break
+    except Exception as e:
+        print(f"[market_data] yf quarterly actuals {sym}: {e!s:.120}", flush=True)
+        out = {}
+    _EARNINGS_DETAIL_CACHE[("yf_qact", sym, fiscal_quarter_hint or "")] = (_time.time(), out)
+    return out
 
 
 def yfinance_earnings_calendar_context(symbol: str) -> dict:
@@ -1157,6 +1306,10 @@ def build_earnings_notes(
     history: list | None,
     event: dict | None,
     street: dict | None,
+    revenue_actual=None,
+    revenue_estimate=None,
+    revenue_surprise_pct=None,
+    revenue_beat: str | None = None,
 ) -> dict:
     """Structured free commentary for the earnings card empty space (no LLM)."""
     bullets: list[str] = []
@@ -1254,7 +1407,30 @@ def build_earnings_notes(
                 pass
         bullets.append(line)
 
-    if st.get("revenue_avg") is not None:
+    # Revenue actual vs consensus (when either side is known)
+    if revenue_actual is not None or revenue_estimate is not None:
+        if revenue_actual is not None and revenue_estimate is not None:
+            rsp = revenue_surprise_pct
+            tag = ""
+            if revenue_beat == "beat":
+                tag = " · beat" + (f" {rsp:+.1f}%" if rsp is not None else "")
+            elif revenue_beat == "miss":
+                tag = " · miss" + (f" {rsp:.1f}%" if rsp is not None else "")
+            elif revenue_beat == "inline":
+                tag = " · in line"
+            bullets.append(
+                f"Revenue {_fmt_rev(revenue_actual)} vs {_fmt_rev(revenue_estimate)} consensus{tag}"
+            )
+        elif revenue_actual is not None:
+            bullets.append(f"Revenue actual {_fmt_rev(revenue_actual)}")
+        else:
+            rev_line = f"Street revenue ~{_fmt_rev(revenue_estimate)}"
+            st = street or {}
+            if st.get("revenue_low") is not None and st.get("revenue_high") is not None:
+                rev_line += f" (band {_fmt_rev(st['revenue_low'])}–{_fmt_rev(st['revenue_high'])})"
+            bullets.append(rev_line)
+    elif (street or {}).get("revenue_avg") is not None:
+        st = street or {}
         rev_line = f"Street revenue ~{_fmt_rev(st['revenue_avg'])}"
         if st.get("revenue_low") is not None and st.get("revenue_high") is not None:
             rev_line += f" (band {_fmt_rev(st['revenue_low'])}–{_fmt_rev(st['revenue_high'])})"

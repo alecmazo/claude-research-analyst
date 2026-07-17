@@ -892,7 +892,17 @@
     padding: 12px; border-radius: 8px; background: #f8fafc;
     border: 1px solid var(--panel-edge);
   }
-  .earn-hero-pending { grid-template-columns: 1fr 1fr; }
+  /* 2 rows × 3 cols: Actual/Consensus/Surprise for EPS then Revenue */
+  .earn-hero-pair {
+    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-rows: auto auto;
+    row-gap: 12px;
+  }
+  .earn-hero-pair .earn-metric:nth-child(n+4) {
+    padding-top: 10px;
+    border-top: 1px dashed var(--panel-edge);
+  }
+  .earn-hero-pending { /* still 3-col so actual+consensus revenue show */ }
   .earn-metric-lbl {
     font-size: 9px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
     color: var(--dim); margin-bottom: 4px;
