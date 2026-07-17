@@ -6358,30 +6358,39 @@ def config_models():
         c_hi = (45_000 * c_in + 16_000 * c_out) / 1e6
         # Market-pulse per ticker: tiny prompt + ~1-2 searches dominate.
         p_est = analyst.estimate_grok_cost(g_model, 2_500, 700, 1.5)
-        # Volume jobs (DeepSeek etc.): much smaller envelopes, no live-search surcharge.
-        # Host pricing varies — these are order-of-magnitude UI hints only.
+        # Volume jobs (default Kimi K3): no live-search surcharge; priced from
+        # VOLUME_PRICING_PER_MTOK so Settings chips match real rates.
         vol = out.get("volume") or {}
         vol_on = bool(vol.get("enabled"))
+        v_model = vol.get("model") or getattr(analyst, "VOLUME_LLM_MODEL", "kimi-k3")
+        est_v = getattr(analyst, "estimate_volume_cost", None)
+        def _vc(inp, outp):
+            if callable(est_v):
+                return round(float(est_v(v_model, inp, outp)), 4)
+            return None
         out["est"] = {
             "grok_report":   [round(g_lo, 2), round(g_hi, 2)],
             "claude_report": [round(c_lo, 2), round(c_hi, 2)],
             "both_report":   [round(g_lo + c_lo, 2), round(g_hi + c_hi, 2)],
             "pulse_per_ticker": round(p_est, 3),
             # Daily brief / intel when volume on vs Grok+live
-            "daily_brief_volume": [0.01, 0.05],
+            "daily_brief_volume": [ _vc(8_000, 3_000), _vc(15_000, 6_000) ],
             "daily_brief_grok":   [round(analyst.estimate_grok_cost(g_model, 8_000, 3_000, 3), 2),
                                    round(analyst.estimate_grok_cost(g_model, 15_000, 6_000, 6), 2)],
-            "intel_volume":       [0.02, 0.08],
+            "intel_volume":       [ _vc(10_000, 4_000), _vc(20_000, 8_000) ],
             "intel_grok":         [round(analyst.estimate_grok_cost(g_model, 10_000, 4_000, 4), 2),
                                    round(analyst.estimate_grok_cost(g_model, 20_000, 8_000, 8), 2)],
-            "prioritize_volume":  [0.005, 0.03],
+            "prioritize_volume":  [ _vc(6_000, 1_500), _vc(12_000, 3_000) ],
             "prioritize_grok":    [round(analyst.estimate_grok_cost(g_model, 6_000, 1_500, 0), 3),
                                    round(analyst.estimate_grok_cost(g_model, 12_000, 3_000, 0), 2)],
             # Market pulse / per-ticker scan
-            "pulse_volume":       [0.002, 0.015],
+            "pulse_volume":       [ _vc(2_000, 600), _vc(4_000, 1_200) ],
             "agentic":            [0.05, 0.30],
             "strategist":         [0.30, 1.00],
             "volume_active":      vol_on,
+            "volume_model":       v_model,
+            "volume_rates":       (vol.get("rates_usd_per_mtok")
+                                   or {"input": None, "output": None}),
         }
     except Exception:
         pass    # estimates are optional — UI falls back to its static strings
@@ -6461,9 +6470,9 @@ def set_volume_llm_config(request: Request):
         enabled = bool(body.get("enabled"))
         analyst.set_volume_llm_runtime(enabled)
         message_bits.append(
-            "Volume master ON — jobs use cheap model when their toggle is on."
+            "Volume master ON — jobs use Kimi (or configured volume model) when their toggle is on."
             if enabled else
-            "Volume master OFF — all volume jobs use Grok (premium)."
+            "Volume master OFF — all volume jobs use Grok."
         )
     if "jobs" in body and isinstance(body.get("jobs"), dict):
         jobs = analyst.set_volume_llm_jobs(body.get("jobs"))

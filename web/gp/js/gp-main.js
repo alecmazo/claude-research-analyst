@@ -13482,6 +13482,11 @@
         const jobs = d.jobs || {};
         const nOn = Object.keys(jobs).filter(function (k) { return jobs[k] !== false; }).length;
         const nAll = Object.keys(jobs).length || 4;
+        const prov = d.provider_label || d.provider || 'Volume';
+        const rates = d.rates_usd_per_mtok || {};
+        const rateTxt = (rates.input != null && rates.output != null)
+          ? ('$' + Number(rates.input).toFixed(2) + ' in / $' + Number(rates.output).toFixed(2) + ' out per MTok')
+          : '—';
         if ($badge) {
           if (!cfg) {
             $badge.textContent = 'NOT CONFIGURED';
@@ -13490,14 +13495,18 @@
             $badge.textContent = 'ALL → GROK';
             $badge.style.background = '#fee2e2'; $badge.style.color = '#991b1b';
           } else {
-            $badge.textContent = 'VOLUME ' + nOn + '/' + nAll;
+            $badge.textContent = (String(prov).toUpperCase().indexOf('KIMI') >= 0 ? 'KIMI ' : 'VOLUME ')
+              + nOn + '/' + nAll;
             $badge.style.background = '#dcfce7'; $badge.style.color = '#166534';
           }
         }
         $st.innerHTML =
-          '<div><strong>Configured:</strong> ' + (cfg ? 'yes' : 'no (set VOLUME_LLM_API_KEY on Railway)') + '</div>'
-          + '<div><strong>Master:</strong> ' + (en ? 'ON — per-feature toggles apply' : 'OFF — every job uses Grok') + '</div>'
+          '<div><strong>Configured:</strong> ' + (cfg
+            ? ('yes · key ' + (d.key_source || 'set'))
+            : 'no (set KIMI_API_KEY on Railway)') + '</div>'
+          + '<div><strong>Master:</strong> ' + (en ? ('ON — per-feature toggles → ' + prov) : 'OFF — every job uses Grok') + '</div>'
           + '<div><strong>Model:</strong> ' + (d.model || '—') + ' · <strong>Host:</strong> ' + (d.base_url || '—') + '</div>'
+          + '<div><strong>Pricing:</strong> ' + rateTxt + ' <span style="color:#94a3b8;">(tracked on each call)</span></div>'
           + '<div style="margin-top:4px;font-size:10.5px;color:#94a3b8;">Reports + podcasts never use volume (always Grok/Claude).</div>';
         if ($on) $on.disabled = !cfg || en;
         if ($off) $off.disabled = !cfg || !en;
@@ -13531,7 +13540,7 @@
       _volumeLlmWired = true;
       if ($on) $on.addEventListener('click', function () { setVolumeConfig({ enabled: true }); });
       if ($off) $off.addEventListener('click', function () {
-        if (!confirm('Turn volume master OFF?\n\nAll volume jobs (brief, intel, prioritize, pulse) will use Grok (higher cost).\nFull reports and podcasts are unchanged.\n\nYou can still re-enable and pick features one-by-one.')) return;
+        if (!confirm('Turn Kimi / volume master OFF?\n\nAll volume jobs (brief, intel, prioritize, pulse) will use Grok.\nFull reports and podcasts are unchanged.\n\nYou can re-enable and pick features one-by-one.')) return;
         setVolumeConfig({ enabled: false });
       });
       if ($ref) $ref.addEventListener('click', refresh);

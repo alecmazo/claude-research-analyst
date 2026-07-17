@@ -2037,31 +2037,34 @@ End with the sleeve block at this account's real market value so I can push it t
     </div>
 
     <!-- ── Models ── -->
-    <h3 class="settings-group-head" id="set-models">Models · volume harness</h3>
+    <h3 class="settings-group-head" id="set-models">Models · Kimi volume harness</h3>
     <div class="settings-grid">
       <section class="panel settings-span-2" data-collapsible="1" data-expanded="1">
         <header class="panel-head">
-          <span class="panel-title">⚡ Volume LLM (cheap daily jobs)</span>
+          <span class="panel-title">⚡ Kimi K3 · volume jobs</span>
           <span class="panel-badge" id="volume-llm-badge" style="background:#f1f5f9;color:#64748b;">…</span>
         </header>
         <div class="settings-card-body">
           <p style="margin:0 0 8px;font-size:11px;color:#64748b;line-height:1.45;">
-            <strong>Option 4:</strong> route high-volume jobs to a cheap OpenAI-compatible model (e.g. DeepSeek).
+            <strong>Volume harness:</strong> route daily high-volume jobs to
+            <strong>Kimi K3</strong> (Moonshot API · <code>KIMI_API_KEY</code>).
             Toggle <em>each</em> feature below, or master off → all use Grok.
-            Full equity reports stay Grok + Claude; podcasts unchanged.
+            Full equity reports stay Grok + Claude; podcasts unchanged. Costs tracked per call.
           </p>
           <div id="volume-llm-status" style="font-size:11.5px;color:#64748b;margin-bottom:8px;line-height:1.4;">Loading…</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
-            <button type="button" id="volume-llm-enable" class="btn-primary">Master ON · cheap model</button>
+            <button type="button" id="volume-llm-enable" class="btn-primary">Master ON · Kimi</button>
             <button type="button" id="volume-llm-rollback" class="tab-btn" style="border:1px solid #dc2626;color:#b91c1c;">↩ Master OFF · all Grok</button>
             <button type="button" id="volume-llm-refresh" class="tab-btn">↻ Status</button>
           </div>
-          <div style="font-size:9.5px;font-weight:800;letter-spacing:0.7px;text-transform:uppercase;color:#94a3b8;margin-bottom:6px;">Per-feature routing (on = cheap volume · off = Grok)</div>
+          <div style="font-size:9.5px;font-weight:800;letter-spacing:0.7px;text-transform:uppercase;color:#94a3b8;margin-bottom:6px;">Per-feature routing (on = Kimi · off = Grok)</div>
           <div id="volume-llm-jobs" style="display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;">
             <!-- filled by JS from job_ids / job_labels -->
           </div>
           <div class="settings-help" style="margin-top:10px;padding:8px 10px;background:var(--gray-50,#f8fafc);border:1px solid var(--border-subtle,#e2e8f0);border-radius:8px;">
-            Env: <code>VOLUME_LLM_API_KEY</code>, <code>VOLUME_LLM_BASE_URL</code>, <code>VOLUME_LLM_MODEL</code>.
+            Env: <code>KIMI_API_KEY</code> (or <code>VOLUME_LLM_API_KEY</code>), optional
+            <code>VOLUME_LLM_BASE_URL</code> (default <code>https://api.moonshot.ai/v1</code>),
+            <code>VOLUME_LLM_MODEL</code> (default <code>kimi-k3</code>).
             Toggles survive redeploys. Reports + podcasts never use volume.
           </div>
         </div>

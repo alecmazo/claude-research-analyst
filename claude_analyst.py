@@ -192,22 +192,54 @@ GROK_MODEL = _optional_env("GROK_MODEL", "grok-4.3")
 GROK_INTEL_MODEL = GROK_MODEL
 
 # ── Option 4 · Volume LLM harness ───────────────────────────────────────────
-# Cheap accurate model for high-volume daily work. Full single-ticker reports
-# and podcasts stay on Grok + Claude only (never routed here).
+# High-volume daily jobs (brief, intel, prioritize, pulse) — NOT full reports
+# or podcasts (those stay Grok + Claude).
 #
-# OpenAI-compatible providers work (DeepSeek, Together, Fireworks, OpenRouter,
-# Groq, etc.). Example DeepSeek:
-#   VOLUME_LLM_BASE_URL=https://api.deepseek.com/v1
-#   VOLUME_LLM_API_KEY=sk-...
-#   VOLUME_LLM_MODEL=deepseek-chat
+# Default provider: Kimi K3 (Moonshot) via KIMI_API_KEY on Railway.
+# OpenAI-compatible; override host/model anytime:
+#   KIMI_API_KEY=sk-...                         # preferred key name
+#   VOLUME_LLM_API_KEY=sk-...                   # alias / override of key
+#   VOLUME_LLM_BASE_URL=https://api.moonshot.ai/v1
+#   VOLUME_LLM_MODEL=kimi-k3
+#   VOLUME_LLM_ENABLED=true|false
 #
-# Rollback: set VOLUME_LLM_ENABLED=false OR flip the Settings master toggle
-# (runtime override stored in DB) — volume jobs immediately use Grok again.
-# Per-job toggles (Settings → Models) can leave master ON but send one job
-# (e.g. daily_brief) back to Grok while others stay on the cheap model.
-VOLUME_LLM_BASE_URL = _optional_env("VOLUME_LLM_BASE_URL", "https://api.deepseek.com/v1")
-VOLUME_LLM_API_KEY  = _optional_env("VOLUME_LLM_API_KEY", "")
-VOLUME_LLM_MODEL    = _optional_env("VOLUME_LLM_MODEL", "deepseek-chat")
+# Rollback: VOLUME_LLM_ENABLED=false OR Settings master OFF → all volume jobs
+# use Grok. Per-job toggles (Settings → Models) can leave master ON but send
+# one feature back to Grok while others stay on Kimi.
+_KIMI_DEFAULT_BASE = "https://api.moonshot.ai/v1"
+_KIMI_DEFAULT_MODEL = "kimi-k3"
+
+_vol_key_explicit = _optional_env("VOLUME_LLM_API_KEY", "")
+_kimi_key = (
+    _optional_env("KIMI_API_KEY", "")
+    or _optional_env("MOONSHOT_API_KEY", "")
+)
+VOLUME_LLM_API_KEY = _vol_key_explicit or _kimi_key
+_VOLUME_KEY_SOURCE = (
+    "VOLUME_LLM_API_KEY" if _vol_key_explicit
+    else ("KIMI_API_KEY" if _optional_env("KIMI_API_KEY", "")
+          else ("MOONSHOT_API_KEY" if _optional_env("MOONSHOT_API_KEY", "") else ""))
+)
+
+# Base URL: explicit VOLUME_LLM_BASE_URL wins; else Moonshot when key is Kimi
+# (or no key yet — defaults assume Kimi); legacy DeepSeek only if key is
+# exclusively VOLUME_LLM_API_KEY with no Kimi key present.
+_vol_base_env = os.environ.get("VOLUME_LLM_BASE_URL", "").strip()
+if _vol_base_env:
+    VOLUME_LLM_BASE_URL = _vol_base_env.rstrip("/")
+elif _kimi_key or not _vol_key_explicit:
+    VOLUME_LLM_BASE_URL = _KIMI_DEFAULT_BASE
+else:
+    VOLUME_LLM_BASE_URL = "https://api.deepseek.com/v1"
+
+_vol_model_env = os.environ.get("VOLUME_LLM_MODEL", "").strip()
+if _vol_model_env:
+    VOLUME_LLM_MODEL = _vol_model_env
+elif "moonshot.ai" in VOLUME_LLM_BASE_URL or "kimi.ai" in VOLUME_LLM_BASE_URL:
+    VOLUME_LLM_MODEL = _KIMI_DEFAULT_MODEL
+else:
+    VOLUME_LLM_MODEL = "deepseek-chat"
+
 # Env default: on only when a key is present (safe out of the box).
 _VOLUME_ENV_DEFAULT = _optional_env("VOLUME_LLM_ENABLED", "").strip().lower()
 # Runtime override: None = follow env/key heuristic; True/False = Settings master
@@ -227,6 +259,28 @@ _VOLUME_JOB_LABELS: dict[str, str] = {
 }
 # job_id → bool; missing key means True (use volume when master is on)
 _volume_job_runtime: dict[str, bool] = {k: True for k in VOLUME_LLM_JOBS}
+
+# Official Moonshot/Kimi platform pricing (USD per MTok) — platform.kimi.ai 2026-07.
+# Cache-hit input rate used only when usage reports cached_tokens (best-effort).
+VOLUME_PRICING_PER_MTOK: dict[str, tuple[float, float]] = {
+    # model_id (prefix match) : (input $/Mtok, output $/Mtok)
+    "kimi-k3":                  (3.00, 15.00),
+    "kimi-k2.7-code":           (0.95, 4.00),
+    "kimi-k2.7-code-highspeed": (0.95, 4.00),
+    "kimi-k2.6":                (0.95, 4.00),
+    "kimi-k2.5":                (0.60, 3.00),
+    "kimi-k2":                  (0.60, 2.50),
+    "moonshot-v1":              (0.60, 2.50),
+    # Legacy DeepSeek defaults if someone still points volume there
+    "deepseek-chat":            (0.28, 0.42),
+    "deepseek-reasoner":        (0.55, 2.19),
+}
+VOLUME_CACHE_HIT_PER_MTOK: dict[str, float] = {
+    "kimi-k3": 0.30,
+    "kimi-k2.7-code": 0.19,
+    "kimi-k2.6": 0.16,
+    "kimi-k2.5": 0.10,
+}
 
 # Gamma.app folder ID is optional; API key is only required if Gamma generation
 # is actually requested at runtime.
@@ -254,6 +308,50 @@ def get_gamma_api_key() -> str:
 def volume_llm_configured() -> bool:
     """True when base URL + API key + model are present."""
     return bool(VOLUME_LLM_API_KEY and VOLUME_LLM_BASE_URL and VOLUME_LLM_MODEL)
+
+
+def volume_provider_label(model: str | None = None) -> str:
+    """Short provider tag for routes / usage: 'kimi' | 'volume'."""
+    mid = (model or VOLUME_LLM_MODEL or "").lower()
+    base = (VOLUME_LLM_BASE_URL or "").lower()
+    if mid.startswith("kimi") or "moonshot" in mid or "moonshot" in base or "kimi" in base:
+        return "kimi"
+    return "volume"
+
+
+def volume_rates(model: str | None = None) -> tuple[float, float]:
+    """(input, output) $/Mtok for the volume model. Longest-prefix match."""
+    m = (model or VOLUME_LLM_MODEL or "").lower().strip()
+    if m in VOLUME_PRICING_PER_MTOK:
+        return VOLUME_PRICING_PER_MTOK[m]
+    best = None
+    for k, v in VOLUME_PRICING_PER_MTOK.items():
+        if m.startswith(k) and (best is None or len(k) > best[0]):
+            best = (len(k), v)
+    # Unknown open models: conservative mid-tier (Kimi K2.6 class)
+    return best[1] if best else (0.95, 4.00)
+
+
+def estimate_volume_cost(model: str | None, input_tokens: int, output_tokens: int,
+                         *, cached_input_tokens: int = 0) -> float:
+    """Estimate USD for a volume (Kimi / OpenAI-compat) call."""
+    mid = model or VOLUME_LLM_MODEL
+    inp_rate, out_rate = volume_rates(mid)
+    cached = max(0, int(cached_input_tokens or 0))
+    full_in = max(0, int(input_tokens or 0) - cached)
+    cache_rate = None
+    ml = (mid or "").lower()
+    for k, v in VOLUME_CACHE_HIT_PER_MTOK.items():
+        if ml.startswith(k):
+            cache_rate = v
+            break
+    if cache_rate is None:
+        cache_rate = inp_rate  # no discount known
+    return (
+        full_in * inp_rate
+        + cached * cache_rate
+        + int(output_tokens or 0) * out_rate
+    ) / 1_000_000.0
 
 
 def set_volume_llm_runtime(enabled: bool | None) -> None:
@@ -284,12 +382,12 @@ def get_volume_llm_jobs() -> dict[str, bool]:
 
 
 def volume_llm_enabled() -> bool:
-    """Master switch: whether the cheap open model is available at all.
+    """Master switch: whether the volume model (Kimi by default) is available.
 
     Rollback paths:
       1. Settings master → set_volume_llm_runtime(False)
       2. VOLUME_LLM_ENABLED=false in env
-      3. Missing VOLUME_LLM_API_KEY → always off (safe)
+      3. Missing KIMI_API_KEY / VOLUME_LLM_API_KEY → always off (safe)
 
     Prefer volume_llm_enabled_for(job) at call sites so per-feature toggles apply.
     """
@@ -306,7 +404,7 @@ def volume_llm_enabled() -> bool:
 
 
 def volume_llm_enabled_for(job: str | None) -> bool:
-    """True when this specific volume job should use the cheap model.
+    """True when this specific volume job should use Kimi (or configured volume model).
 
     Master off → all jobs Grok. Master on → per-job toggle (default on).
     Unknown job ids fall back to master only.
@@ -323,12 +421,14 @@ def volume_llm_status() -> dict:
     """Snapshot for Settings / config API (no secrets)."""
     master = volume_llm_enabled()
     jobs = get_volume_llm_jobs()
+    prov = volume_provider_label()
     routes = {
-        j: ("volume" if volume_llm_enabled_for(j) else "grok")
+        j: (prov if volume_llm_enabled_for(j) else "grok")
         for j in VOLUME_LLM_JOBS
     }
     routes["full_reports"] = "grok | claude (unchanged)"
     routes["podcast"] = "claude | grok (unchanged)"
+    inp_r, out_r = volume_rates(VOLUME_LLM_MODEL)
     return {
         "configured": volume_llm_configured(),
         "enabled": master,
@@ -336,7 +436,11 @@ def volume_llm_status() -> dict:
         "env_default": _VOLUME_ENV_DEFAULT or "(auto: on if key present)",
         "base_url": VOLUME_LLM_BASE_URL,
         "model": VOLUME_LLM_MODEL,
+        "provider": prov,
+        "provider_label": "Kimi K3" if prov == "kimi" else "Volume LLM",
         "has_api_key": bool(VOLUME_LLM_API_KEY),
+        "key_source": _VOLUME_KEY_SOURCE or None,
+        "rates_usd_per_mtok": {"input": inp_r, "output": out_r},
         "jobs": jobs,
         "job_labels": dict(_VOLUME_JOB_LABELS),
         "job_ids": list(VOLUME_LLM_JOBS),
@@ -349,8 +453,9 @@ def _volume_client():
     from openai import OpenAI
     if not volume_llm_configured():
         raise RuntimeError(
-            "Volume LLM not configured. Set VOLUME_LLM_API_KEY (+ optional "
-            "VOLUME_LLM_BASE_URL / VOLUME_LLM_MODEL) or roll back to Grok."
+            "Volume LLM not configured. Set KIMI_API_KEY (or VOLUME_LLM_API_KEY) "
+            "on Railway, optional VOLUME_LLM_BASE_URL / VOLUME_LLM_MODEL, "
+            "or roll back to Grok in Settings."
         )
     return OpenAI(api_key=VOLUME_LLM_API_KEY, base_url=VOLUME_LLM_BASE_URL)
 
@@ -360,9 +465,10 @@ def call_volume_llm(system_prompt: str, user_content: str,
                     *,
                     temperature: float = 0.3,
                     usage_capture=None) -> str:
-    """Call the cheap OpenAI-compatible volume model. No live web/X search.
+    """Call the volume OpenAI-compatible model (default Kimi K3). No live web/X.
 
     Full reports and podcasts must NOT call this — keep them on Grok/Claude.
+    Usage is cost-tracked like Grok/Claude via estimate_volume_cost.
     """
     mid = model or VOLUME_LLM_MODEL
     client = _volume_client()
@@ -378,15 +484,27 @@ def call_volume_llm(system_prompt: str, user_content: str,
     if usage_capture is not None:
         try:
             u = getattr(resp, "usage", None)
+            inp = int(getattr(u, "prompt_tokens", 0) or 0)
+            out = int(getattr(u, "completion_tokens", 0) or 0)
+            # OpenAI-compat optional prompt_tokens_details.cached_tokens
+            cached = 0
+            try:
+                ptd = getattr(u, "prompt_tokens_details", None)
+                if ptd is not None:
+                    cached = int(getattr(ptd, "cached_tokens", 0) or 0)
+            except Exception:
+                cached = 0
+            cost = estimate_volume_cost(mid, inp, out, cached_input_tokens=cached)
             usage_capture({
                 "model": mid,
-                "provider": "volume",
-                "input_tokens": int(getattr(u, "prompt_tokens", 0) or 0),
-                "output_tokens": int(getattr(u, "completion_tokens", 0) or 0),
-                "cost_usd": None,  # host-specific; UI shows model id
+                "provider": volume_provider_label(mid),
+                "input_tokens": inp,
+                "output_tokens": out,
+                "cached_input_tokens": cached,
+                "cost_usd": cost,
             })
-        except Exception:
-            pass
+        except Exception as _e:
+            print(f"⚠️  [call_volume_llm] usage capture failed: {_e!s:.120}", flush=True)
     if not text:
         raise RuntimeError(f"Volume LLM ({mid}) returned empty content")
     return text
@@ -400,12 +518,12 @@ def call_volume_or_grok(system_prompt: str, user_content: str,
                         volume_model: str | None = None,
                         grok_live_on_fallback: bool = True,
                         usage_capture=None) -> tuple[str, str]:
-    """Route a volume job: cheap model when that job's toggle is on, else Grok.
+    """Route a volume job: Kimi/volume when that job's toggle is on, else Grok.
 
     ``job`` should be one of VOLUME_LLM_JOBS (daily_brief, intelligence,
     prioritize, market_pulse). Missing job → master switch only.
 
-    Returns (text, provider_label) where provider_label is 'volume' or 'grok'.
+    Returns (text, provider_label) where provider_label is 'kimi' | 'volume' | 'grok'.
     On volume failure, falls back to Grok once (logged). Full reports / podcast
     must never call this — they stay on call_grok / call_claude directly.
     """
@@ -416,9 +534,10 @@ def call_volume_or_grok(system_prompt: str, user_content: str,
                 model=volume_model,
                 usage_capture=usage_capture,
             )
-            return text, "volume"
+            return text, volume_provider_label(volume_model or VOLUME_LLM_MODEL)
         except Exception as e:
-            print(f"⚠️  Volume LLM failed ({e!s:.160}); falling back to Grok…", flush=True)
+            print(f"⚠️  Volume LLM ({VOLUME_LLM_MODEL}) failed ({e!s:.160}); "
+                  f"falling back to Grok…", flush=True)
             live_search = bool(grok_live_on_fallback)
     text = call_grok(
         system_prompt, user_content,
@@ -1700,6 +1819,10 @@ def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
 
     provider = "grok"
     model_used = GROK_MODEL
+    _usage: dict = {}
+    def _cap(u):
+        if isinstance(u, dict):
+            _usage.update(u)
     try:
         if use_vol:
             sys_p = SCAN_SYSTEM_PROMPT + (
@@ -1709,10 +1832,12 @@ def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
             markdown, provider = call_volume_or_grok(
                 sys_p, user_msg, job="market_pulse",
                 live_search=False, grok_live_on_fallback=True,
+                usage_capture=_cap,
             )
-            model_used = VOLUME_LLM_MODEL if provider == "volume" else GROK_MODEL
+            model_used = VOLUME_LLM_MODEL if provider != "grok" else GROK_MODEL
         else:
-            markdown = call_grok(SCAN_SYSTEM_PROMPT, user_msg, live_search=True)
+            markdown = call_grok(SCAN_SYSTEM_PROMPT, user_msg, live_search=True,
+                                 usage_capture=_cap)
             provider = "grok"
             model_used = GROK_MODEL
     except Exception as exc:  # noqa: BLE001
@@ -1731,6 +1856,7 @@ def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
             "error": error_msg,
             "provider": None,
             "model": None,
+            "cost_usd": None,
         }
 
     # Extract the BULLISH/NEUTRAL/BEARISH tag from the last line.
@@ -1748,7 +1874,9 @@ def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
             break
 
     if verbose:
-        print(f"   ✅ {ticker} → {sentiment} ({provider}/{model_used})")
+        _c = _usage.get("cost_usd")
+        _c_s = f" ${_c:.4f}" if isinstance(_c, (int, float)) else ""
+        print(f"   ✅ {ticker} → {sentiment} ({provider}/{model_used}){_c_s}")
 
     return {
         "ticker": ticker,
@@ -1762,6 +1890,9 @@ def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
         "error": None,
         "provider": provider,
         "model": model_used,
+        "cost_usd": _usage.get("cost_usd"),
+        "input_tokens": _usage.get("input_tokens"),
+        "output_tokens": _usage.get("output_tokens"),
     }
 
 
@@ -2060,6 +2191,10 @@ def run_market_intelligence(sector: str = "Tech") -> dict:
     route = f"volume/{VOLUME_LLM_MODEL}" if use_vol else f"grok/{GROK_INTEL_MODEL}+live"
     print(f"🧠 Running market intelligence (sector: {sector}) via {route}…")
 
+    _usage: dict = {}
+    def _cap(u):
+        if isinstance(u, dict):
+            _usage.update(u)
     try:
         if use_vol:
             markdown, provider = call_volume_or_grok(
@@ -2072,6 +2207,7 @@ def run_market_intelligence(sector: str = "Tech") -> dict:
                 user_msg,
                 job="intelligence",
                 live_search=False,
+                usage_capture=_cap,
             )
         else:
             markdown = call_grok(
@@ -2079,6 +2215,7 @@ def run_market_intelligence(sector: str = "Tech") -> dict:
                 user_msg,
                 model=GROK_INTEL_MODEL,
                 live_search=True,
+                usage_capture=_cap,
             )
             provider = "grok"
     except Exception as exc:  # noqa: BLE001
@@ -2091,6 +2228,7 @@ def run_market_intelligence(sector: str = "Tech") -> dict:
             "tickers": [],
             "error": str(exc),
             "provider": None,
+            "cost_usd": None,
         }
 
     # Soft safety net against cartoon R/R the model still emits
@@ -2114,7 +2252,10 @@ def run_market_intelligence(sector: str = "Tech") -> dict:
         "tickers": tickers,
         "error": None,
         "provider": provider,
-        "model": VOLUME_LLM_MODEL if provider == "volume" else GROK_INTEL_MODEL,
+        "model": VOLUME_LLM_MODEL if provider != "grok" else GROK_INTEL_MODEL,
+        "cost_usd": _usage.get("cost_usd"),
+        "input_tokens": _usage.get("input_tokens"),
+        "output_tokens": _usage.get("output_tokens"),
     }
 
     # Persist to disk so the result survives server restarts / Railway redeploys.
@@ -2122,7 +2263,9 @@ def run_market_intelligence(sector: str = "Tech") -> dict:
         tmp = INTEL_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, default=str, indent=2))
         tmp.replace(INTEL_FILE)
-        print(f"✅ Market intelligence complete — {len(tickers)} tickers identified.")
+        _c = _usage.get("cost_usd")
+        _cs = f" · ${_c:.4f}" if isinstance(_c, (int, float)) else ""
+        print(f"✅ Market intelligence complete — {len(tickers)} tickers identified.{_cs}")
     except Exception as exc:  # noqa: BLE001
         print(f"⚠️  Could not persist intelligence results: {exc}")
 
@@ -2282,6 +2425,10 @@ def run_daily_brief(book_tickers: list[str] | None = None,
     route = f"volume/{VOLUME_LLM_MODEL}" if use_vol else f"grok/{GROK_INTEL_MODEL}+live"
     print(f"📰 Running Daily Brief via {route}…")
 
+    _usage: dict = {}
+    def _cap(u):
+        if isinstance(u, dict):
+            _usage.update(u)
     try:
         if use_vol:
             # No live X on open hosts — evidence pack + book is the ground truth
@@ -2294,6 +2441,7 @@ def run_daily_brief(book_tickers: list[str] | None = None,
                 user_msg,
                 job="daily_brief",
                 live_search=False,
+                usage_capture=_cap,
             )
         else:
             markdown = call_grok(
@@ -2301,6 +2449,7 @@ def run_daily_brief(book_tickers: list[str] | None = None,
                 user_msg,
                 model=GROK_INTEL_MODEL,
                 live_search=True,
+                usage_capture=_cap,
             )
             provider = "grok"
     except Exception as exc:  # noqa: BLE001
@@ -2313,6 +2462,7 @@ def run_daily_brief(book_tickers: list[str] | None = None,
             "error": str(exc),
             "provider": None,
             "model": None,
+            "cost_usd": None,
         }
 
     # Parse out **TICKER** tokens so the UI can make them tappable.
@@ -2330,7 +2480,10 @@ def run_daily_brief(book_tickers: list[str] | None = None,
         "tickers": tickers,
         "error": None,
         "provider": provider,
-        "model": VOLUME_LLM_MODEL if provider == "volume" else GROK_INTEL_MODEL,
+        "model": VOLUME_LLM_MODEL if provider != "grok" else GROK_INTEL_MODEL,
+        "cost_usd": _usage.get("cost_usd"),
+        "input_tokens": _usage.get("input_tokens"),
+        "output_tokens": _usage.get("output_tokens"),
     }
 
     # Persist to disk so it survives restarts and can be hydrated.
@@ -2344,7 +2497,9 @@ def run_daily_brief(book_tickers: list[str] | None = None,
             push_to_dropbox([str(DAILY_BRIEF_FILE)])
         except Exception:  # noqa: BLE001
             pass
-        print(f"✅ Daily Brief complete — {len(tickers)} tickers flagged.")
+        _c = _usage.get("cost_usd")
+        _cs = f" · ${_c:.4f}" if isinstance(_c, (int, float)) else ""
+        print(f"✅ Daily Brief complete — {len(tickers)} tickers flagged.{_cs}")
     except Exception as exc:  # noqa: BLE001
         print(f"⚠️  Could not persist daily brief: {exc}")
 
@@ -6588,14 +6743,19 @@ def screen_universe(candidates: list[dict], *, top_n: int = 5) -> dict:
         f"{_json.dumps(candidates, indent=2, default=str)}"
     )
 
-    # Volume mode → cheap open model; rollback → Grok screen model
+    # Volume mode → Kimi (default); rollback → Grok screen model
     use_vol = volume_llm_enabled_for("prioritize")
     screen_model = VOLUME_LLM_MODEL if use_vol else GROK_SCREEN_MODEL
+    _usage: dict = {}
+    def _cap(u):
+        if isinstance(u, dict):
+            _usage.update(u)
     try:
         if use_vol:
             raw, provider = call_volume_or_grok(
                 sys_prompt, user, job="prioritize", live_search=False,
                 grok_model=GROK_SCREEN_MODEL,
+                usage_capture=_cap,
             )
             if provider == "grok":
                 screen_model = GROK_SCREEN_MODEL
@@ -6605,15 +6765,16 @@ def screen_universe(candidates: list[dict], *, top_n: int = 5) -> dict:
                 user_content=user,
                 model=GROK_SCREEN_MODEL,
                 live_search=False,
+                usage_capture=_cap,
             )
             provider = "grok"
     except Exception as e:
         err = str(e)
         if "model" in err.lower() and ("not found" in err.lower() or "404" in err or "does not exist" in err.lower()):
             err = (f"Screen model '{screen_model}' not found. "
-                   "Check VOLUME_LLM_MODEL / GROK_SCREEN_MODEL env vars.")
+                   "Check VOLUME_LLM_MODEL / KIMI_API_KEY / GROK_SCREEN_MODEL env vars.")
         return {"ok": False, "picks": [], "skipped": [], "raw": "", "error": err[:400],
-                "model": screen_model, "provider": None}
+                "model": screen_model, "provider": None, "cost_usd": None}
 
     # Strip stray code fences if model misbehaves
     cleaned = raw.strip()
@@ -6635,6 +6796,9 @@ def screen_universe(candidates: list[dict], *, top_n: int = 5) -> dict:
         "model":   screen_model,
         "provider": provider,
         "raw":     raw,
+        "cost_usd": _usage.get("cost_usd"),
+        "input_tokens": _usage.get("input_tokens"),
+        "output_tokens": _usage.get("output_tokens"),
     }
 
 
