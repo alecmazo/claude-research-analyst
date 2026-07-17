@@ -6334,7 +6334,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui79-20260717-hydrate-stamps"
+WEB_BUILD_VERSION = "ui80-20260717-strat-steps"
 
 
 @app.get("/api/build")
@@ -20806,6 +20806,9 @@ _podcast_jobs_lock = threading.Lock()
 _AGENTIC_MODEL = os.environ.get("AGENTIC_MODEL", "").strip() or getattr(
     analyst, "CLAUDE_MODEL", "claude-opus-4-8")
 _AGENTIC_MAX_STEPS = 12          # hard cap on tool-call rounds (cost guard)
+# Portfolio Strategist reviews a whole book — needs more tool rounds than Q&A.
+# Grok/Kimi/DeepSeek often burn 1 step per name; 12 was too low (ticket d754f5b2).
+_STRATEGIST_MAX_STEPS = 24
 _agentic_jobs: dict[str, dict] = {}
 
 
@@ -21897,6 +21900,9 @@ def _run_agentic_analysis(job_id: str, question: str,
 
     Provider comes from Settings → Models task route (agentic | strategist):
     claude · grok · kimi (Kimi K3) · deepseek.
+
+    On step-limit exhaustion we force one final no-tools synthesis pass so
+    Grok/Kimi/DeepSeek strategist runs don't hard-fail after tooling (SUP_d754f5b2).
     """
     import anthropic as _anthropic
     _tools = tools if tools is not None else _AGENTIC_TOOLS
@@ -21908,13 +21914,66 @@ def _run_agentic_analysis(job_id: str, question: str,
     jr0 = _agentic_jobs.get(job_id) or {}
     mode = jr0.get("mode") or "agentic"
     provider, model = _agent_route_and_model(mode)
+    max_steps = (
+        _STRATEGIST_MAX_STEPS if mode == "strategist" else _AGENTIC_MAX_STEPS
+    )
     _set(stage="queued", status="running", label=f"Starting {provider}…",
          started_at=time.time(), steps=0, tool_calls=[], cost_usd=0.0,
-         provider=provider, model=model)
+         provider=provider, model=model, max_steps=max_steps)
     try:
         system = system_override or _AGENTIC_SYSTEM_DEFAULT
+        # Nudge multi-engine hosts to batch tools — they burn rounds faster than Claude.
+        if mode == "strategist" and provider != "claude":
+            system = (
+                system
+                + f"\n\nSTEP BUDGET: you have at most {max_steps} tool rounds. "
+                "Batch aggressively (multi-ticker get_quote, parallel tools). "
+                "After you have enough evidence, STOP calling tools and write the "
+                "full 6-section dossier in one reply. Do not re-read every report "
+                "if 4–6 key names already ground the concentration/EV story."
+            )
         total_cost = 0.0
         tool_log: list[dict] = []
+
+        def _finish(final: str, steps_done: int, client_for_verify, *,
+                    forced: bool = False) -> None:
+            nonlocal total_cost
+            final = (final or "").strip()
+            if not final:
+                final = (
+                    "(Model hit the tool-step budget without writing a dossier. "
+                    f"Tools run: {len(tool_log)}. Re-run or switch engine in Settings.)"
+                )
+            _set(stage="verifying",
+                 label=("🔍 Verifying claims…"
+                        + (" (synthesized after step budget)" if forced else "")),
+                 steps=steps_done, tool_calls=tool_log[:],
+                 cost_usd=round(total_cost, 4))
+            verification = _agentic_verify_any(
+                provider, client_for_verify, model, question, final, tool_log)
+            done_label = (
+                "✓ Analysis complete (synthesized after step budget)"
+                if forced else "✓ Analysis complete"
+            )
+            _set(stage="done", status="done", label=done_label,
+                 steps=steps_done, tool_calls=tool_log[:],
+                 cost_usd=round(total_cost, 4),
+                 result={"answer": final, "tool_calls": tool_log[:],
+                         "cost_usd": round(total_cost, 4), "model": model,
+                         "provider": provider, "verification": verification,
+                         "forced_finalize": bool(forced)})
+            try:
+                jr = _agentic_jobs.get(job_id) or {}
+                if jr.get("mode") == "strategist":
+                    _persist_strategist_review(job_id, jr, final, verification,
+                                               round(total_cost, 4), model)
+                else:
+                    _persist_analyst_review(
+                        job_id, jr.get("source") or "analyst",
+                        question, final, verification,
+                        tool_log[:], round(total_cost, 4), model)
+            except Exception as _pe:
+                print(f"⚠️ [review persist] {_pe!s:.150}", flush=True)
 
         # ── Claude (Anthropic Messages + tool_use) ─────────────────────
         if provider == "claude":
@@ -21922,16 +21981,29 @@ def _run_agentic_analysis(job_id: str, question: str,
             think = _agentic_thinking_kwargs(model)
             messages = [{"role": "user", "content": question}]
 
-            for step in range(_AGENTIC_MAX_STEPS):
+            for step in range(max_steps):
+                last_round = step >= max_steps - 1
                 _set(stage="thinking",
-                     label=f"{provider} · reasoning (step {step+1}/{_AGENTIC_MAX_STEPS})…",
+                     label=f"{provider} · reasoning (step {step+1}/{max_steps})…",
                      steps=step, tool_calls=tool_log[:], cost_usd=round(total_cost, 4),
                      provider=provider, model=model)
-                resp = client.messages.create(
+                create_kw = dict(
                     model=model, max_tokens=8000,
-                    system=system, tools=_tools, messages=messages,
-                    **think,
+                    system=system, messages=messages, **think,
                 )
+                # Final round: no tools — force written answer
+                if last_round and tool_log:
+                    create_kw["messages"] = messages + [{
+                        "role": "user",
+                        "content": (
+                            "You have used your tool budget. Using ONLY the tool "
+                            "results already in this conversation, write the complete "
+                            "final answer now. No more tools."
+                        ),
+                    }]
+                else:
+                    create_kw["tools"] = _tools
+                resp = client.messages.create(**create_kw)
                 try:
                     u = resp.usage
                     total_cost += _agentic_estimate_cost(
@@ -21939,31 +22011,10 @@ def _run_agentic_analysis(job_id: str, question: str,
                 except Exception:
                     pass
 
-                if resp.stop_reason != "tool_use":
+                if resp.stop_reason != "tool_use" or last_round:
                     final = next((b.text for b in resp.content
                                   if getattr(b, "type", None) == "text"), "")
-                    _set(stage="verifying", label="🔍 Verifying claims against tool data…",
-                         steps=step + 1, tool_calls=tool_log[:], cost_usd=round(total_cost, 4))
-                    verification = _agentic_verify_any(
-                        "claude", client, model, question, final, tool_log)
-                    _set(stage="done", status="done", label="✓ Analysis complete",
-                         steps=step + 1, tool_calls=tool_log[:],
-                         cost_usd=round(total_cost, 4),
-                         result={"answer": final, "tool_calls": tool_log[:],
-                                 "cost_usd": round(total_cost, 4), "model": model,
-                                 "provider": provider, "verification": verification})
-                    try:
-                        jr = _agentic_jobs.get(job_id) or {}
-                        if jr.get("mode") == "strategist":
-                            _persist_strategist_review(job_id, jr, final, verification,
-                                                       round(total_cost, 4), model)
-                        else:
-                            _persist_analyst_review(
-                                job_id, jr.get("source") or "analyst",
-                                question, final, verification,
-                                tool_log[:], round(total_cost, 4), model)
-                    except Exception as _pe:
-                        print(f"⚠️ [review persist] {_pe!s:.150}", flush=True)
+                    _finish(final, step + 1, client, forced=bool(last_round and tool_log))
                     return
 
                 messages.append({"role": "assistant", "content": resp.content})
@@ -21981,7 +22032,7 @@ def _run_agentic_analysis(job_id: str, question: str,
                 messages.append({"role": "user", "content": results})
 
             _set(stage="error", status="error",
-                 label=f"❌ Reached {_AGENTIC_MAX_STEPS}-step limit without finishing",
+                 label=f"❌ Reached {max_steps}-step limit without finishing",
                  error="step_limit", cost_usd=round(total_cost, 4))
             return
 
@@ -21992,15 +22043,43 @@ def _run_agentic_analysis(job_id: str, question: str,
             {"role": "system", "content": system},
             {"role": "user", "content": question},
         ]
-        for step in range(_AGENTIC_MAX_STEPS):
+        for step in range(max_steps):
+            last_round = step >= max_steps - 1
             _set(stage="thinking",
-                 label=f"{provider} · reasoning (step {step+1}/{_AGENTIC_MAX_STEPS})…",
+                 label=f"{provider} · reasoning (step {step+1}/{max_steps})…",
                  steps=step, tool_calls=tool_log[:], cost_usd=round(total_cost, 4),
                  provider=provider, model=model)
-            resp = oai.chat.completions.create(
-                model=model, messages=messages, tools=oai_tools,
+            create_kw = dict(
+                model=model, messages=messages,
                 temperature=0.3, max_tokens=8000,
             )
+            if last_round and tool_log:
+                # Force written dossier — no more tools (fixes Grok step-limit fail)
+                messages_force = messages + [{
+                    "role": "user",
+                    "content": (
+                        "STOP calling tools. Using only the tool results already "
+                        "above, write the COMPLETE investment-committee dossier now "
+                        "(all required sections). Be specific with numbers you "
+                        "already gathered."
+                    ),
+                }]
+                create_kw["messages"] = messages_force
+                # Omit tools / tool_choice none for hosts that require it
+                create_kw["tool_choice"] = "none"
+            else:
+                create_kw["tools"] = oai_tools
+                create_kw["tool_choice"] = "auto"
+            try:
+                resp = oai.chat.completions.create(**create_kw)
+            except Exception as _oe:
+                # Some hosts reject tool_choice="none" — retry bare
+                if last_round and "tool" in str(_oe).lower():
+                    create_kw.pop("tool_choice", None)
+                    create_kw.pop("tools", None)
+                    resp = oai.chat.completions.create(**create_kw)
+                else:
+                    raise
             try:
                 u = resp.usage
                 total_cost += _agentic_estimate_cost(
@@ -22015,30 +22094,38 @@ def _run_agentic_analysis(job_id: str, question: str,
             if msg is None:
                 raise RuntimeError(f"{provider} returned empty message")
             tcalls = getattr(msg, "tool_calls", None) or []
-            if not tcalls:
+            if not tcalls or last_round:
                 final = (msg.content or "").strip()
-                _set(stage="verifying", label="🔍 Verifying claims against tool data…",
-                     steps=step + 1, tool_calls=tool_log[:], cost_usd=round(total_cost, 4))
-                verification = _agentic_verify_any(
-                    provider, oai, model, question, final, tool_log)
-                _set(stage="done", status="done", label="✓ Analysis complete",
-                     steps=step + 1, tool_calls=tool_log[:],
-                     cost_usd=round(total_cost, 4),
-                     result={"answer": final, "tool_calls": tool_log[:],
-                             "cost_usd": round(total_cost, 4), "model": model,
-                             "provider": provider, "verification": verification})
-                try:
-                    jr = _agentic_jobs.get(job_id) or {}
-                    if jr.get("mode") == "strategist":
-                        _persist_strategist_review(job_id, jr, final, verification,
-                                                   round(total_cost, 4), model)
-                    else:
-                        _persist_analyst_review(
-                            job_id, jr.get("source") or "analyst",
-                            question, final, verification,
-                            tool_log[:], round(total_cost, 4), model)
-                except Exception as _pe:
-                    print(f"⚠️ [review persist] {_pe!s:.150}", flush=True)
+                # If model still tried tools on last round with empty content, synthesize
+                if last_round and not final and tcalls:
+                    try:
+                        synth = oai.chat.completions.create(
+                            model=model, temperature=0.3, max_tokens=8000,
+                            messages=messages + [{
+                                "role": "user",
+                                "content": (
+                                    "Write the complete final dossier from tool "
+                                    "results already in the conversation. No tools."
+                                ),
+                            }],
+                        )
+                        final = (
+                            (synth.choices[0].message.content or "").strip()
+                            if synth.choices else ""
+                        )
+                        try:
+                            u2 = synth.usage
+                            total_cost += _agentic_estimate_cost(
+                                provider, model,
+                                int(getattr(u2, "prompt_tokens", 0) or 0),
+                                int(getattr(u2, "completion_tokens", 0) or 0),
+                            )
+                        except Exception:
+                            pass
+                    except Exception as _se:
+                        print(f"⚠️ [agentic force-synth] {_se!s:.200}", flush=True)
+                _finish(final, step + 1, oai,
+                        forced=bool(last_round and bool(tool_log)))
                 return
 
             # Append assistant turn with tool_calls, then tool results
@@ -22078,7 +22165,7 @@ def _run_agentic_analysis(job_id: str, question: str,
                 })
 
         _set(stage="error", status="error",
-             label=f"❌ Reached {_AGENTIC_MAX_STEPS}-step limit without finishing",
+             label=f"❌ Reached {max_steps}-step limit without finishing",
              error="step_limit", cost_usd=round(total_cost, 4))
     except Exception as e:
         print(f"❌ [agentic {job_id}] failed: {e!s:.500}", flush=True)
@@ -22432,8 +22519,10 @@ _STRATEGIST_SYSTEM = (
     "that are really one AI-capex trade), catalyst clustering, and wipeout scenarios.\n\n"
     "TOOL DISCIPLINE: use compute for ALL math (EV, weighted avgs, % deltas — never "
     "mental math); get_financials for any fundamental; get_ytd_attribution for real "
-    "returns; read_saved_report to ground each name's thesis; get_recent_news / "
-    "web_search for fresh catalysts. NEVER invent a number.\n\n"
+    "returns; read_saved_report to ground key theses (batch: focus on top weights + "
+    "outliers, not every micro name); get_recent_news / web_search for fresh "
+    "catalysts. NEVER invent a number. Prefer multi-ticker tool calls over "
+    "one-ticker serial loops.\n\n"
     "Deliver a structured dossier with these sections, in order:\n"
     "1. SNAPSHOT — sector mix, top concentrations, real YTD (cite the tool).\n"
     "2. CONCENTRATION & CORRELATION X-RAY — where the book is secretly one bet.\n"
