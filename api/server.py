@@ -10608,21 +10608,21 @@ def list_reports(request: Request = None):
             if rows:
                 out = []
                 for r in rows:
-                    # Provider pills: content length first (so Kimi/DeepSeek show
-                    # when report_md_* is populated), then timestamps as fallback.
-                    has_grok   = bool(r.get("has_grok_md")) or bool(r.get("generated_at") and r.get("has_grok_md") is None)
-                    has_claude = bool(r.get("has_claude_md")) or bool(r.get("claude_generated_at"))
-                    has_kimi   = bool(r.get("has_kimi_md")) or bool(r.get("kimi_generated_at"))
-                    has_ds     = bool(r.get("has_deepseek_md")) or bool(r.get("deepseek_generated_at"))
-                    # Prefer explicit content flags when the SELECT succeeded
-                    if r.get("has_grok_md") is not None:
-                        has_grok = bool(r.get("has_grok_md"))
-                    if r.get("has_claude_md") is not None:
-                        has_claude = bool(r.get("has_claude_md")) or bool(r.get("claude_generated_at"))
-                    if r.get("has_kimi_md") is not None:
-                        has_kimi = bool(r.get("has_kimi_md")) or bool(r.get("kimi_generated_at"))
-                    if r.get("has_deepseek_md") is not None:
-                        has_ds = bool(r.get("has_deepseek_md")) or bool(r.get("deepseek_generated_at"))
+                    # Provider pills: prefer markdown content length (so Kimi/DeepSeek
+                    # show when report_md_* is filled). Fall back to timestamps for
+                    # legacy rows where length flags are missing.
+                    has_grok   = bool(r.get("has_grok_md")) if r.get("has_grok_md") is not None else bool(r.get("generated_at"))
+                    has_claude = bool(r.get("has_claude_md")) if r.get("has_claude_md") is not None else bool(r.get("claude_generated_at"))
+                    has_kimi   = bool(r.get("has_kimi_md")) if r.get("has_kimi_md") is not None else bool(r.get("kimi_generated_at"))
+                    has_ds     = bool(r.get("has_deepseek_md")) if r.get("has_deepseek_md") is not None else bool(r.get("deepseek_generated_at"))
+                    # Timestamp fallback if content flag is false but stamp exists
+                    # (rare: race between write of text vs timestamp)
+                    if not has_claude and r.get("claude_generated_at"):
+                        has_claude = True
+                    if not has_kimi and r.get("kimi_generated_at"):
+                        has_kimi = True
+                    if not has_ds and r.get("deepseek_generated_at"):
+                        has_ds = True
                     providers = []
                     if has_grok:   providers.append("grok")
                     if has_claude: providers.append("claude")
