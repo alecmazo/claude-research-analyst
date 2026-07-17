@@ -5323,7 +5323,7 @@ def _persist_analysis_text(
     provider = (provider or "grok").lower().strip()
     if provider == "volume":
         provider = "kimi"
-    if provider not in ("grok", "claude", "kimi"):
+    if provider not in ("grok", "claude", "kimi", "deepseek"):
         return False, 0
     _suffix  = "" if provider == "grok" else f"_{provider}"
     _md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report{_suffix}.md"
@@ -5372,7 +5372,7 @@ def _persist_analysis_text(
     except Exception:
         summary = {}
 
-    if provider in ("claude", "kimi"):
+    if provider in ("claude", "kimi", "deepseek"):
         try:
             _db_upsert_report(
                 ticker, text, summary,
@@ -5532,7 +5532,7 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool,
     provider = (llm_provider or "grok").lower().strip()
     if provider == "volume":
         provider = "kimi"
-    if provider not in ("grok", "claude", "kimi", "both"):
+    if provider not in ("grok", "claude", "kimi", "deepseek", "both"):
         provider = "grok"
 
     # Dispatch 'both' to the dedicated runner
@@ -5574,7 +5574,7 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool,
             verbose=False,
             on_progress=_record_progress,
             llm_provider=provider,
-            reuse_user_msg=(provider in ("claude", "kimi")),
+            reuse_user_msg=(provider in ("claude", "kimi", "deepseek")),
             should_cancel=_cancel_requested,
         )
     except analyst.ClaudeCancelled:
@@ -6405,8 +6405,17 @@ def config_models():
                                    round(analyst.estimate_grok_cost(g_model, 12_000, 3_000, 0), 2)],
             # Market pulse / per-ticker scan
             "pulse_volume":       [ _vc(2_000, 600), _vc(4_000, 1_200) ],
-            # Full Kimi equity report (same envelope as Claude, volume rates)
+            # Full Kimi equity report (kimi-k3 rates · $3/$15 MTok)
             "kimi_report":        [ _vc(30_000, 8_000), _vc(45_000, 16_000) ],
+            # Full DeepSeek report (V4 Flash rates · $0.14/$0.28)
+            "deepseek_report":    [
+                round(float(est_v(
+                    getattr(analyst, "DEEPSEEK_MODEL", "deepseek-chat"), 30_000, 8_000)), 4)
+                if callable(est_v) else 0.01,
+                round(float(est_v(
+                    getattr(analyst, "DEEPSEEK_MODEL", "deepseek-chat"), 45_000, 16_000)), 4)
+                if callable(est_v) else 0.05,
+            ],
             "agentic":            [0.05, 0.30],
             "strategist":         [0.30, 1.00],
             "volume_active":      vol_on,
@@ -6735,8 +6744,8 @@ def start_analysis(req: AnalyzeRequest, background_tasks: BackgroundTasks,
     provider = (req.llm_provider or "grok").lower().strip()
     if provider == "volume":
         provider = "kimi"
-    if provider not in ("grok", "claude", "kimi", "both"):
-        raise HTTPException(status_code=422, detail="llm_provider must be 'grok' | 'claude' | 'kimi' | 'both'")
+    if provider not in ("grok", "claude", "kimi", "deepseek", "both"):
+        raise HTTPException(status_code=422, detail="llm_provider must be 'grok' | 'claude' | 'kimi' | 'deepseek' | 'both'")
 
     # DEMO: no paid LLM call ever — synthesize a sample report instantly.
     if request is not None and _request_is_demo(request):
@@ -9813,6 +9822,35 @@ def _db_upsert_report(
                         last_attempt_at   = NOW(),
                         last_attempt_status = 'success',
                         last_attempt_error  = NULL
+                """, (
+                    ticker, md_text, report_date,
+                    summary.get("rating"), summary.get("price_target"),
+                    summary.get("upside_pct"),
+                ))
+                return
+
+            # ── DeepSeek path: parallel columns ─────────────────────────
+            if provider == "deepseek":
+                cur.execute("""
+                    INSERT INTO analyst_reports
+                        (ticker, generated_at, report_md, has_docx, has_pptx,
+                         report_md_deepseek, deepseek_generated_at, deepseek_report_date,
+                         deepseek_rating, deepseek_price_target, deepseek_upside_pct,
+                         last_attempt_at, last_attempt_status, last_attempt_error)
+                    VALUES (%s, NOW(), '', FALSE, FALSE,
+                            %s, NOW(), %s, %s, %s, %s,
+                            NOW(), 'success', NULL)
+                    ON CONFLICT (ticker) DO UPDATE SET
+                        report_md_deepseek    = EXCLUDED.report_md_deepseek,
+                        deepseek_generated_at = NOW(),
+                        deepseek_report_date  = EXCLUDED.deepseek_report_date,
+                        deepseek_rating       = EXCLUDED.deepseek_rating,
+                        deepseek_price_target = EXCLUDED.deepseek_price_target,
+                        deepseek_upside_pct   = EXCLUDED.deepseek_upside_pct,
+                        archived              = FALSE,
+                        last_attempt_at       = NOW(),
+                        last_attempt_status   = 'success',
+                        last_attempt_error    = NULL
                 """, (
                     ticker, md_text, report_date,
                     summary.get("rating"), summary.get("price_target"),
@@ -13010,6 +13048,13 @@ def _ensure_analyst_reports_table(conn) -> None:
         ("kimi_price_target",   "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS kimi_price_target NUMERIC"),
         ("kimi_upside_pct",     "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS kimi_upside_pct NUMERIC"),
         ("kimi_report_date",    "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS kimi_report_date TEXT"),
+        # DeepSeek parallel columns (separate from Kimi)
+        ("report_md_deepseek",    "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS report_md_deepseek TEXT"),
+        ("deepseek_generated_at", "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS deepseek_generated_at TIMESTAMP"),
+        ("deepseek_rating",       "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS deepseek_rating VARCHAR(30)"),
+        ("deepseek_price_target", "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS deepseek_price_target NUMERIC"),
+        ("deepseek_upside_pct",   "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS deepseek_upside_pct NUMERIC"),
+        ("deepseek_report_date",  "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS deepseek_report_date TEXT"),
     ]:
         _safe(sql, f"add_{col_name}")
 

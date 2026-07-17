@@ -191,54 +191,88 @@ GROK_MODEL = _optional_env("GROK_MODEL", "grok-4.3")
 # Premium intel path (used when volume LLM is rolled back / disabled).
 GROK_INTEL_MODEL = GROK_MODEL
 
-# ── Option 4 · Volume LLM harness ───────────────────────────────────────────
-# High-volume daily jobs (brief, intel, prioritize, pulse) — NOT full reports
-# or podcasts (those stay Grok + Claude).
+# ── Cheap / volume LLM providers (Kimi + DeepSeek are SEPARATE) ─────────────
+# Two independent OpenAI-compatible hosts. Never conflate them.
 #
-# Default provider: Kimi K3 (Moonshot) via KIMI_API_KEY on Railway.
-# OpenAI-compatible; override host/model anytime:
-#   KIMI_API_KEY=sk-...                         # preferred key name
-#   VOLUME_LLM_API_KEY=sk-...                   # alias / override of key
-#   VOLUME_LLM_BASE_URL=https://api.moonshot.ai/v1
-#   VOLUME_LLM_MODEL=kimi-k3
-#   VOLUME_LLM_ENABLED=true|false
+# Kimi (Moonshot):
+#   KIMI_API_KEY or MOONSHOT_API_KEY
+#   base https://api.moonshot.ai/v1 · model kimi-k3
 #
-# Rollback: VOLUME_LLM_ENABLED=false OR Settings master OFF → all volume jobs
-# use Grok. Per-job toggles (Settings → Models) can leave master ON but send
-# one feature back to Grok while others stay on Kimi.
+# DeepSeek:
+#   DEEPSEEK_API_KEY  (preferred)
+#   or VOLUME_LLM_API_KEY when base is DeepSeek / model is deepseek-*
+#   base https://api.deepseek.com/v1 · model deepseek-chat (→ V4 Flash compat)
+#
+# Optional shared overrides (only apply when they match that host):
+#   VOLUME_LLM_BASE_URL / VOLUME_LLM_MODEL / VOLUME_LLM_ENABLED
+#
+# Settings master OFF → desk jobs fall back to Grok. Per-task routes pick
+# kimi | deepseek | grok | claude independently.
 _KIMI_DEFAULT_BASE = "https://api.moonshot.ai/v1"
 _KIMI_DEFAULT_MODEL = "kimi-k3"
+_DEEPSEEK_DEFAULT_BASE = "https://api.deepseek.com/v1"
+_DEEPSEEK_DEFAULT_MODEL = "deepseek-chat"
 
-_vol_key_explicit = _optional_env("VOLUME_LLM_API_KEY", "")
 _kimi_key = (
     _optional_env("KIMI_API_KEY", "")
     or _optional_env("MOONSHOT_API_KEY", "")
 )
-VOLUME_LLM_API_KEY = _vol_key_explicit or _kimi_key
-_VOLUME_KEY_SOURCE = (
-    "VOLUME_LLM_API_KEY" if _vol_key_explicit
-    else ("KIMI_API_KEY" if _optional_env("KIMI_API_KEY", "")
-          else ("MOONSHOT_API_KEY" if _optional_env("MOONSHOT_API_KEY", "") else ""))
+_KIMI_KEY_SOURCE = (
+    "KIMI_API_KEY" if _optional_env("KIMI_API_KEY", "")
+    else ("MOONSHOT_API_KEY" if _optional_env("MOONSHOT_API_KEY", "") else "")
+)
+KIMI_API_KEY = _kimi_key
+KIMI_BASE_URL = _KIMI_DEFAULT_BASE
+KIMI_MODEL = _optional_env("KIMI_MODEL", "") or _KIMI_DEFAULT_MODEL
+
+_vol_key = _optional_env("VOLUME_LLM_API_KEY", "")
+_vol_base = (os.environ.get("VOLUME_LLM_BASE_URL") or "").strip().rstrip("/")
+_vol_model = (os.environ.get("VOLUME_LLM_MODEL") or "").strip()
+_deepseek_key_explicit = _optional_env("DEEPSEEK_API_KEY", "")
+
+# VOLUME_LLM_* historically pointed at DeepSeek. Only wire it to DeepSeek when
+# the base/model looks like DeepSeek (or when no Kimi-only key is involved).
+_vol_looks_deepseek = bool(
+    _vol_key and (
+        "deepseek" in (_vol_base or "").lower()
+        or "deepseek" in (_vol_model or "").lower()
+        or (not _vol_base and not _vol_model)  # bare VOLUME key → DeepSeek legacy
+        or (_vol_base and "moonshot" not in _vol_base.lower() and "kimi" not in _vol_base.lower())
+    )
+)
+# If VOLUME points at Moonshot, treat as Kimi key alias (not DeepSeek).
+_vol_looks_kimi = bool(
+    _vol_key and (
+        "moonshot" in (_vol_base or "").lower()
+        or "kimi" in (_vol_base or "").lower()
+        or "kimi" in (_vol_model or "").lower()
+    )
+)
+if _vol_looks_kimi and not KIMI_API_KEY:
+    KIMI_API_KEY = _vol_key
+    _KIMI_KEY_SOURCE = "VOLUME_LLM_API_KEY"
+    if _vol_base:
+        KIMI_BASE_URL = _vol_base
+    if _vol_model:
+        KIMI_MODEL = _vol_model
+
+DEEPSEEK_API_KEY = _deepseek_key_explicit or (_vol_key if _vol_looks_deepseek else "")
+_DEEPSEEK_KEY_SOURCE = (
+    "DEEPSEEK_API_KEY" if _deepseek_key_explicit
+    else ("VOLUME_LLM_API_KEY" if DEEPSEEK_API_KEY else "")
+)
+DEEPSEEK_BASE_URL = (
+    _vol_base if (_vol_looks_deepseek and _vol_base) else _DEEPSEEK_DEFAULT_BASE
+)
+DEEPSEEK_MODEL = (
+    _vol_model if (_vol_looks_deepseek and _vol_model) else _DEEPSEEK_DEFAULT_MODEL
 )
 
-# Base URL: explicit VOLUME_LLM_BASE_URL wins; else Moonshot when key is Kimi
-# (or no key yet — defaults assume Kimi); legacy DeepSeek only if key is
-# exclusively VOLUME_LLM_API_KEY with no Kimi key present.
-_vol_base_env = os.environ.get("VOLUME_LLM_BASE_URL", "").strip()
-if _vol_base_env:
-    VOLUME_LLM_BASE_URL = _vol_base_env.rstrip("/")
-elif _kimi_key or not _vol_key_explicit:
-    VOLUME_LLM_BASE_URL = _KIMI_DEFAULT_BASE
-else:
-    VOLUME_LLM_BASE_URL = "https://api.deepseek.com/v1"
-
-_vol_model_env = os.environ.get("VOLUME_LLM_MODEL", "").strip()
-if _vol_model_env:
-    VOLUME_LLM_MODEL = _vol_model_env
-elif "moonshot.ai" in VOLUME_LLM_BASE_URL or "kimi.ai" in VOLUME_LLM_BASE_URL:
-    VOLUME_LLM_MODEL = _KIMI_DEFAULT_MODEL
-else:
-    VOLUME_LLM_MODEL = "deepseek-chat"
+# Back-compat aliases: VOLUME_* = primary cheap host (Kimi if set, else DeepSeek)
+VOLUME_LLM_API_KEY = KIMI_API_KEY or DEEPSEEK_API_KEY
+VOLUME_LLM_BASE_URL = KIMI_BASE_URL if KIMI_API_KEY else DEEPSEEK_BASE_URL
+VOLUME_LLM_MODEL = KIMI_MODEL if KIMI_API_KEY else DEEPSEEK_MODEL
+_VOLUME_KEY_SOURCE = _KIMI_KEY_SOURCE or _DEEPSEEK_KEY_SOURCE
 
 # Env default: on only when a key is present (safe out of the box).
 _VOLUME_ENV_DEFAULT = _optional_env("VOLUME_LLM_ENABLED", "").strip().lower()
@@ -268,53 +302,53 @@ MODEL_TASKS: dict[str, dict] = {
     "full_report": {
         "label": "Full equity report (Analyze)",
         "group": "Research",
-        "allowed": ("grok", "claude", "kimi", "both"),
+        "allowed": ("grok", "claude", "kimi", "deepseek", "both"),
         "default": "grok",
         "note": "Per-run chips can still override. Live web/X only on Grok.",
     },
     "compare": {
         "label": "LLM Lab · compare report",
         "group": "Research",
-        "allowed": ("claude", "grok", "kimi"),
+        "allowed": ("claude", "grok", "kimi", "deepseek"),
         "default": "claude",
         "note": "A/B second engine for an existing report.",
     },
     "podcast_script": {
         "label": "Podcast script (narration engine)",
         "group": "Media",
-        "allowed": ("kimi", "claude", "grok"),
+        "allowed": ("kimi", "deepseek", "claude", "grok"),
         "default": "kimi",
-        "note": "Kimi narrates; Rock=Grok + Claudia=Claude reports feed the debate.",
+        "note": "Kimi narrates by default; Rock=Grok + Claudia=Claude reports.",
     },
     "daily_brief": {
         "label": "Daily Pulse (morning brief)",
         "group": "Desk",
-        "allowed": ("kimi", "grok"),
+        "allowed": ("kimi", "deepseek", "grok"),
         "default": "kimi",
-        "note": "Kimi uses free evidence pack (no live X). Grok uses live search.",
+        "note": "Kimi or DeepSeek = cheap; Grok = live search.",
         "volume": True,
     },
     "intelligence": {
         "label": "Sector intelligence",
         "group": "Desk",
-        "allowed": ("kimi", "grok"),
+        "allowed": ("kimi", "deepseek", "grok"),
         "default": "kimi",
-        "note": "Kimi = volume host; Grok = live search.",
+        "note": "Kimi / DeepSeek cheap path; Grok = live search.",
         "volume": True,
     },
     "prioritize": {
         "label": "Idea Generator · Prioritize",
         "group": "Desk",
-        "allowed": ("kimi", "grok"),
+        "allowed": ("kimi", "deepseek", "grok"),
         "default": "kimi",
         "volume": True,
     },
     "market_pulse": {
         "label": "Market pulse / ticker scan",
         "group": "Desk",
-        "allowed": ("kimi", "grok"),
+        "allowed": ("kimi", "deepseek", "grok"),
         "default": "kimi",
-        "note": "Per-ticker scan. Grok path uses live search (higher cost).",
+        "note": "Per-ticker. Grok path uses live search (higher cost).",
         "volume": True,
     },
     "agentic": {
@@ -335,10 +369,10 @@ MODEL_TASKS: dict[str, dict] = {
 # task_id → provider override from Settings (persisted in kv)
 _task_route_runtime: dict[str, str] = {}
 
-# Official Moonshot/Kimi platform pricing (USD per MTok) — platform.kimi.ai 2026-07.
-# Cache-hit input rate used only when usage reports cached_tokens (best-effort).
+# Official pricing (USD per MTok). Cache-hit used when usage reports cached_tokens.
+# Kimi: platform.kimi.ai 2026-07 · DeepSeek: api-docs.deepseek.com 2026-07 (V4 Flash).
 VOLUME_PRICING_PER_MTOK: dict[str, tuple[float, float]] = {
-    # model_id (prefix match) : (input $/Mtok, output $/Mtok)
+    # ── Kimi / Moonshot (cache-miss input / output) ──
     "kimi-k3":                  (3.00, 15.00),
     "kimi-k2.7-code":           (0.95, 4.00),
     "kimi-k2.7-code-highspeed": (0.95, 4.00),
@@ -346,15 +380,23 @@ VOLUME_PRICING_PER_MTOK: dict[str, tuple[float, float]] = {
     "kimi-k2.5":                (0.60, 3.00),
     "kimi-k2":                  (0.60, 2.50),
     "moonshot-v1":              (0.60, 2.50),
-    # Legacy DeepSeek defaults if someone still points volume there
-    "deepseek-chat":            (0.28, 0.42),
-    "deepseek-reasoner":        (0.55, 2.19),
+    # ── DeepSeek (cache-miss input / output) ──
+    # deepseek-chat / reasoner map to V4 Flash non-thinking / thinking (compat).
+    "deepseek-chat":            (0.14, 0.28),
+    "deepseek-reasoner":        (0.14, 0.28),
+    "deepseek-v4-flash":        (0.14, 0.28),
+    "deepseek-v4-pro":          (0.435, 0.87),
+    "deepseek-v3":              (0.27, 1.10),
 }
 VOLUME_CACHE_HIT_PER_MTOK: dict[str, float] = {
     "kimi-k3": 0.30,
     "kimi-k2.7-code": 0.19,
     "kimi-k2.6": 0.16,
     "kimi-k2.5": 0.10,
+    "deepseek-chat": 0.0028,
+    "deepseek-reasoner": 0.0028,
+    "deepseek-v4-flash": 0.0028,
+    "deepseek-v4-pro": 0.003625,
 }
 
 # Gamma.app folder ID is optional; API key is only required if Gamma generation
@@ -380,17 +422,36 @@ def get_gamma_api_key() -> str:
 
 # ── Volume LLM helpers (Option 4) ───────────────────────────────────────────
 
+def kimi_configured() -> bool:
+    return bool(KIMI_API_KEY and KIMI_BASE_URL and KIMI_MODEL)
+
+
+def deepseek_configured() -> bool:
+    return bool(DEEPSEEK_API_KEY and DEEPSEEK_BASE_URL and DEEPSEEK_MODEL)
+
+
 def volume_llm_configured() -> bool:
-    """True when base URL + API key + model are present."""
-    return bool(VOLUME_LLM_API_KEY and VOLUME_LLM_BASE_URL and VOLUME_LLM_MODEL)
+    """True when at least one cheap host (Kimi or DeepSeek) is configured."""
+    return kimi_configured() or deepseek_configured()
 
 
 def volume_provider_label(model: str | None = None) -> str:
-    """Short provider tag for routes / usage: 'kimi' | 'volume'."""
-    mid = (model or VOLUME_LLM_MODEL or "").lower()
-    base = (VOLUME_LLM_BASE_URL or "").lower()
-    if mid.startswith("kimi") or "moonshot" in mid or "moonshot" in base or "kimi" in base:
+    """Short provider tag for routes / usage: 'kimi' | 'deepseek' | 'volume'."""
+    mid = (model or "").lower()
+    if mid.startswith("kimi") or "moonshot" in mid:
         return "kimi"
+    if mid.startswith("deepseek"):
+        return "deepseek"
+    if kimi_configured() and not deepseek_configured():
+        return "kimi"
+    if deepseek_configured() and not kimi_configured():
+        return "deepseek"
+    # Prefer model currently on VOLUME_* alias
+    base = (VOLUME_LLM_BASE_URL or "").lower()
+    if "moonshot" in base or "kimi" in base:
+        return "kimi"
+    if "deepseek" in base:
+        return "deepseek"
     return "volume"
 
 
@@ -441,15 +502,16 @@ def get_volume_llm_runtime() -> bool | None:
 
 def set_volume_llm_jobs(jobs: dict | None) -> dict[str, bool]:
     """Merge per-job toggles from Settings. Unknown keys ignored.
-    Also mirrors into full task routes (kimi vs grok)."""
+    Also mirrors into full task routes (cheap vs grok)."""
     global _volume_job_runtime, _task_route_runtime
     if not isinstance(jobs, dict):
         return get_volume_llm_jobs()
+    cheap_default = "kimi" if kimi_configured() else "deepseek"
     for k, v in jobs.items():
         kid = str(k or "").strip().lower()
         if kid in VOLUME_LLM_JOBS:
             _volume_job_runtime[kid] = bool(v)
-            _task_route_runtime[kid] = "kimi" if bool(v) else "grok"
+            _task_route_runtime[kid] = cheap_default if bool(v) else "grok"
     return get_volume_llm_jobs()
 
 
@@ -457,7 +519,7 @@ def get_volume_llm_jobs() -> dict[str, bool]:
     out: dict[str, bool] = {}
     for k in VOLUME_LLM_JOBS:
         if k in _task_route_runtime:
-            out[k] = _task_route_runtime[k] in ("kimi", "volume")
+            out[k] = _task_route_runtime[k] in ("kimi", "deepseek", "volume")
         else:
             out[k] = bool(_volume_job_runtime.get(k, True))
     return out
@@ -483,10 +545,10 @@ def volume_llm_enabled() -> bool:
 
 
 def volume_llm_enabled_for(job: str | None) -> bool:
-    """True when this volume job should use Kimi. Uses full task router when set."""
+    """True when this volume job should use Kimi or DeepSeek (not Grok)."""
     kid = (job or "").strip().lower()
     if kid and kid in MODEL_TASKS:
-        return get_task_route(kid) in ("kimi", "volume")
+        return get_task_route(kid) in ("kimi", "deepseek", "volume")
     if not volume_llm_enabled():
         return False
     if not kid or kid not in VOLUME_LLM_JOBS:
@@ -502,18 +564,20 @@ def _provider_key_set(env_names: tuple[str, ...]) -> bool:
 
 
 def providers_catalog() -> dict[str, dict]:
-    """All wired LLM providers (no secrets) for Settings UI."""
+    """All wired LLM providers (no secrets) for Settings UI.
+
+    Kimi and DeepSeek are always listed as separate cards — never merged.
+    """
     g_model = GROK_MODEL
     c_model = CLAUDE_MODEL
-    v_model = VOLUME_LLM_MODEL
     g_in, g_out = grok_rates(g_model)
     try:
         c_table = globals().get("CLAUDE_PRICING_PER_MTOK") or {}
         c_in, c_out = c_table.get(c_model, (5.0, 25.0))
     except Exception:
         c_in, c_out = (5.0, 25.0)
-    v_in, v_out = volume_rates(v_model)
-    prov_vol = volume_provider_label()
+    k_in, k_out = volume_rates(KIMI_MODEL)
+    d_in, d_out = volume_rates(DEEPSEEK_MODEL)
     return {
         "grok": {
             "id": "grok",
@@ -537,15 +601,29 @@ def providers_catalog() -> dict[str, dict]:
         },
         "kimi": {
             "id": "kimi",
-            "label": "Kimi K3 (Moonshot)" if prov_vol == "kimi" else "Volume LLM",
-            "model": v_model,
-            "configured": volume_llm_configured(),
-            "key_env": _VOLUME_KEY_SOURCE or "KIMI_API_KEY",
-            "base_url": VOLUME_LLM_BASE_URL,
-            "rates_usd_per_mtok": {"input": v_in, "output": v_out},
+            "label": "Kimi K3 (Moonshot)",
+            "model": KIMI_MODEL,
+            "configured": kimi_configured(),
+            "key_env": _KIMI_KEY_SOURCE or "KIMI_API_KEY",
+            "base_url": KIMI_BASE_URL,
+            "rates_usd_per_mtok": {"input": k_in, "output": k_out},
             "live_search": False,
-            "master_enabled": volume_llm_enabled(),
-            "capabilities": ["desk", "volume"],
+            "master_enabled": volume_llm_enabled() if kimi_configured() else False,
+            "capabilities": ["reports", "desk", "volume", "podcast"],
+            "note": "Separate from DeepSeek. Official Moonshot platform pricing.",
+        },
+        "deepseek": {
+            "id": "deepseek",
+            "label": "DeepSeek (V4 Flash)",
+            "model": DEEPSEEK_MODEL,
+            "configured": deepseek_configured(),
+            "key_env": _DEEPSEEK_KEY_SOURCE or "DEEPSEEK_API_KEY",
+            "base_url": DEEPSEEK_BASE_URL,
+            "rates_usd_per_mtok": {"input": d_in, "output": d_out},
+            "live_search": False,
+            "master_enabled": volume_llm_enabled() if deepseek_configured() else False,
+            "capabilities": ["reports", "desk", "volume"],
+            "note": "Separate from Kimi. deepseek-chat → V4 Flash compat rates.",
         },
         "both": {
             "id": "both",
@@ -567,9 +645,25 @@ def providers_catalog() -> dict[str, dict]:
 def default_task_route(task_id: str) -> str:
     meta = MODEL_TASKS.get(task_id) or {}
     d = str(meta.get("default") or "grok")
-    if d in ("kimi", "volume") and not volume_llm_configured():
+    if d == "kimi" and not kimi_configured():
+        if deepseek_configured() and "deepseek" in (meta.get("allowed") or ()):
+            return "deepseek"
         return "grok"
+    if d == "deepseek" and not deepseek_configured():
+        if kimi_configured() and "kimi" in (meta.get("allowed") or ()):
+            return "kimi"
+        return "grok"
+    if d == "volume":
+        return "kimi" if kimi_configured() else ("deepseek" if deepseek_configured() else "grok")
     return d
+
+
+def _cheap_provider_ok(prov: str) -> bool:
+    if prov == "kimi":
+        return kimi_configured() and volume_llm_enabled()
+    if prov == "deepseek":
+        return deepseek_configured() and volume_llm_enabled()
+    return True
 
 
 def get_task_route(task_id: str) -> str:
@@ -592,15 +686,20 @@ def get_task_route(task_id: str) -> str:
         else:
             r = default_task_route(kid)
     if r == "volume":
-        r = "kimi"
+        r = "kimi" if kimi_configured() else "deepseek"
     if r not in allowed:
         r = default_task_route(kid)
         if r not in allowed:
             r = allowed[0]
-    if r == "kimi" and meta.get("volume") and not volume_llm_enabled():
-        r = "grok" if "grok" in allowed else allowed[0]
-    if r == "kimi" and not volume_llm_configured():
-        r = "grok" if "grok" in allowed else allowed[0]
+    # Cheap providers need key + master
+    if r in ("kimi", "deepseek") and not _cheap_provider_ok(r):
+        # Prefer the other cheap host, else Grok
+        if r == "kimi" and deepseek_configured() and "deepseek" in allowed and volume_llm_enabled():
+            r = "deepseek"
+        elif r == "deepseek" and kimi_configured() and "kimi" in allowed and volume_llm_enabled():
+            r = "kimi"
+        else:
+            r = "grok" if "grok" in allowed else allowed[0]
     return r
 
 
@@ -615,13 +714,13 @@ def set_task_routes(routes: dict | None) -> dict[str, str]:
             continue
         prov = str(v or "").lower().strip()
         if prov == "volume":
-            prov = "kimi"
+            prov = "kimi" if kimi_configured() else "deepseek"
         allowed = tuple(MODEL_TASKS[kid].get("allowed") or ())
         if prov not in allowed:
             continue
         _task_route_runtime[kid] = prov
         if kid in VOLUME_LLM_JOBS:
-            _volume_job_runtime[kid] = prov == "kimi"
+            _volume_job_runtime[kid] = prov in ("kimi", "deepseek")
     return {k: get_task_route(k) for k in MODEL_TASKS}
 
 
@@ -666,6 +765,8 @@ def model_routing_status() -> dict:
         "grok_model": GROK_MODEL,
         "claude_model": CLAUDE_MODEL,
         "volume_model": VOLUME_LLM_MODEL,
+        "kimi_model": KIMI_MODEL,
+        "deepseek_model": DEEPSEEK_MODEL,
         "agentic_model": os.environ.get("AGENTIC_MODEL", "").strip() or CLAUDE_MODEL,
     }
 
@@ -690,9 +791,16 @@ def volume_llm_status() -> dict:
         "base_url": VOLUME_LLM_BASE_URL,
         "model": VOLUME_LLM_MODEL,
         "provider": prov,
-        "provider_label": "Kimi K3" if prov == "kimi" else "Volume LLM",
+        "provider_label": (
+            "Kimi K3" if prov == "kimi"
+            else ("DeepSeek" if prov == "deepseek" else "Volume LLM")
+        ),
         "has_api_key": bool(VOLUME_LLM_API_KEY),
         "key_source": _VOLUME_KEY_SOURCE or None,
+        "kimi_configured": kimi_configured(),
+        "deepseek_configured": deepseek_configured(),
+        "kimi_model": KIMI_MODEL,
+        "deepseek_model": DEEPSEEK_MODEL,
         "rates_usd_per_mtok": {"input": inp_r, "output": out_r},
         "jobs": jobs,
         "job_labels": dict(_VOLUME_JOB_LABELS),
@@ -703,29 +811,54 @@ def volume_llm_status() -> dict:
     }
 
 
-def _volume_client():
+def _provider_client(provider: str):
+    """OpenAI-compatible client for kimi | deepseek."""
     from openai import OpenAI
-    if not volume_llm_configured():
-        raise RuntimeError(
-            "Volume LLM not configured. Set KIMI_API_KEY (or VOLUME_LLM_API_KEY) "
-            "on Railway, optional VOLUME_LLM_BASE_URL / VOLUME_LLM_MODEL, "
-            "or roll back to Grok in Settings."
-        )
-    return OpenAI(api_key=VOLUME_LLM_API_KEY, base_url=VOLUME_LLM_BASE_URL)
+    p = (provider or "").lower().strip()
+    if p in ("kimi", "volume") or (p == "" and kimi_configured()):
+        if not kimi_configured():
+            raise RuntimeError(
+                "Kimi not configured. Set KIMI_API_KEY on Railway "
+                "(base https://api.moonshot.ai/v1, model kimi-k3)."
+            )
+        return OpenAI(api_key=KIMI_API_KEY, base_url=KIMI_BASE_URL), KIMI_MODEL, "kimi"
+    if p == "deepseek":
+        if not deepseek_configured():
+            raise RuntimeError(
+                "DeepSeek not configured. Set DEEPSEEK_API_KEY (or VOLUME_LLM_API_KEY "
+                "with DeepSeek base) on Railway."
+            )
+        return OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL), DEEPSEEK_MODEL, "deepseek"
+    raise RuntimeError(f"Unknown cheap provider: {provider!r}")
+
+
+def _volume_client():
+    """Legacy: prefer Kimi, else DeepSeek."""
+    client, _, _ = _provider_client("kimi" if kimi_configured() else "deepseek")
+    return client
 
 
 def call_volume_llm(system_prompt: str, user_content: str,
                     model: str | None = None,
                     *,
+                    provider: str | None = None,
                     temperature: float = 0.3,
                     usage_capture=None) -> str:
-    """Call the volume OpenAI-compatible model (default Kimi K3). No live web/X.
+    """Call Kimi or DeepSeek (OpenAI-compat). No live web/X.
 
-    Full reports and podcasts must NOT call this — keep them on Grok/Claude.
-    Usage is cost-tracked like Grok/Claude via estimate_volume_cost.
+    ``provider``: 'kimi' | 'deepseek' (default: kimi if configured else deepseek).
+    Usage is cost-tracked via estimate_volume_cost.
     """
-    mid = model or VOLUME_LLM_MODEL
-    client = _volume_client()
+    p = (provider or "").lower().strip()
+    if not p:
+        if model:
+            p = volume_provider_label(model)
+        else:
+            p = "kimi" if kimi_configured() else "deepseek"
+    if p == "volume":
+        p = "kimi" if kimi_configured() else "deepseek"
+    client, default_model, prov_id = _provider_client(p)
+    mid = model or default_model
     resp = client.chat.completions.create(
         model=mid,
         temperature=temperature,
@@ -740,7 +873,6 @@ def call_volume_llm(system_prompt: str, user_content: str,
             u = getattr(resp, "usage", None)
             inp = int(getattr(u, "prompt_tokens", 0) or 0)
             out = int(getattr(u, "completion_tokens", 0) or 0)
-            # OpenAI-compat optional prompt_tokens_details.cached_tokens
             cached = 0
             try:
                 ptd = getattr(u, "prompt_tokens_details", None)
@@ -751,7 +883,7 @@ def call_volume_llm(system_prompt: str, user_content: str,
             cost = estimate_volume_cost(mid, inp, out, cached_input_tokens=cached)
             usage_capture({
                 "model": mid,
-                "provider": volume_provider_label(mid),
+                "provider": prov_id,
                 "input_tokens": inp,
                 "output_tokens": out,
                 "cached_input_tokens": cached,
@@ -760,7 +892,7 @@ def call_volume_llm(system_prompt: str, user_content: str,
         except Exception as _e:
             print(f"⚠️  [call_volume_llm] usage capture failed: {_e!s:.120}", flush=True)
     if not text:
-        raise RuntimeError(f"Volume LLM ({mid}) returned empty content")
+        raise RuntimeError(f"{prov_id} ({mid}) returned empty content")
     return text
 
 
@@ -772,26 +904,25 @@ def call_volume_or_grok(system_prompt: str, user_content: str,
                         volume_model: str | None = None,
                         grok_live_on_fallback: bool = True,
                         usage_capture=None) -> tuple[str, str]:
-    """Route a volume job: Kimi/volume when that job's toggle is on, else Grok.
+    """Route a volume job: Kimi/DeepSeek when that job's route says so, else Grok.
 
-    ``job`` should be one of VOLUME_LLM_JOBS (daily_brief, intelligence,
-    prioritize, market_pulse). Missing job → master switch only.
-
-    Returns (text, provider_label) where provider_label is 'kimi' | 'volume' | 'grok'.
-    On volume failure, falls back to Grok once (logged). Full reports / podcast
-    must never call this — they stay on call_grok / call_claude directly.
+    Returns (text, provider_label) where provider_label is
+    'kimi' | 'deepseek' | 'grok'.
     """
-    if volume_llm_enabled_for(job):
+    route = get_task_route(job) if job else (
+        "kimi" if volume_llm_enabled() and kimi_configured() else "grok"
+    )
+    if route in ("kimi", "deepseek", "volume"):
         try:
             text = call_volume_llm(
                 system_prompt, user_content,
                 model=volume_model,
+                provider="kimi" if route == "volume" else route,
                 usage_capture=usage_capture,
             )
-            return text, volume_provider_label(volume_model or VOLUME_LLM_MODEL)
+            return text, ("kimi" if route == "volume" else route)
         except Exception as e:
-            print(f"⚠️  Volume LLM ({VOLUME_LLM_MODEL}) failed ({e!s:.160}); "
-                  f"falling back to Grok…", flush=True)
+            print(f"⚠️  {route} LLM failed ({e!s:.160}); falling back to Grok…", flush=True)
             live_search = bool(grok_live_on_fallback)
     text = call_grok(
         system_prompt, user_content,
@@ -7218,15 +7349,19 @@ def call_llm(provider: str, system_prompt: str, user_content: str,
         return call_claude(system_prompt, user_content, on_delta=on_delta,
                            usage_capture=usage_capture,
                            should_cancel=should_cancel)
-    if p in ("kimi", "volume"):
+    if p in ("kimi", "volume", "deepseek"):
         if should_cancel is not None and should_cancel():
             raise ClaudeCancelled("cancelled before LLM call")
-        if not volume_llm_configured():
+        prov = "kimi" if p == "volume" else p
+        if prov == "kimi" and not kimi_configured():
+            raise RuntimeError("Kimi not configured. Set KIMI_API_KEY on Railway.")
+        if prov == "deepseek" and not deepseek_configured():
             raise RuntimeError(
-                "Kimi / volume LLM not configured. Set KIMI_API_KEY on Railway."
+                "DeepSeek not configured. Set DEEPSEEK_API_KEY (or VOLUME_LLM_API_KEY) on Railway."
             )
         return call_volume_llm(
             system_prompt, user_content,
+            provider=prov,
             usage_capture=usage_capture,
         )
     if p == "grok":
@@ -8122,14 +8257,16 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
     # "{ticker}_DGA_Report_{provider}.md/.docx" so they don't overwrite Grok.
     _prov = (llm_provider or "grok").lower().strip()
     if _prov == "volume":
-        _prov = "kimi"
+        _prov = "kimi" if kimi_configured() else "deepseek"
     _suffix = "" if _prov == "grok" else f"_{_prov}"
     if _prov == "grok":
         _model_label = GROK_MODEL
     elif _prov == "claude":
         _model_label = CLAUDE_MODEL
     elif _prov == "kimi":
-        _model_label = VOLUME_LLM_MODEL
+        _model_label = KIMI_MODEL
+    elif _prov == "deepseek":
+        _model_label = DEEPSEEK_MODEL
     else:
         _model_label = _prov
     _live = (_prov == "grok")

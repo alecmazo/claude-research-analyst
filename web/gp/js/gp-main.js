@@ -291,10 +291,18 @@
       report_kimi: {
         action: 'Full equity report',
         provider: 'kimi',
-        model: (vol && vol.model) || (cfg.routing && cfg.routing.volume_model) || 'kimi-k3',
-        cost: _llmRng(est.kimi_report || est.daily_brief_volume, '≈ $0.10–0.40'),
+        model: (cfg.routing && cfg.routing.kimi_model) || (vol && vol.kimi_model) || 'kimi-k3',
+        cost: _llmRng(est.kimi_report, '≈ $0.15–0.60'),
         paid: true,
-        note: 'Kimi K3 · grounded in SEC/yfinance pack (no live X)',
+        note: 'Kimi K3 (Moonshot) · not DeepSeek · SEC pack, no live X',
+      },
+      report_deepseek: {
+        action: 'Full equity report',
+        provider: 'deepseek',
+        model: (cfg.routing && cfg.routing.deepseek_model) || 'deepseek-chat',
+        cost: _llmRng(est.deepseek_report || [0.01, 0.05], '≈ $0.01–0.05'),
+        paid: true,
+        note: 'DeepSeek V4 Flash · not Kimi · SEC pack, no live X',
       },
       report_both: {
         action: 'Full equity report (both engines)',
@@ -472,6 +480,7 @@
         const eng = (document.getElementById('hero-llm') || {}).value || 'grok';
         act = eng === 'claude' ? 'report_claude'
           : eng === 'kimi' ? 'report_kimi'
+          : eng === 'deepseek' ? 'report_deepseek'
           : eng === 'both' ? 'report_both' : 'report_grok';
       }
       llmStampControl(el, act);
@@ -5278,6 +5287,7 @@
     const eng = document.getElementById('hero-llm')?.value || 'grok';
     const act = eng === 'claude' ? 'report_claude'
       : eng === 'kimi' ? 'report_kimi'
+      : eng === 'deepseek' ? 'report_deepseek'
       : eng === 'both' ? 'report_both' : 'report_grok';
     const meta = llmDescribe(act);
     $heroBtn.disabled = true;
@@ -5396,8 +5406,11 @@
     const k = (_HERO_MODELS.volume && _HERO_MODELS.volume.model)
       || (_HERO_MODELS.routing && _HERO_MODELS.routing.volume_model)
       || 'kimi-k3';
+    const ds = (_HERO_MODELS.routing && _HERO_MODELS.routing.deepseek_model)
+      || 'deepseek-chat';
     tag.textContent = eng === 'claude' ? c
       : eng === 'kimi' ? k
+      : eng === 'deepseek' ? ds
       : eng === 'both' ? (g + ' + ' + c) : g;
   }
   (async function _loadHeroModels() {
@@ -5429,8 +5442,8 @@
         if (est.grok_report)   _HERO_COST_EST.grok   = rng(est.grok_report);
         if (est.claude_report) _HERO_COST_EST.claude = rng(est.claude_report);
         if (est.both_report)   _HERO_COST_EST.both   = rng(est.both_report);
-        if (est.kimi_report)   _HERO_COST_EST.kimi   = rng(est.kimi_report);
-        else if (est.daily_brief_volume) _HERO_COST_EST.kimi = rng(est.daily_brief_volume);
+        if (est.kimi_report)     _HERO_COST_EST.kimi     = rng(est.kimi_report);
+        if (est.deepseek_report) _HERO_COST_EST.deepseek = rng(est.deepseek_report);
         if (est.pulse_per_ticker) _PULSE_COST_PER_TICKER = est.pulse_per_ticker;
         if (typeof _updateHeroCost === 'function') _updateHeroCost();
         if (typeof _PULSE_PREFIXES !== 'undefined')
@@ -5449,7 +5462,10 @@
   const $heroLlm   = document.getElementById('hero-llm');
   const $heroGamma2 = document.getElementById('hero-gamma');
   const $heroCost  = document.getElementById('hero-cost-est');
-  let _HERO_COST_EST = { grok: '$0.30–0.60', claude: '$0.50–1.00', kimi: '$0.10–0.40', both: '$0.80–1.60' };
+  let _HERO_COST_EST = {
+    grok: '$0.30–0.60', claude: '$0.50–1.00',
+    kimi: '$0.15–0.60', deepseek: '$0.01–0.05', both: '$0.80–1.60',
+  };
   function _updateHeroCost() {
     if (!$heroCost) return;
     const eng = ($heroLlm && $heroLlm.value) || 'grok';
@@ -13485,20 +13501,23 @@
       if (id === 'grok') return { bg: '#e0f2fe', fg: '#0369a1', border: '#7dd3fc' };
       if (id === 'claude') return { bg: '#f3e8ff', fg: '#6b21a8', border: '#d8b4fe' };
       if (id === 'kimi') return { bg: '#dcfce7', fg: '#166534', border: '#86efac' };
+      if (id === 'deepseek') return { bg: '#e0e7ff', fg: '#3730a3', border: '#a5b4fc' };
       if (id === 'both') return { bg: '#fef3c7', fg: '#92400e', border: '#fcd34d' };
       return { bg: '#f1f5f9', fg: '#475569', border: '#e2e8f0' };
     }
 
     function renderProviders(providers) {
       if (!$prov) return;
-      const order = ['grok', 'claude', 'kimi', 'both'];
+      // Five distinct cards — Kimi and DeepSeek are never merged
+      const order = ['grok', 'claude', 'kimi', 'deepseek', 'both'];
       const cards = order.map(function (id) {
         const p = (providers || {})[id];
         if (!p) return '';
         const c = _provColor(id);
         const ok = !!p.configured;
         const rates = _rateLine(p.rates_usd_per_mtok);
-        const master = id === 'kimi' && p.master_enabled === false ? ' · master OFF' : '';
+        const master = ((id === 'kimi' || id === 'deepseek') && p.master_enabled === false)
+          ? ' · master OFF' : '';
         return '<div style="border:1px solid ' + c.border + ';background:' + c.bg
           + ';border-radius:10px;padding:10px 12px;">'
           + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">'
@@ -13512,7 +13531,9 @@
           + _esc(p.model || '—') + '</div>'
           + '<div style="font-size:10px;color:#64748b;margin-top:3px;">' + rates
           + (p.live_search ? ' · live search' : '') + '</div>'
+          + (p.base_url ? '<div style="font-size:9px;color:#94a3b8;margin-top:2px;">' + _esc(p.base_url) + '</div>' : '')
           + (p.key_env ? '<div style="font-size:9px;color:#94a3b8;margin-top:2px;">env ' + _esc(p.key_env) + '</div>' : '')
+          + (p.note ? '<div style="font-size:9px;color:#64748b;margin-top:3px;line-height:1.3;">' + _esc(p.note) + '</div>' : '')
           + '</div>';
       }).join('');
       $prov.innerHTML = cards || '<div style="font-size:11px;color:#94a3b8;">No providers.</div>';

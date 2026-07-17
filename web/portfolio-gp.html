@@ -542,12 +542,14 @@ End with the sleeve block at this account's real market value so I can push it t
             <option value="grok"   selected>Grok (default · live search)</option>
             <option value="claude">Claude</option>
             <option value="kimi">Kimi K3</option>
+            <option value="deepseek">DeepSeek</option>
             <option value="both">Both Grok+Claude (~5 min)</option>
           </select>
           <span id="hero-llm-chips" style="display:inline-flex;gap:4px;flex-wrap:wrap;">
             <button type="button" class="hero-llm-chip active" data-llm="grok" title="Grok · live web/X">Grok</button>
             <button type="button" class="hero-llm-chip" data-llm="claude" title="Claude">Claude</button>
-            <button type="button" class="hero-llm-chip" data-llm="kimi" title="Kimi K3 · Moonshot">Kimi</button>
+            <button type="button" class="hero-llm-chip" data-llm="kimi" title="Kimi K3 · Moonshot (not DeepSeek)">Kimi</button>
+            <button type="button" class="hero-llm-chip" data-llm="deepseek" title="DeepSeek V4 Flash (not Kimi)">DeepSeek</button>
             <button type="button" class="hero-llm-chip" data-llm="both" title="Both Grok + Claude">Both</button>
           </span>
           <span id="hero-model-tag" title="The exact model this engine will call (live from server config)"
@@ -2085,9 +2087,11 @@ End with the sleeve block at this account's real market value so I can push it t
           </div>
 
           <div class="settings-help" style="margin-top:10px;padding:8px 10px;background:var(--gray-50,#f8fafc);border:1px solid var(--border-subtle,#e2e8f0);border-radius:8px;">
-            Keys: <code>XAI_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, <code>KIMI_API_KEY</code>.
-            Optional: <code>GROK_MODEL</code>, <code>CLAUDE_MODEL</code>, <code>VOLUME_LLM_MODEL</code> (default <code>kimi-k3</code>),
-            <code>AGENTIC_MODEL</code>.
+            Keys (separate providers): <code>XAI_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>,
+            <code>KIMI_API_KEY</code> (Moonshot · kimi-k3 · $3/$15 MTok),
+            <code>DEEPSEEK_API_KEY</code> (or legacy <code>VOLUME_LLM_API_KEY</code> · deepseek-chat · $0.14/$0.28 MTok).
+            Optional: <code>GROK_MODEL</code>, <code>CLAUDE_MODEL</code>, <code>KIMI_MODEL</code>, <code>AGENTIC_MODEL</code>.
+            <strong>Kimi ≠ DeepSeek</strong> — pick either per task below.
           </div>
         </div>
       </section>
