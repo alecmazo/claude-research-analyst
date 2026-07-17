@@ -991,25 +991,59 @@ def earnings_card(symbol: str, horizon_days: int = 5,
     except Exception as e:
         print(f"[market_data] calendar context {sym}: {e!s:.100}", flush=True)
 
-    # Actual quarterly revenue (+ EPS fallback) from Yahoo income stmt (free)
+    # Actual quarterly revenue (+ EPS fallback) from Yahoo income stmt (free).
+    # CRITICAL: never treat a prior filed quarter's statement as "this" print
+    # when the calendar event is still in the future (TSLA ticket 68525f84 —
+    # card showed $0.13 actual for a Jun/2026 print still days away).
     actuals: dict = {}
+    event_still_future = False
+    if upcoming:
+        try:
+            du_chk = int(upcoming.get("days_until")) if upcoming.get("days_until") is not None else None
+        except (TypeError, ValueError):
+            du_chk = None
+        if du_chk is not None and du_chk > 0:
+            event_still_future = True
+        elif du_chk == 0 and not _earnings_report_window_passed(
+                str(upcoming.get("date") or ""), session):
+            event_still_future = True
+
     try:
         fq_hint = (
             (upcoming or {}).get("fiscal_quarter")
             or (result or {}).get("fiscal_quarter")
             or ""
         )
-        actuals = yfinance_quarterly_actuals(sym, fiscal_quarter_hint=fq_hint) or {}
+        # Only pull statement actuals when print window is open/past —
+        # never for pure future events.
+        if not event_still_future:
+            actuals = yfinance_quarterly_actuals(sym, fiscal_quarter_hint=fq_hint) or {}
+            if actuals and fq_hint and not _fiscal_quarter_labels_match(
+                    fq_hint, actuals.get("period_label") or ""):
+                actuals = {}
     except Exception as e:
         print(f"[market_data] quarterly actuals {sym}: {e!s:.100}", flush=True)
 
-    eps_actual_final = (result or {}).get("eps_actual")
-    if eps_actual_final is None and actuals.get("eps_actual") is not None:
-        eps_actual_final = actuals.get("eps_actual")
-        if status in ("scheduled", "pending_update", "unknown") and eps_actual_final is not None:
-            status = "reported"
-            result_source = (result_source or "") + "+yf_stmt" if result_source else "yf_stmt"
-    rev_actual = actuals.get("revenue_actual")
+    # Future print: never show actuals / beat / miss for this event
+    if event_still_future:
+        result = None
+        status = "scheduled"
+        beat = None
+        surprise_pct = None
+        eps_actual_final = None
+        rev_actual = None
+    else:
+        eps_actual_final = (result or {}).get("eps_actual")
+        # Statement fill-in only after a real report match or post-window pending
+        if (eps_actual_final is None and actuals.get("eps_actual") is not None
+                and status in ("reported", "pending_update")):
+            eps_actual_final = actuals.get("eps_actual")
+            if status == "pending_update":
+                status = "reported"
+                result_source = (
+                    (result_source or "") + "+yf_stmt" if result_source else "yf_stmt"
+                )
+        rev_actual = actuals.get("revenue_actual")
     rev_estimate = street_range.get("revenue_avg")
     rev_surprise_pct = None
     rev_beat = None
@@ -1099,11 +1133,43 @@ def earnings_card(symbol: str, horizon_days: int = 5,
     }
 
 
+def _fiscal_quarter_labels_match(hint: str, label: str) -> bool:
+    """True if calendar fiscal hint (e.g. 'Jun/2026') matches a period label ('Jun 2026')."""
+    import re
+    h = (hint or "").replace("/", " ").strip().lower()
+    lab = (label or "").replace("/", " ").strip().lower()
+    if not h or not lab:
+        return False
+    # Extract month token + 4-digit year from both
+    months = ("jan", "feb", "mar", "apr", "may", "jun",
+              "jul", "aug", "sep", "oct", "nov", "dec")
+    def _parts(s: str):
+        m = next((x for x in months if x in s), None)
+        ys = re.findall(r"20\d{2}", s)
+        y = ys[-1] if ys else None
+        return m, y
+    hm, hy = _parts(h)
+    lm, ly = _parts(lab)
+    if hy and ly and hy != ly:
+        return False
+    if hm and lm and hm != lm:
+        return False
+    # If both have month+year and they match
+    if hm and hy and lm and ly:
+        return hm == lm and hy == ly
+    # Fallback: year match + month substring
+    if hy and hy in lab and (not hm or hm in lab):
+        return True
+    return False
+
+
 def yfinance_quarterly_actuals(symbol: str, fiscal_quarter_hint: str = "") -> dict:
     """Actual diluted EPS + total revenue from Yahoo quarterly income statement.
 
     Free, no LLM. Matches fiscal_quarter_hint (e.g. 'Jun 2026' / 'Jun/2026')
-    when possible; otherwise the most recent quarter with non-null EPS or revenue.
+    when possible. If a hint is given and no column matches that quarter,
+    returns {} — never a different quarter's actuals (avoids pre-print false MISS).
+    Without a hint, returns the most recent quarter with non-null EPS or revenue.
     """
     import time as _time
     from datetime import datetime
@@ -1154,17 +1220,14 @@ def yfinance_quarterly_actuals(symbol: str, fiscal_quarter_hint: str = "") -> di
             except Exception:
                 return ""
 
-        hint = (fiscal_quarter_hint or "").replace("/", " ").strip().lower()
-        # Prefer columns matching the fiscal quarter hint
+        hint = (fiscal_quarter_hint or "").replace("/", " ").strip()
         cols = list(df.columns)
-        ordered = cols
-        if hint:
-            matched = [c for c in cols if hint[:3] in _label(c).lower()
-                       or any(tok in _label(c).lower() for tok in hint.split() if len(tok) >= 3)]
-            if matched:
-                ordered = matched + [c for c in cols if c not in matched]
+        require_match = bool(hint)
 
-        for col in ordered:
+        for col in cols:
+            lab = _label(col)
+            if require_match and not _fiscal_quarter_labels_match(hint, lab):
+                continue
             rev = None
             eps = None
             for rev_key in ("Total Revenue", "Operating Revenue", "TotalRevenue", "Revenue"):
@@ -1181,15 +1244,16 @@ def yfinance_quarterly_actuals(symbol: str, fiscal_quarter_hint: str = "") -> di
                 continue
             out = {
                 "period_end": _iso(col),
-                "period_label": _label(col),
+                "period_label": lab,
                 "revenue_actual": rev,
                 "eps_actual": eps,
                 "source": "yfinance_quarterly_income",
+                "matched_hint": require_match,
             }
-            # If we matched the hint quarter, stop; else keep first non-empty
-            if not hint or col in (matched if hint else []):
-                break
             break
+        # No matching quarter for a strict hint → empty (do not fall back)
+        if require_match and not out:
+            out = {}
     except Exception as e:
         print(f"[market_data] yf quarterly actuals {sym}: {e!s:.120}", flush=True)
         out = {}
