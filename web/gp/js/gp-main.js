@@ -239,8 +239,48 @@
     grok: 'grok',
     claude: 'claude',
     volume: { enabled: false, model: '—', configured: false },
+    routing: {},
+    routes: {},
     est: {},
   };
+
+  /**
+   * Normalize /api/config/models or model-routing payloads into window.DGA_LLM
+   * so every desk control reads the same Settings → Models routes.
+   */
+  function applyLlmCatalog(src) {
+    if (!src || typeof src !== 'object') return;
+    const prev = window.DGA_LLM || {};
+    // models endpoint: { grok, claude, volume, routing, est }
+    // model-routing: { providers, tasks, routes, volume, grok_model, ... }
+    const routing = src.routing
+      || (src.routes || src.tasks ? src : null)
+      || prev.routing
+      || {};
+    const vol = src.volume || routing.volume || prev.volume || {};
+    // Prefer authoritative model-routing.routes over volume's job map
+    const routes = (routing && routing.routes && Object.keys(routing.routes).length
+        ? routing.routes : null)
+      || (src.routes && Object.keys(src.routes).length ? src.routes : null)
+      || (vol.task_routes && Object.keys(vol.task_routes).length ? vol.task_routes : null)
+      || (vol.routes && Object.keys(vol.routes).length ? vol.routes : null)
+      || prev.routes
+      || {};
+    window.DGA_LLM = Object.assign({}, prev, {
+      grok: src.grok || routing.grok_model || prev.grok,
+      claude: src.claude || routing.claude_model || prev.claude,
+      agentic: src.agentic || routing.agentic_model || prev.agentic,
+      volume: Object.assign({}, prev.volume || {}, vol, {
+        // Always mirror full task routes so desk never sees stale kimi-only map
+        routes: routes,
+        task_routes: routes,
+      }),
+      routing: Object.assign({}, prev.routing || {}, routing, { routes: routes }),
+      routes: routes,
+      est: src.est || prev.est || {},
+    });
+  }
+  window.applyLlmCatalog = applyLlmCatalog;
 
   function _llmRng(arr, fallback) {
     if (Array.isArray(arr) && arr.length >= 2 && arr[0] != null)
@@ -249,28 +289,73 @@
     return fallback || '≈ cost varies';
   }
 
-  /** Describe an LLM action for UI. Keys: report_grok|report_claude|report_both|
-   *  daily_brief|intelligence|prioritize|pulse|agentic|strategist|lab_claude|podcast */
+  /** Describe an LLM action for UI. Always mirrors Settings → Models routes. */
   function llmDescribe(action) {
     const cfg = window.DGA_LLM || {};
     const est = cfg.est || {};
     const vol = cfg.volume || {};
-    const volMaster = !!(vol.enabled && vol.configured);
-    const volRoutes = vol.routes || {};
-    const volJobs = vol.jobs || {};
-    const taskRoutes = cfg.routes || (cfg.routing && cfg.routing.routes) || {};
-    /** Resolved desk route: kimi/volume vs grok. */
-    function volFor(jobId) {
-      const tr = taskRoutes[jobId] || volRoutes[jobId];
-      if (tr) return tr === 'kimi' || tr === 'volume';
-      if (!volMaster) return false;
-      if (jobId in volJobs) return volJobs[jobId] !== false;
-      return true;
-    }
+    // Prefer full task routes from model-routing (authoritative Settings state)
+    const taskRoutes = (cfg.routing && cfg.routing.routes)
+      || cfg.routes
+      || (vol && vol.task_routes)
+      || (vol && vol.routes)
+      || {};
     function routeOf(taskId, fallback) {
-      return taskRoutes[taskId] || volRoutes[taskId] || fallback;
+      let r = taskRoutes[taskId];
+      if (r == null || r === '') r = fallback;
+      r = String(r || fallback || 'grok').toLowerCase();
+      if (r === 'volume') r = 'kimi';
+      return r;
     }
-    const volModel = vol.model || 'kimi-k3';
+    function modelFor(provider) {
+      const p = (provider || '').toLowerCase();
+      if (p === 'grok') return cfg.grok || 'grok';
+      if (p === 'claude') return cfg.claude || cfg.agentic || 'claude';
+      if (p === 'kimi') {
+        return (cfg.routing && cfg.routing.kimi_model)
+          || vol.kimi_model
+          || 'kimi-k3';
+      }
+      if (p === 'deepseek') {
+        return (cfg.routing && cfg.routing.deepseek_model)
+          || vol.deepseek_model
+          || 'deepseek-chat';
+      }
+      return p || '—';
+    }
+    /** Desk job meta from Settings route (kimi | deepseek | grok). */
+    function deskMeta(taskId, labels, costs) {
+      const p = routeOf(taskId, 'grok');
+      const mid = modelFor(p);
+      if (p === 'kimi') {
+        return {
+          action: labels.kimi || labels.base,
+          provider: 'kimi',
+          model: mid,
+          cost: _llmRng(costs.cheap, costs.cheapFb),
+          paid: true,
+          note: labels.kimiNote || 'Settings → Models · Kimi K3',
+        };
+      }
+      if (p === 'deepseek') {
+        return {
+          action: labels.deepseek || labels.base,
+          provider: 'deepseek',
+          model: mid,
+          cost: _llmRng(costs.cheap, costs.cheapFb),
+          paid: true,
+          note: labels.dsNote || 'Settings → Models · DeepSeek',
+        };
+      }
+      return {
+        action: labels.grok || labels.base,
+        provider: 'grok',
+        model: (mid || cfg.grok || 'grok') + (labels.grokSuffix || ''),
+        cost: _llmRng(costs.grok, costs.grokFb),
+        paid: true,
+        note: 'Settings → Models · Grok',
+      };
+    }
     const g = cfg.grok || 'grok';
     const c = cfg.claude || 'claude';
     const map = {
@@ -291,7 +376,7 @@
       report_kimi: {
         action: 'Full equity report',
         provider: 'kimi',
-        model: (cfg.routing && cfg.routing.kimi_model) || (vol && vol.kimi_model) || 'kimi-k3',
+        model: modelFor('kimi'),
         cost: _llmRng(est.kimi_report, '≈ $0.15–0.60'),
         paid: true,
         note: 'Kimi K3 (Moonshot) · not DeepSeek · SEC pack, no live X',
@@ -299,7 +384,7 @@
       report_deepseek: {
         action: 'Full equity report',
         provider: 'deepseek',
-        model: (cfg.routing && cfg.routing.deepseek_model) || 'deepseek-chat',
+        model: modelFor('deepseek'),
         cost: _llmRng(est.deepseek_report || [0.01, 0.05], '≈ $0.01–0.05'),
         paid: true,
         note: 'DeepSeek V4 Flash · not Kimi · SEC pack, no live X',
@@ -311,104 +396,108 @@
         cost: _llmRng(est.both_report, '≈ $0.80–1.60'),
         paid: true,
       },
-      daily_brief: volFor('daily_brief') ? {
-        action: 'Daily brief (Kimi)',
-        provider: 'kimi',
-        model: volModel,
-        cost: _llmRng(est.daily_brief_volume, '≈ $0.01–0.05'),
-        paid: true,
-        note: 'Kimi + free evidence pack (no live X)',
-      } : {
-        action: 'Daily brief',
-        provider: 'grok',
-        model: g + ' + live X/web',
-        cost: _llmRng(est.daily_brief_grok, '≈ $0.15–0.50'),
-        paid: true,
-      },
-      intelligence: volFor('intelligence') ? {
-        action: 'Sector intelligence (Kimi)',
-        provider: 'kimi',
-        model: volModel,
-        cost: _llmRng(est.intel_volume, '≈ $0.02–0.08'),
-        paid: true,
-      } : {
-        action: 'Sector intelligence',
-        provider: 'grok',
-        model: g + ' + live search',
-        cost: _llmRng(est.intel_grok, '≈ $0.20–0.60'),
-        paid: true,
-      },
-      prioritize: volFor('prioritize') ? {
-        action: 'Prioritize (Idea Generator)',
-        provider: 'kimi',
-        model: volModel,
-        cost: _llmRng(est.prioritize_volume, '≈ $0.005–0.03'),
-        paid: true,
-      } : {
-        action: 'Prioritize (Idea Generator)',
-        provider: 'grok',
-        model: g,
-        cost: _llmRng(est.prioritize_grok, '≈ $0.02–0.08'),
-        paid: true,
-      },
-      pulse: volFor('market_pulse') ? {
-        action: 'Market pulse / ticker scan (Kimi)',
-        provider: 'kimi',
-        model: volModel,
-        cost: _llmRng(est.pulse_volume || [0.002, 0.015], '≈ $0.002–0.015') + ' / ticker',
-        paid: true,
-        note: 'Kimi + free Yahoo/Google headlines (no Grok live search)',
-      } : {
-        action: 'Market pulse / ticker scan',
-        provider: 'grok',
-        model: g + ' + live search',
-        cost: '≈ $' + Number(est.pulse_per_ticker || 0.03).toFixed(3) + ' / ticker',
-        paid: true,
-      },
+      daily_brief: deskMeta('daily_brief', {
+        base: 'Daily brief',
+        kimi: 'Daily brief (Kimi K3)',
+        deepseek: 'Daily brief (DeepSeek)',
+        grok: 'Daily brief',
+        grokSuffix: ' + live X/web',
+        kimiNote: 'Kimi K3 + free evidence pack',
+        dsNote: 'DeepSeek + free evidence pack',
+      }, {
+        cheap: est.daily_brief_volume,
+        cheapFb: '≈ $0.01–0.05',
+        grok: est.daily_brief_grok,
+        grokFb: '≈ $0.15–0.50',
+      }),
+      intelligence: deskMeta('intelligence', {
+        base: 'Sector intelligence',
+        kimi: 'Sector intelligence (Kimi K3)',
+        deepseek: 'Sector intelligence (DeepSeek)',
+        grok: 'Sector intelligence',
+        grokSuffix: ' + live search',
+      }, {
+        cheap: est.intel_volume,
+        cheapFb: '≈ $0.02–0.08',
+        grok: est.intel_grok,
+        grokFb: '≈ $0.20–0.60',
+      }),
+      prioritize: deskMeta('prioritize', {
+        base: 'Prioritize (Idea Generator)',
+        kimi: 'Prioritize (Kimi K3)',
+        deepseek: 'Prioritize (DeepSeek)',
+        grok: 'Prioritize (Idea Generator)',
+      }, {
+        cheap: est.prioritize_volume,
+        cheapFb: '≈ $0.005–0.03',
+        grok: est.prioritize_grok,
+        grokFb: '≈ $0.02–0.08',
+      }),
+      pulse: (function () {
+        const m = deskMeta('market_pulse', {
+          base: 'Market pulse / ticker scan',
+          kimi: 'Market pulse (Kimi K3)',
+          deepseek: 'Market pulse (DeepSeek)',
+          grok: 'Market pulse / ticker scan',
+          grokSuffix: ' + live search',
+          kimiNote: 'Kimi K3 + free headlines',
+          dsNote: 'DeepSeek + free headlines',
+        }, {
+          cheap: est.pulse_volume || [0.002, 0.015],
+          cheapFb: '≈ $0.002–0.015',
+          grok: null,
+          grokFb: '≈ $' + Number(est.pulse_per_ticker || 0.03).toFixed(3),
+        });
+        if (m.provider === 'grok') {
+          m.cost = '≈ $' + Number(est.pulse_per_ticker || 0.03).toFixed(3) + ' / ticker';
+        } else {
+          m.cost = (_llmRng(est.pulse_volume || [0.002, 0.015], '≈ $0.002–0.015')) + ' / ticker';
+        }
+        return m;
+      })(),
       agentic: (function () {
         const p = routeOf('agentic', 'claude');
-        const mid = p === 'grok' ? g
-          : p === 'kimi' ? ((cfg.routing && cfg.routing.kimi_model) || 'kimi-k3')
-          : p === 'deepseek' ? ((cfg.routing && cfg.routing.deepseek_model) || 'deepseek-chat')
-          : (cfg.agentic || c);
         return {
           action: 'DGA Capital Analyst (agentic)',
           provider: p,
-          model: mid,
+          model: modelFor(p),
           cost: _llmRng(est.agentic, '≈ $0.05–0.30'),
           paid: true,
-          note: 'Settings → Models · Agents route',
+          note: 'Settings → Models · Agents',
         };
       })(),
       strategist: (function () {
         const p = routeOf('strategist', 'claude');
-        const mid = p === 'grok' ? g
-          : p === 'kimi' ? ((cfg.routing && cfg.routing.kimi_model) || 'kimi-k3')
-          : p === 'deepseek' ? ((cfg.routing && cfg.routing.deepseek_model) || 'deepseek-chat')
-          : (cfg.agentic || c);
         return {
           action: 'Portfolio Strategist',
           provider: p,
-          model: mid,
+          model: modelFor(p),
           cost: _llmRng(est.strategist, '≈ $0.30–1.00'),
           paid: true,
-          note: 'Settings → Models · Agents route',
+          note: 'Settings → Models · Agents',
         };
       })(),
-      lab_claude: {
-        action: 'LLM Lab · compare report',
-        provider: routeOf('compare', 'claude'),
-        model: routeOf('compare', 'claude') === 'grok' ? g : c,
-        cost: _llmRng(est.claude_report, '≈ $0.50–1.00'),
-        paid: true,
-      },
-      podcast: {
-        action: 'Podcast script / audio',
-        provider: routeOf('podcast_script', 'claude'),
-        model: (routeOf('podcast_script', 'claude') === 'grok' ? g : c) + ' + TTS',
-        cost: '≈ $0.20+ script · TTS extra',
-        paid: true,
-      },
+      lab_claude: (function () {
+        const p = routeOf('compare', 'claude');
+        return {
+          action: 'LLM Lab · compare report',
+          provider: p,
+          model: modelFor(p),
+          cost: _llmRng(est.claude_report, '≈ $0.50–1.00'),
+          paid: true,
+        };
+      })(),
+      podcast: (function () {
+        const p = routeOf('podcast_script', 'kimi');
+        return {
+          action: 'Podcast script / audio',
+          provider: p,
+          model: modelFor(p) + ' + TTS',
+          cost: '≈ $0.10–0.25 script · TTS extra',
+          paid: true,
+          note: 'Narrator engine from Settings',
+        };
+      })(),
     };
     return map[action] || {
       action: action || 'LLM job',
@@ -453,7 +542,10 @@
     }
     const phaseTxt = phase || 'Ready';
     line.innerHTML =
-      '<span class="llm-run-pill ' + (m.provider === 'volume' || m.provider === 'kimi' ? 'vol' : (m.provider === 'claude' || String(m.provider).indexOf('claude') >= 0 ? 'claude' : (String(m.provider).indexOf('both') >= 0 ? 'grok' : 'grok'))) + '">'
+      '<span class="llm-run-pill ' + (
+        m.provider === 'volume' || m.provider === 'kimi' || m.provider === 'deepseek' ? 'vol'
+        : (m.provider === 'claude' || String(m.provider).indexOf('claude') >= 0 ? 'claude' : 'grok')
+      ) + '">'
       + (m.provider || '').toString().toUpperCase() + '</span> '
       + '<strong>' + phaseTxt + '</strong> · '
       + '<span class="llm-mono">' + (m.model || '—') + '</span> · '
@@ -514,6 +606,15 @@
     if (briefMeta && !briefMeta.dataset.llmStamped) {
       briefMeta.dataset.llmStamped = '1';
     }
+    // Market Pulse explainers + cost chips (route-aware)
+    try {
+      if (typeof _pulseRefreshCopy === 'function') _pulseRefreshCopy();
+      if (typeof _PULSE_PREFIXES !== 'undefined' && _PULSE_PREFIXES && _PULSE_PREFIXES.length) {
+        _PULSE_PREFIXES.forEach(function (pfx) {
+          try { _pulseCostEstimate(pfx, false); } catch (_) {}
+        });
+      }
+    } catch (_) {}
   }
 
 
@@ -5624,14 +5725,19 @@
       const r = await window.dgaFetch('/api/config/models');
       if (!r.ok) return;
       _HERO_MODELS = await r.json();
-      window.DGA_LLM = Object.assign(window.DGA_LLM || {}, {
-        grok: _HERO_MODELS.grok,
-        claude: _HERO_MODELS.claude,
-        agentic: _HERO_MODELS.agentic,
-        volume: _HERO_MODELS.volume || { enabled: false },
-        routing: _HERO_MODELS.routing,
-        est: _HERO_MODELS.est || {},
-      });
+      // Single path: populate DGA_LLM.routes from Settings model-routing
+      if (typeof applyLlmCatalog === 'function') applyLlmCatalog(_HERO_MODELS);
+      else {
+        window.DGA_LLM = Object.assign(window.DGA_LLM || {}, {
+          grok: _HERO_MODELS.grok,
+          claude: _HERO_MODELS.claude,
+          agentic: _HERO_MODELS.agentic,
+          volume: _HERO_MODELS.volume || { enabled: false },
+          routing: _HERO_MODELS.routing,
+          routes: (_HERO_MODELS.routing && _HERO_MODELS.routing.routes) || {},
+          est: _HERO_MODELS.est || {},
+        });
+      }
       const gc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="grok"]');
       const cc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="claude"]');
       const kc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="kimi"]');
@@ -5656,8 +5762,6 @@
         if (est.deepseek_report) _HERO_COST_EST.deepseek = rng(est.deepseek_report);
         if (est.pulse_per_ticker) _PULSE_COST_PER_TICKER = est.pulse_per_ticker;
         if (typeof _updateHeroCost === 'function') _updateHeroCost();
-        if (typeof _PULSE_PREFIXES !== 'undefined')
-          _PULSE_PREFIXES.forEach(function(pfx) { try { _pulseCostEstimate(pfx, true); } catch(_){} });
       }
       _updateHeroModelTag();
       try { llmRefreshAllStamps(); } catch (_) {}
@@ -9280,7 +9384,7 @@
     if (!btn || btn.disabled) return;
     const meta = llmDescribe('daily_brief');
     btn.disabled = true;
-    btn.textContent = '⏳ ' + (meta.provider === 'volume' ? meta.model : 'Grok') + '…';
+    btn.textContent = '⏳ ' + (meta.model || meta.provider || '…').toString().slice(0, 18) + '…';
     llmToast('daily_brief', 'Starting daily brief');
     // Surface progress in the content area so the user can SEE it working.
     const el = document.getElementById('brief-content');
@@ -9432,40 +9536,74 @@
   // One render pipeline mounted into both tabs. Loading the card only ever
   // GETs /api/scan/latest — a scan (which costs money) starts ONLY from the
   // Run Pulse button, after a cost-estimate confirm.
+  // Copy + cost always follow Settings → Models · market_pulse route.
   // ══════════════════════════════════════════════════════════════
-  const _PULSE_EXPLAIN = 'Market Pulse runs a Grok live web/X sentiment scan on EVERY watchlist ticker, '
-    + 'tagging each Bullish / Bearish / Neutral with a one-line driver. Results persist until the next run '
-    + '— scheduled in Settings → Automation, or run manually with the Run Pulse button. '
-    + 'Opening this card never starts a scan.';
-  let _PULSE_COST_PER_TICKER = 0.02;   // ~$0.02/ticker Grok live-search (estimate)
+  let _PULSE_COST_PER_TICKER = 0.02;   // Grok fallback; overridden by route estimates
   const _PULSE_PREFIXES = [];            // mounted card id-prefixes
   let _pulseLatest    = {};              // merged ticker → result
   let _pulseScannedAt = null;
   let _pulseWlCount   = null;            // cached watchlist size for the estimate
   let _pulseRunning   = false;
 
+  function _pulseExplainText() {
+    const meta = llmDescribe('pulse');
+    const eng = (meta.provider === 'deepseek') ? 'DeepSeek'
+      : (meta.provider === 'kimi' || meta.provider === 'volume') ? 'Kimi K3'
+      : 'Grok live web/X';
+    return 'Market Pulse runs a ' + eng + ' sentiment scan on EVERY watchlist ticker, '
+      + 'tagging each Bullish / Bearish / Neutral with a one-line driver. '
+      + 'Engine: ' + (meta.model || '—') + ' · ' + (meta.cost || '')
+      + (meta.note ? ' · ' + meta.note : '')
+      + '. Results persist until the next run — scheduled in Settings → Automation, '
+      + 'or run manually with Run Pulse. Opening this card never starts a scan. '
+      + 'Change engine in Settings → Models.';
+  }
+
+  function _pulsePerTickerUsd() {
+    const meta = llmDescribe('pulse');
+    const est = (window.DGA_LLM && window.DGA_LLM.est) || {};
+    if (meta.provider === 'kimi' || meta.provider === 'deepseek' || meta.provider === 'volume') {
+      const pv = est.pulse_volume;
+      if (Array.isArray(pv) && pv[0] != null)
+        return (Number(pv[0]) + Number(pv[1] != null ? pv[1] : pv[0])) / 2;
+      return 0.008;
+    }
+    return Number(est.pulse_per_ticker || _PULSE_COST_PER_TICKER || 0.03);
+  }
+
+  function _pulseRefreshCopy() {
+    const text = _pulseExplainText();
+    _PULSE_PREFIXES.forEach(function (pfx) {
+      const info = document.getElementById(pfx + '-info');
+      const exp = document.getElementById(pfx + '-exp');
+      if (info) info.title = text;
+      if (exp) exp.textContent = text;
+    });
+  }
+
   function _pulseMount(mountId, prefix) {
     const mount = document.getElementById(mountId);
     if (!mount || mount.dataset.mounted === '1') return;
     mount.dataset.mounted = '1';
     _PULSE_PREFIXES.push(prefix);
+    const explain = _pulseExplainText();
     if (mount.id === prefix + '-panel') {
       // STATIC panel (Research: a real data-wid widget the drag system owns).
       // Markup already exists — just fill the explainer + wire events below.
       const _info = document.getElementById(prefix + '-info');
       const _exp  = document.getElementById(prefix + '-exp');
-      if (_info) _info.title = _PULSE_EXPLAIN;
-      if (_exp)  _exp.textContent = _PULSE_EXPLAIN;
+      if (_info) _info.title = explain;
+      if (_exp)  _exp.textContent = explain;
     } else mount.innerHTML =
       '<section class="panel" id="' + prefix + '-panel">'
       + '<header class="panel-head">'
       +   '<span class="panel-title">🌡️ Market Pulse</span>'
-      +   '<button type="button" class="info-star" id="' + prefix + '-info" title="' + _sieEsc(_PULSE_EXPLAIN) + '">*</button>'
+      +   '<button type="button" class="info-star" id="' + prefix + '-info" title="' + _sieEsc(explain) + '">*</button>'
       +   '<span class="panel-badge" id="' + prefix + '-ts">—</span>'
       +   '<span id="' + prefix + '-est" style="margin-left:auto;font-size:9.5px;color:var(--mid);font-weight:600;"></span>'
       +   '<button id="' + prefix + '-run" class="tab-btn" style="margin-left:8px;font-size:9px;white-space:nowrap;">🌡️ Run Pulse</button>'
       + '</header>'
-      + '<div class="info-explainer" id="' + prefix + '-exp">' + _sieEsc(_PULSE_EXPLAIN) + '</div>'
+      + '<div class="info-explainer" id="' + prefix + '-exp">' + _sieEsc(explain) + '</div>'
       + '<div id="' + prefix + '-status" style="display:none;padding:6px 14px;font-size:10.5px;color:var(--mid);border-bottom:1px solid var(--panel-edge);"></div>'
       + '<div id="' + prefix + '-rows" style="max-height:420px;overflow-y:auto;">'
       +   '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">Loading latest pulse…</div>'
@@ -9477,7 +9615,10 @@
     const exp  = document.getElementById(prefix + '-exp');
     if (info && exp) info.addEventListener('click', function() { exp.classList.toggle('open'); });
     const runBtn = document.getElementById(prefix + '-run');
-    if (runBtn) runBtn.addEventListener('click', function() { _pulseRun(prefix); });
+    if (runBtn) {
+      runBtn.addEventListener('click', function() { _pulseRun(prefix); });
+      llmStampControl(runBtn, 'pulse');
+    }
     _pulseCostEstimate(prefix);
   }
 
@@ -9493,8 +9634,16 @@
         _pulseWlCount = (d.tickers || []).length;
       }
       const n = _pulseWlCount;
-      el.textContent = '≈ ' + n + ' ticker' + (n === 1 ? '' : 's') + ' · est. $' + (n * _PULSE_COST_PER_TICKER).toFixed(2);
-      el.title = 'Estimate only — ~$0.02 per ticker for the Grok live-search scan. Actual cost varies with how much the model searches.';
+      const meta = llmDescribe('pulse');
+      const per = _pulsePerTickerUsd();
+      const total = (n * per);
+      const eng = (meta.provider || 'grok').toUpperCase();
+      el.textContent = '≈ ' + n + ' ticker' + (n === 1 ? '' : 's')
+        + ' · ' + eng + ' · est. $' + total.toFixed(total < 0.1 ? 3 : 2);
+      el.title = (meta.action || 'Market pulse') + '\nModel: ' + (meta.model || '—')
+        + '\n' + (meta.cost || '') + ' · est. $' + per.toFixed(4) + ' / ticker × ' + n
+        + (meta.note ? '\n' + meta.note : '')
+        + '\n(Settings → Models · market_pulse)';
     } catch { el.textContent = ''; }
   }
 
@@ -9614,24 +9763,19 @@
       return;
     }
     const meta = llmDescribe('pulse');
-    const volOn = !!(window.DGA_LLM && window.DGA_LLM.volume && window.DGA_LLM.volume.enabled);
-    // Per-ticker cost: volume ballpark or Grok live estimate
-    let per = _PULSE_COST_PER_TICKER;
-    try {
-      const pv = (window.DGA_LLM && window.DGA_LLM.est && window.DGA_LLM.est.pulse_volume) || null;
-      if (volOn && Array.isArray(pv) && pv[0] != null)
-        per = (Number(pv[0]) + Number(pv[1] || pv[0])) / 2;
-    } catch (_) {}
+    const cheap = meta.provider === 'kimi' || meta.provider === 'deepseek' || meta.provider === 'volume';
+    const per = _pulsePerTickerUsd();
     const est = (n * per).toFixed(2);
+    const pathNote = cheap
+      ? ' (' + (meta.provider === 'deepseek' ? 'DeepSeek' : 'Kimi') + ' + free headlines — no Grok live search).'
+      : ' (Grok live web/X search — estimate only).';
     const okGo = await dgaConfirm({
       title: 'Run Market Pulse',
       message: 'Scan ' + n + ' watchlist ticker' + (n === 1 ? '' : 's') + '?\n\n'
         + 'Model: ' + meta.model + ' (' + meta.provider + ')\n'
-        + 'Est. cost ≈ $' + est + ' for this run'
-        + (volOn
-          ? ' (volume LLM + free headlines — no Grok live search).'
-          : ' (Grok live web/X search — estimate only).')
-        + (meta.note ? '\n' + meta.note : ''),
+        + 'Est. cost ≈ $' + est + ' for this run' + pathNote
+        + (meta.note ? '\n' + meta.note : '')
+        + '\n\nEngine from Settings → Models · market_pulse.',
       confirmLabel: 'Run scan',
       danger: false,
     });
@@ -13815,31 +13959,41 @@
 
     async function refreshCatalog(d) {
       try {
-        const routing = (d && d.routing) || d || {};
-        const vol = (d && d.volume) || (routing && routing.volume) || {};
-        window.DGA_LLM = Object.assign(window.DGA_LLM || {}, {
-          grok: routing.grok_model || (window.DGA_LLM && window.DGA_LLM.grok),
-          claude: routing.claude_model || (window.DGA_LLM && window.DGA_LLM.claude),
-          agentic: routing.agentic_model || (window.DGA_LLM && window.DGA_LLM.agentic),
-          volume: Object.assign({}, window.DGA_LLM && window.DGA_LLM.volume || {}, vol, {
-            enabled: vol.enabled,
-            model: vol.model || routing.volume_model,
-            configured: vol.configured,
-            jobs: vol.jobs,
-            routes: vol.routes || routing.routes,
-          }),
-          routing: routing,
-          routes: routing.routes || {},
-        });
+        // Apply Settings routes immediately, then merge cost estimates from /models
+        if (typeof applyLlmCatalog === 'function') applyLlmCatalog(d);
+        else {
+          const routing = (d && d.routing) || d || {};
+          const vol = (d && d.volume) || (routing && routing.volume) || {};
+          window.DGA_LLM = Object.assign(window.DGA_LLM || {}, {
+            grok: routing.grok_model || (window.DGA_LLM && window.DGA_LLM.grok),
+            claude: routing.claude_model || (window.DGA_LLM && window.DGA_LLM.claude),
+            agentic: routing.agentic_model || (window.DGA_LLM && window.DGA_LLM.agentic),
+            volume: Object.assign({}, window.DGA_LLM && window.DGA_LLM.volume || {}, vol, {
+              enabled: vol.enabled,
+              model: vol.model || routing.volume_model,
+              configured: vol.configured,
+              jobs: vol.jobs,
+              routes: vol.routes || routing.routes,
+              task_routes: vol.task_routes || routing.routes,
+            }),
+            routing: routing,
+            routes: routing.routes || {},
+          });
+        }
         const mr = await window.dgaFetch('/api/config/models');
         if (mr.ok) {
           const mj = await mr.json();
-          window.DGA_LLM = Object.assign(window.DGA_LLM || {}, {
-            grok: mj.grok, claude: mj.claude, agentic: mj.agentic,
-            volume: mj.volume || (window.DGA_LLM && window.DGA_LLM.volume),
-            routing: mj.routing || (window.DGA_LLM && window.DGA_LLM.routing),
-            est: mj.est || (window.DGA_LLM && window.DGA_LLM.est),
-          });
+          if (typeof applyLlmCatalog === 'function') applyLlmCatalog(mj);
+          else {
+            window.DGA_LLM = Object.assign(window.DGA_LLM || {}, {
+              grok: mj.grok, claude: mj.claude, agentic: mj.agentic,
+              volume: mj.volume || (window.DGA_LLM && window.DGA_LLM.volume),
+              routing: mj.routing || (window.DGA_LLM && window.DGA_LLM.routing),
+              routes: (mj.routing && mj.routing.routes)
+                || (window.DGA_LLM && window.DGA_LLM.routes) || {},
+              est: mj.est || (window.DGA_LLM && window.DGA_LLM.est),
+            });
+          }
         }
         // Do not override multi-select engines from settings full_report —
         // hero chip selection is independent (localStorage).
@@ -13949,7 +14103,7 @@
         setRoutingConfig({ volume_enabled: true });
       });
       if ($off) $off.addEventListener('click', function () {
-        if (!confirm('Turn Kimi master OFF?\n\nAll desk jobs routed to Kimi will fall back to Grok.\nFull reports / agentic / podcasts are unchanged.')) return;
+        if (!confirm('Turn volume master OFF?\n\nDesk jobs routed to Kimi or DeepSeek will fall back to Grok.\nFull reports / agentic / podcasts are unchanged.')) return;
         setRoutingConfig({ volume_enabled: false });
       });
       if ($ref) $ref.addEventListener('click', refresh);
@@ -16812,7 +16966,13 @@
           e.stopPropagation();
           const tk = btn.getAttribute('data-rescan');
           if (!tk) return;
-          if (!confirm(`Re-scan ${tk}? ~$0.05 (Grok live web/X search).`)) return;
+          {
+            const pm = llmDescribe('pulse');
+            const per = (typeof _pulsePerTickerUsd === 'function') ? _pulsePerTickerUsd() : 0.05;
+            if (!confirm('Re-scan ' + tk + '?\n\nModel: ' + (pm.model || pm.provider)
+              + '\nEst. ≈ $' + Number(per).toFixed(3)
+              + (pm.note ? '\n' + pm.note : ''))) return;
+          }
           const orig = btn.textContent;
           btn.disabled = true; btn.textContent = '⏳';
           try {

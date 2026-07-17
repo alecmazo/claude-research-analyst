@@ -505,7 +505,7 @@ End with the sleeve block at this account's real market value so I can push it t
                 title="Refresh idea feed now (bypass 5-min cache)"
                 style="margin-left:8px;background:transparent;border:1px solid var(--panel-edge);color:var(--mid);font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:700;">↻</button>
         <button id="idea-gen-prioritize" type="button"
-                title="Grok 4.5 pre-screen — rank top tickers worth a full report"
+                title="Pre-screen idea feed — engine from Settings → Models · prioritize"
                 style="margin-left:4px;background:#fef3c7;border:1px solid #fde68a;color:#92400e;font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:700;">🎯 Prioritize</button>
         <span id="idea-gen-chev" style="margin-left:6px;font-size:11px;color:var(--blue);transition:transform .15s;">▼</span>
       </header>
@@ -566,7 +566,7 @@ End with the sleeve block at this account's real market value so I can push it t
         <span class="panel-title">Today's Movers</span>
         <span class="panel-badge" id="trending-count">LIVE</span>
         <button id="trending-run-brief" type="button"
-                title="Run Daily Pulse now (Grok live X search · ~30-60s)"
+                title="Run Daily Pulse now (engine from Settings → Models · daily_brief)"
                 style="margin-left:auto;background:#fef3c7;border:1px solid #fde68a;color:#92400e;font-size:10.5px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:700;">📰 Run Brief</button>
         <span class="panel-action" id="trending-action" style="cursor:default;margin-left:6px;">⟳ AUTO</span>
       </header>
@@ -2044,10 +2044,10 @@ End with the sleeve block at this account's real market value so I can push it t
         </header>
         <div class="settings-card-body">
           <p style="margin:0 0 10px;font-size:11px;color:#64748b;line-height:1.45;">
-            Every wired provider below. Assign a model to <strong>each task</strong>.
-            Desk jobs can use <strong>Kimi</strong> (cheap volume) or <strong>Grok</strong> (live search).
-            Full reports + Agents: Grok 4.5 · Claude Opus 4.8 · <strong>Kimi K3</strong> · DeepSeek.
-            Podcast host = Kimi K3.
+            Every wired provider below. Assign a model to <strong>each task</strong> —
+            those choices drive labels and costs on the desk (Market Pulse, Prioritize, Daily Pulse, Agents, etc.).
+            Desk jobs: <strong>Kimi K3</strong> / <strong>DeepSeek</strong> (cheap) or <strong>Grok</strong> (live search).
+            Full reports + Agents: Grok 4.5 · Claude Opus 4.8 · Kimi K3 · DeepSeek.
             Costs tracked per call. Survives redeploys.
           </p>
 

@@ -776,11 +776,10 @@ def volume_llm_status() -> dict:
     master = volume_llm_enabled()
     jobs = get_volume_llm_jobs()
     prov = volume_provider_label()
-    routes = {
-        j: (prov if volume_llm_enabled_for(j) else "grok")
-        for j in VOLUME_LLM_JOBS
-    }
+    # Use per-task routes (kimi | deepseek | grok) — never force all desk jobs to "kimi"
     full_routes = get_task_routes()
+    routes = {j: full_routes.get(j) or ("grok" if not volume_llm_enabled_for(j) else prov)
+              for j in VOLUME_LLM_JOBS}
     routes.update({k: v for k, v in full_routes.items() if k not in routes})
     inp_r, out_r = volume_rates(VOLUME_LLM_MODEL)
     return {
