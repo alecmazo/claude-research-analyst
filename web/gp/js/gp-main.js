@@ -258,14 +258,19 @@
     const volMaster = !!(vol.enabled && vol.configured);
     const volRoutes = vol.routes || {};
     const volJobs = vol.jobs || {};
-    /** Per-feature: master on AND job toggle on (or route says volume). */
+    const taskRoutes = cfg.routes || (cfg.routing && cfg.routing.routes) || {};
+    /** Resolved desk route: kimi/volume vs grok. */
     function volFor(jobId) {
+      const tr = taskRoutes[jobId] || volRoutes[jobId];
+      if (tr) return tr === 'kimi' || tr === 'volume';
       if (!volMaster) return false;
-      if (volRoutes[jobId]) return volRoutes[jobId] === 'volume';
       if (jobId in volJobs) return volJobs[jobId] !== false;
       return true;
     }
-    const volModel = vol.model || 'volume';
+    function routeOf(taskId, fallback) {
+      return taskRoutes[taskId] || volRoutes[taskId] || fallback;
+    }
+    const volModel = vol.model || 'kimi-k3';
     const g = cfg.grok || 'grok';
     const c = cfg.claude || 'claude';
     const map = {
@@ -291,12 +296,12 @@
         paid: true,
       },
       daily_brief: volFor('daily_brief') ? {
-        action: 'Daily brief (volume)',
-        provider: 'volume',
+        action: 'Daily brief (Kimi)',
+        provider: 'kimi',
         model: volModel,
         cost: _llmRng(est.daily_brief_volume, '≈ $0.01–0.05'),
         paid: true,
-        note: 'Cheap volume model + free evidence pack',
+        note: 'Kimi + free evidence pack (no live X)',
       } : {
         action: 'Daily brief',
         provider: 'grok',
@@ -305,8 +310,8 @@
         paid: true,
       },
       intelligence: volFor('intelligence') ? {
-        action: 'Sector intelligence',
-        provider: 'volume',
+        action: 'Sector intelligence (Kimi)',
+        provider: 'kimi',
         model: volModel,
         cost: _llmRng(est.intel_volume, '≈ $0.02–0.08'),
         paid: true,
@@ -319,7 +324,7 @@
       },
       prioritize: volFor('prioritize') ? {
         action: 'Prioritize (Idea Generator)',
-        provider: 'volume',
+        provider: 'kimi',
         model: volModel,
         cost: _llmRng(est.prioritize_volume, '≈ $0.005–0.03'),
         paid: true,
@@ -331,12 +336,12 @@
         paid: true,
       },
       pulse: volFor('market_pulse') ? {
-        action: 'Market pulse / ticker scan (volume)',
-        provider: 'volume',
+        action: 'Market pulse / ticker scan (Kimi)',
+        provider: 'kimi',
         model: volModel,
         cost: _llmRng(est.pulse_volume || [0.002, 0.015], '≈ $0.002–0.015') + ' / ticker',
         paid: true,
-        note: 'Cheap volume model + free Yahoo/Google headlines (no Grok live search)',
+        note: 'Kimi + free Yahoo/Google headlines (no Grok live search)',
       } : {
         action: 'Market pulse / ticker scan',
         provider: 'grok',
@@ -346,37 +351,33 @@
       },
       agentic: {
         action: 'DGA Capital Analyst (agentic)',
-        provider: 'claude',
+        provider: routeOf('agentic', 'claude'),
         model: cfg.agentic || c,
         cost: _llmRng(est.agentic, '≈ $0.05–0.30'),
         paid: true,
       },
       strategist: {
         action: 'Portfolio Strategist',
-        provider: 'claude',
+        provider: routeOf('strategist', 'claude'),
         model: cfg.agentic || c,
         cost: _llmRng(est.strategist, '≈ $0.30–1.00'),
         paid: true,
       },
       lab_claude: {
-        action: 'LLM Lab · Claude compare report',
-        provider: 'claude',
-        model: c,
+        action: 'LLM Lab · compare report',
+        provider: routeOf('compare', 'claude'),
+        model: routeOf('compare', 'claude') === 'grok' ? g : c,
         cost: _llmRng(est.claude_report, '≈ $0.50–1.00'),
         paid: true,
       },
       podcast: {
         action: 'Podcast script / audio',
-        provider: 'claude/grok',
-        model: 'Claude (script) + TTS',
+        provider: routeOf('podcast_script', 'claude'),
+        model: (routeOf('podcast_script', 'claude') === 'grok' ? g : c) + ' + TTS',
         cost: '≈ $0.20+ script · TTS extra',
         paid: true,
       },
     };
-    // Fix prioritize model label when not volume
-    if (action === 'prioritize' && !volFor('prioritize')) {
-      map.prioritize.model = g; // screen uses GROK_SCREEN default via same Grok family
-    }
     return map[action] || {
       action: action || 'LLM job',
       provider: '?',
@@ -420,7 +421,7 @@
     }
     const phaseTxt = phase || 'Ready';
     line.innerHTML =
-      '<span class="llm-run-pill ' + (m.provider === 'volume' ? 'vol' : (m.provider === 'claude' || String(m.provider).indexOf('claude') >= 0 ? 'claude' : 'grok')) + '">'
+      '<span class="llm-run-pill ' + (m.provider === 'volume' || m.provider === 'kimi' ? 'vol' : (m.provider === 'claude' || String(m.provider).indexOf('claude') >= 0 ? 'claude' : 'grok')) + '">'
       + (m.provider || '').toString().toUpperCase() + '</span> '
       + '<strong>' + phaseTxt + '</strong> · '
       + '<span class="llm-mono">' + (m.model || '—') + '</span> · '
@@ -13397,7 +13398,7 @@
     _settingsPanel('volume-llm',  loadVolumeLlmSettings);
   }
 
-  // ── Option 4 · Volume LLM settings (master + per-job toggles) ───────────
+  // ── Models · full task routing + provider catalog ───────────────────────
   var _volumeLlmWired = false;
   async function loadVolumeLlmSettings() {
     const $st = document.getElementById('volume-llm-status');
@@ -13406,23 +13407,136 @@
     const $off = document.getElementById('volume-llm-rollback');
     const $ref = document.getElementById('volume-llm-refresh');
     const $jobs = document.getElementById('volume-llm-jobs');
-    if (!$st) return;
+    const $prov = document.getElementById('model-providers');
+    const $table = document.getElementById('model-routing-table');
+    if (!$st && !$table) return;
+
+    function _esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+    function _rateLine(rates) {
+      if (!rates || rates.input == null) return '—';
+      return '$' + Number(rates.input).toFixed(2) + ' / $' + Number(rates.output).toFixed(2) + ' MTok';
+    }
+    function _provColor(id) {
+      if (id === 'grok') return { bg: '#e0f2fe', fg: '#0369a1', border: '#7dd3fc' };
+      if (id === 'claude') return { bg: '#f3e8ff', fg: '#6b21a8', border: '#d8b4fe' };
+      if (id === 'kimi') return { bg: '#dcfce7', fg: '#166534', border: '#86efac' };
+      if (id === 'both') return { bg: '#fef3c7', fg: '#92400e', border: '#fcd34d' };
+      return { bg: '#f1f5f9', fg: '#475569', border: '#e2e8f0' };
+    }
+
+    function renderProviders(providers) {
+      if (!$prov) return;
+      const order = ['grok', 'claude', 'kimi', 'both'];
+      const cards = order.map(function (id) {
+        const p = (providers || {})[id];
+        if (!p) return '';
+        const c = _provColor(id);
+        const ok = !!p.configured;
+        const rates = _rateLine(p.rates_usd_per_mtok);
+        const master = id === 'kimi' && p.master_enabled === false ? ' · master OFF' : '';
+        return '<div style="border:1px solid ' + c.border + ';background:' + c.bg
+          + ';border-radius:10px;padding:10px 12px;">'
+          + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">'
+          + '<span style="font-size:11px;font-weight:900;color:' + c.fg + ';letter-spacing:0.3px;">'
+          + _esc(p.label || id) + '</span>'
+          + '<span style="margin-left:auto;font-size:9px;font-weight:800;padding:1px 6px;border-radius:999px;'
+          + 'background:' + (ok ? 'rgba(22,163,74,0.15)' : 'rgba(220,38,38,0.12)') + ';'
+          + 'color:' + (ok ? '#166534' : '#991b1b') + ';">'
+          + (ok ? 'KEY SET' : 'NO KEY') + master + '</span></div>'
+          + '<div style="font-size:12px;font-weight:800;color:#0f172a;font-family:ui-monospace,monospace;">'
+          + _esc(p.model || '—') + '</div>'
+          + '<div style="font-size:10px;color:#64748b;margin-top:3px;">' + rates
+          + (p.live_search ? ' · live search' : '') + '</div>'
+          + (p.key_env ? '<div style="font-size:9px;color:#94a3b8;margin-top:2px;">env ' + _esc(p.key_env) + '</div>' : '')
+          + '</div>';
+      }).join('');
+      $prov.innerHTML = cards || '<div style="font-size:11px;color:#94a3b8;">No providers.</div>';
+    }
+
+    function renderRoutingTable(routing) {
+      if (!$table) return;
+      const tasks = (routing && routing.tasks) || [];
+      const providers = (routing && routing.providers) || {};
+      if (!tasks.length) {
+        $table.innerHTML = '<div style="padding:12px;font-size:11px;color:#94a3b8;">No tasks from server.</div>';
+        return;
+      }
+      const groups = {};
+      tasks.forEach(function (t) {
+        const g = t.group || 'Other';
+        if (!groups[g]) groups[g] = [];
+        groups[g].push(t);
+      });
+      const order = (routing.groups || ['Research', 'Desk', 'Agents', 'Media', 'Other']);
+      let html = '';
+      order.forEach(function (g) {
+        const list = groups[g];
+        if (!list || !list.length) return;
+        html += '<div style="padding:6px 12px;background:#f8fafc;border-bottom:1px solid #e2e8f0;'
+          + 'font-size:9.5px;font-weight:800;letter-spacing:0.7px;text-transform:uppercase;color:#94a3b8;">'
+          + _esc(g) + '</div>';
+        list.forEach(function (t) {
+          const allowed = t.allowed || [];
+          const route = t.route || t.default || allowed[0] || 'grok';
+          const single = allowed.length <= 1;
+          let sel;
+          if (single) {
+            sel = '<span style="font-size:11.5px;font-weight:800;color:#0f172a;">'
+              + _esc(route) + '</span>'
+              + '<span style="font-size:10px;color:#94a3b8;margin-left:6px;">locked</span>';
+          } else {
+            sel = '<select class="model-route-select" data-task="' + _esc(t.id) + '" '
+              + 'style="font-size:12px;font-weight:700;padding:4px 8px;border-radius:6px;'
+              + 'border:1px solid #cbd5e1;background:#fff;color:#0f172a;min-width:120px;">'
+              + allowed.map(function (a) {
+                const pl = (providers[a] && providers[a].label) || a;
+                return '<option value="' + _esc(a) + '"' + (a === route ? ' selected' : '') + '>'
+                  + _esc(a) + ' — ' + _esc(pl) + '</option>';
+              }).join('')
+              + '</select>';
+          }
+          const modelRes = t.model_resolved || ((providers[route] && providers[route].model) || '—');
+          html += '<div style="display:grid;grid-template-columns:1fr auto;gap:8px 14px;align-items:center;'
+            + 'padding:10px 12px;border-bottom:1px solid #eef2f7;">'
+            + '<div><div style="font-size:12.5px;font-weight:800;color:#0f172a;">' + _esc(t.label || t.id) + '</div>'
+            + '<div style="font-size:10.5px;color:#64748b;margin-top:1px;">'
+            + '<code style="font-size:10px;">' + _esc(modelRes) + '</code>'
+            + (t.note ? ' · ' + _esc(t.note) : '') + '</div></div>'
+            + '<div style="text-align:right;">' + sel + '</div></div>';
+        });
+      });
+      $table.innerHTML = html;
+      $table.querySelectorAll('.model-route-select').forEach(function (sel) {
+        sel.addEventListener('change', function () {
+          const task = sel.getAttribute('data-task');
+          if (!task) return;
+          const body = { routes: {} };
+          body.routes[task] = sel.value;
+          setRoutingConfig(body);
+        });
+      });
+    }
 
     function renderJobs(d) {
       if (!$jobs) return;
-      const ids = d.job_ids || Object.keys(d.jobs || {}) || [];
-      const labels = d.job_labels || {};
-      const jobs = d.jobs || {};
-      const routes = d.routes || {};
-      const master = !!d.enabled;
-      const cfg = !!d.configured;
+      const vol = (d && d.volume) || d || {};
+      const ids = vol.job_ids || Object.keys(vol.jobs || {}) || [];
+      const labels = vol.job_labels || {};
+      const jobs = vol.jobs || {};
+      const routes = vol.routes || (d && d.routes) || {};
+      const master = !!(vol.enabled != null ? vol.enabled : d && d.enabled);
+      const cfg = !!(vol.configured != null ? vol.configured : d && d.configured);
       if (!ids.length) {
-        $jobs.innerHTML = '<div style="font-size:11px;color:#94a3b8;">No job list from server.</div>';
+        $jobs.innerHTML = '<div style="font-size:11px;color:#94a3b8;">No desk jobs.</div>';
         return;
       }
       $jobs.innerHTML = ids.map(function (id) {
         const on = jobs[id] !== false;
-        const route = routes[id] || (master && on ? 'volume' : 'grok');
+        const route = routes[id] || (master && on ? 'kimi' : 'grok');
         const lab = labels[id] || id;
         const disabled = !cfg || !master;
         return '<label style="display:flex;align-items:center;gap:8px;padding:7px 10px;'
@@ -13450,69 +13564,100 @@
 
     async function refreshCatalog(d) {
       try {
-        if (window.DGA_LLM && d) {
-          window.DGA_LLM.volume = Object.assign({}, window.DGA_LLM.volume || {}, d.volume || {
-            enabled: d.enabled,
-            model: d.model,
-            configured: d.configured,
-            jobs: d.jobs,
-            routes: d.routes,
-          });
-        }
+        const routing = (d && d.routing) || d || {};
+        const vol = (d && d.volume) || (routing && routing.volume) || {};
+        window.DGA_LLM = Object.assign(window.DGA_LLM || {}, {
+          grok: routing.grok_model || (window.DGA_LLM && window.DGA_LLM.grok),
+          claude: routing.claude_model || (window.DGA_LLM && window.DGA_LLM.claude),
+          agentic: routing.agentic_model || (window.DGA_LLM && window.DGA_LLM.agentic),
+          volume: Object.assign({}, window.DGA_LLM && window.DGA_LLM.volume || {}, vol, {
+            enabled: vol.enabled,
+            model: vol.model || routing.volume_model,
+            configured: vol.configured,
+            jobs: vol.jobs,
+            routes: vol.routes || routing.routes,
+          }),
+          routing: routing,
+          routes: routing.routes || {},
+        });
         const mr = await window.dgaFetch('/api/config/models');
         if (mr.ok) {
           const mj = await mr.json();
           window.DGA_LLM = Object.assign(window.DGA_LLM || {}, {
             grok: mj.grok, claude: mj.claude, agentic: mj.agentic,
             volume: mj.volume || (window.DGA_LLM && window.DGA_LLM.volume),
+            routing: mj.routing || (window.DGA_LLM && window.DGA_LLM.routing),
             est: mj.est || (window.DGA_LLM && window.DGA_LLM.est),
           });
         }
+        // Apply default full_report engine to hero selector
+        try {
+          const fr = (window.DGA_LLM.routes || {})['full_report']
+            || (window.DGA_LLM.routing && window.DGA_LLM.routing.routes && window.DGA_LLM.routing.routes.full_report);
+          const sel = document.getElementById('hero-llm');
+          if (sel && fr && (fr === 'grok' || fr === 'claude' || fr === 'both')) {
+            sel.value = fr;
+            document.querySelectorAll('#hero-llm-chips .hero-llm-chip').forEach(function (c) {
+              c.classList.toggle('active', c.getAttribute('data-llm') === fr);
+            });
+            if (typeof _updateHeroModelTag === 'function') _updateHeroModelTag();
+          }
+        } catch (_) {}
         if (typeof llmRefreshAllStamps === 'function') llmRefreshAllStamps();
       } catch (_) {}
     }
 
     async function refresh() {
       try {
-        const r = await window.dgaFetch('/api/config/volume-llm');
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const d = await r.json();
-        const en = !!d.enabled;
-        const cfg = !!d.configured;
-        const jobs = d.jobs || {};
+        let routing = null;
+        let vol = null;
+        try {
+          const r = await window.dgaFetch('/api/config/model-routing');
+          if (r.ok) routing = await r.json();
+        } catch (_) {}
+        try {
+          const r2 = await window.dgaFetch('/api/config/volume-llm');
+          if (r2.ok) vol = await r2.json();
+        } catch (_) {}
+        if (!routing && !vol) throw new Error('routing + volume endpoints failed');
+        if (!routing) routing = { volume: vol, providers: {}, tasks: [], routes: (vol && vol.task_routes) || {} };
+        if (!vol) vol = routing.volume || {};
+
+        const en = !!(vol.enabled);
+        const cfg = !!(vol.configured);
+        const jobs = vol.jobs || {};
         const nOn = Object.keys(jobs).filter(function (k) { return jobs[k] !== false; }).length;
         const nAll = Object.keys(jobs).length || 4;
-        const prov = d.provider_label || d.provider || 'Volume';
-        const rates = d.rates_usd_per_mtok || {};
-        const rateTxt = (rates.input != null && rates.output != null)
-          ? ('$' + Number(rates.input).toFixed(2) + ' in / $' + Number(rates.output).toFixed(2) + ' out per MTok')
-          : '—';
+        const routes = routing.routes || vol.task_routes || {};
+        const nTasks = Object.keys(routes).length;
+
         if ($badge) {
-          if (!cfg) {
-            $badge.textContent = 'NOT CONFIGURED';
+          if (!cfg && !(routing.providers && routing.providers.grok && routing.providers.grok.configured)) {
+            $badge.textContent = 'CHECK KEYS';
             $badge.style.background = '#fef3c7'; $badge.style.color = '#92400e';
-          } else if (!en) {
-            $badge.textContent = 'ALL → GROK';
-            $badge.style.background = '#fee2e2'; $badge.style.color = '#991b1b';
           } else {
-            $badge.textContent = (String(prov).toUpperCase().indexOf('KIMI') >= 0 ? 'KIMI ' : 'VOLUME ')
-              + nOn + '/' + nAll;
-            $badge.style.background = '#dcfce7'; $badge.style.color = '#166534';
+            $badge.textContent = nTasks + ' TASKS · KIMI ' + nOn + '/' + nAll;
+            $badge.style.background = en ? '#dcfce7' : '#fee2e2';
+            $badge.style.color = en ? '#166534' : '#991b1b';
           }
         }
-        $st.innerHTML =
-          '<div><strong>Configured:</strong> ' + (cfg
-            ? ('yes · key ' + (d.key_source || 'set'))
-            : 'no (set KIMI_API_KEY on Railway)') + '</div>'
-          + '<div><strong>Master:</strong> ' + (en ? ('ON — per-feature toggles → ' + prov) : 'OFF — every job uses Grok') + '</div>'
-          + '<div><strong>Model:</strong> ' + (d.model || '—') + ' · <strong>Host:</strong> ' + (d.base_url || '—') + '</div>'
-          + '<div><strong>Pricing:</strong> ' + rateTxt + ' <span style="color:#94a3b8;">(tracked on each call)</span></div>'
-          + '<div style="margin-top:4px;font-size:10.5px;color:#94a3b8;">Reports + podcasts never use volume (always Grok/Claude).</div>';
+        if ($st) {
+          const rates = vol.rates_usd_per_mtok || {};
+          const rateTxt = (rates.input != null)
+            ? ('Kimi $' + Number(rates.input).toFixed(2) + '/$' + Number(rates.output).toFixed(2) + ' MTok')
+            : '';
+          $st.innerHTML = (cfg ? ('Kimi key · ' + _esc(vol.model || 'kimi-k3')) : 'Kimi not configured')
+            + (en ? ' · master ON' : ' · master OFF')
+            + (rateTxt ? ' · ' + rateTxt : '');
+        }
         if ($on) $on.disabled = !cfg || en;
         if ($off) $off.disabled = !cfg || !en;
-        renderJobs(d);
+        renderProviders(routing.providers || {});
+        renderRoutingTable(routing);
+        renderJobs(Object.assign({}, vol, { volume: vol }));
+        await refreshCatalog(Object.assign({}, routing, { volume: vol, routing: routing }));
       } catch (e) {
-        $st.textContent = 'Could not load volume LLM status: ' + (e.message || e);
+        if ($st) $st.textContent = 'Could not load model routing: ' + (e.message || e);
       }
     }
 
@@ -13526,22 +13671,47 @@
         const d = await r.json().catch(function () { return {}; });
         if (!r.ok) throw new Error(d.detail || d.error || ('HTTP ' + r.status));
         try {
-          window.toast && window.toast(d.message || 'Volume routing saved', { type: 'success', ttl: 3200 });
+          window.toast && window.toast(d.message || 'Routing saved', { type: 'success', ttl: 3200 });
         } catch (_) {}
         await refresh();
-        await refreshCatalog(d);
       } catch (e) {
-        alert('Volume LLM save failed: ' + (e.message || e));
+        alert('Model routing save failed: ' + (e.message || e));
+        await refresh();
+      }
+    }
+
+    async function setRoutingConfig(body) {
+      try {
+        const r = await window.dgaFetch('/api/config/model-routing', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body || {}),
+        });
+        const d = await r.json().catch(function () { return {}; });
+        if (!r.ok) throw new Error(d.detail || d.error || ('HTTP ' + r.status));
+        try {
+          window.toast && window.toast(d.message || 'Route saved', { type: 'success', ttl: 2800 });
+        } catch (_) {}
+        await refresh();
+      } catch (e) {
+        // Fallback to volume-llm routes if new endpoint missing mid-deploy
+        try {
+          await setVolumeConfig(body);
+          return;
+        } catch (_) {}
+        alert('Route save failed: ' + (e.message || e));
         await refresh();
       }
     }
 
     if (!_volumeLlmWired) {
       _volumeLlmWired = true;
-      if ($on) $on.addEventListener('click', function () { setVolumeConfig({ enabled: true }); });
+      if ($on) $on.addEventListener('click', function () {
+        setRoutingConfig({ volume_enabled: true });
+      });
       if ($off) $off.addEventListener('click', function () {
-        if (!confirm('Turn Kimi / volume master OFF?\n\nAll volume jobs (brief, intel, prioritize, pulse) will use Grok.\nFull reports and podcasts are unchanged.\n\nYou can re-enable and pick features one-by-one.')) return;
-        setVolumeConfig({ enabled: false });
+        if (!confirm('Turn Kimi master OFF?\n\nAll desk jobs routed to Kimi will fall back to Grok.\nFull reports / agentic / podcasts are unchanged.')) return;
+        setRoutingConfig({ volume_enabled: false });
       });
       if ($ref) $ref.addEventListener('click', refresh);
     }

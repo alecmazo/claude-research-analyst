@@ -260,6 +260,81 @@ _VOLUME_JOB_LABELS: dict[str, str] = {
 # job_id → bool; missing key means True (use volume when master is on)
 _volume_job_runtime: dict[str, bool] = {k: True for k in VOLUME_LLM_JOBS}
 
+# ── Full task → provider routing (Settings → Models) ───────────────────────
+# Every LLM surface in the product. `allowed` is what the UI may assign;
+# `default` is used when no override is stored. Volume-class tasks may use
+# kimi when the key is present; full reports stay grok/claude/both.
+MODEL_TASKS: dict[str, dict] = {
+    "full_report": {
+        "label": "Full equity report (Analyze)",
+        "group": "Research",
+        "allowed": ("grok", "claude", "both"),
+        "default": "grok",
+        "note": "Per-run chips can still override. Live web/X only on Grok.",
+    },
+    "compare": {
+        "label": "LLM Lab · compare report",
+        "group": "Research",
+        "allowed": ("claude", "grok"),
+        "default": "claude",
+        "note": "A/B second engine for an existing report.",
+    },
+    "daily_brief": {
+        "label": "Daily Pulse (morning brief)",
+        "group": "Desk",
+        "allowed": ("kimi", "grok"),
+        "default": "kimi",
+        "note": "Kimi uses free evidence pack (no live X). Grok uses live search.",
+        "volume": True,
+    },
+    "intelligence": {
+        "label": "Sector intelligence",
+        "group": "Desk",
+        "allowed": ("kimi", "grok"),
+        "default": "kimi",
+        "note": "Kimi = volume host; Grok = live search.",
+        "volume": True,
+    },
+    "prioritize": {
+        "label": "Idea Generator · Prioritize",
+        "group": "Desk",
+        "allowed": ("kimi", "grok"),
+        "default": "kimi",
+        "volume": True,
+    },
+    "market_pulse": {
+        "label": "Market pulse / ticker scan",
+        "group": "Desk",
+        "allowed": ("kimi", "grok"),
+        "default": "kimi",
+        "note": "Per-ticker scan. Grok path uses live search (higher cost).",
+        "volume": True,
+    },
+    "agentic": {
+        "label": "DGA Capital Analyst (agentic Q&A)",
+        "group": "Agents",
+        "allowed": ("claude",),
+        "default": "claude",
+        "note": "Tool-use agent loop — Claude only for now.",
+    },
+    "strategist": {
+        "label": "Portfolio Strategist",
+        "group": "Agents",
+        "allowed": ("claude",),
+        "default": "claude",
+        "note": "Same agentic stack as Analyst — Claude only for now.",
+    },
+    "podcast_script": {
+        "label": "Podcast script",
+        "group": "Media",
+        "allowed": ("claude", "grok"),
+        "default": "claude",
+        "note": "Script LLM. TTS is separate (OpenAI audio).",
+    },
+}
+# task_id → provider override from Settings (persisted in kv)
+_task_route_runtime: dict[str, str] = {}
+
 # Official Moonshot/Kimi platform pricing (USD per MTok) — platform.kimi.ai 2026-07.
 # Cache-hit input rate used only when usage reports cached_tokens (best-effort).
 VOLUME_PRICING_PER_MTOK: dict[str, tuple[float, float]] = {
@@ -366,19 +441,26 @@ def get_volume_llm_runtime() -> bool | None:
 
 def set_volume_llm_jobs(jobs: dict | None) -> dict[str, bool]:
     """Merge per-job toggles from Settings. Unknown keys ignored.
-    Returns the full job map after update."""
-    global _volume_job_runtime
+    Also mirrors into full task routes (kimi vs grok)."""
+    global _volume_job_runtime, _task_route_runtime
     if not isinstance(jobs, dict):
-        return dict(_volume_job_runtime)
+        return get_volume_llm_jobs()
     for k, v in jobs.items():
         kid = str(k or "").strip().lower()
         if kid in VOLUME_LLM_JOBS:
             _volume_job_runtime[kid] = bool(v)
-    return dict(_volume_job_runtime)
+            _task_route_runtime[kid] = "kimi" if bool(v) else "grok"
+    return get_volume_llm_jobs()
 
 
 def get_volume_llm_jobs() -> dict[str, bool]:
-    return {k: bool(_volume_job_runtime.get(k, True)) for k in VOLUME_LLM_JOBS}
+    out: dict[str, bool] = {}
+    for k in VOLUME_LLM_JOBS:
+        if k in _task_route_runtime:
+            out[k] = _task_route_runtime[k] in ("kimi", "volume")
+        else:
+            out[k] = bool(_volume_job_runtime.get(k, True))
+    return out
 
 
 def volume_llm_enabled() -> bool:
@@ -388,8 +470,6 @@ def volume_llm_enabled() -> bool:
       1. Settings master → set_volume_llm_runtime(False)
       2. VOLUME_LLM_ENABLED=false in env
       3. Missing KIMI_API_KEY / VOLUME_LLM_API_KEY → always off (safe)
-
-    Prefer volume_llm_enabled_for(job) at call sites so per-feature toggles apply.
     """
     if not volume_llm_configured():
         return False
@@ -399,22 +479,195 @@ def volume_llm_enabled() -> bool:
         return False
     if _VOLUME_ENV_DEFAULT in ("1", "true", "yes", "on"):
         return True
-    # Default when key is present and env unset: ON (Option 4 active)
     return True
 
 
 def volume_llm_enabled_for(job: str | None) -> bool:
-    """True when this specific volume job should use Kimi (or configured volume model).
-
-    Master off → all jobs Grok. Master on → per-job toggle (default on).
-    Unknown job ids fall back to master only.
-    """
+    """True when this volume job should use Kimi. Uses full task router when set."""
+    kid = (job or "").strip().lower()
+    if kid and kid in MODEL_TASKS:
+        return get_task_route(kid) in ("kimi", "volume")
     if not volume_llm_enabled():
         return False
-    kid = (job or "").strip().lower()
     if not kid or kid not in VOLUME_LLM_JOBS:
         return True
     return bool(_volume_job_runtime.get(kid, True))
+
+
+def _provider_key_set(env_names: tuple[str, ...]) -> bool:
+    for n in env_names:
+        if (os.environ.get(n) or "").strip():
+            return True
+    return False
+
+
+def providers_catalog() -> dict[str, dict]:
+    """All wired LLM providers (no secrets) for Settings UI."""
+    g_model = GROK_MODEL
+    c_model = CLAUDE_MODEL
+    v_model = VOLUME_LLM_MODEL
+    g_in, g_out = grok_rates(g_model)
+    try:
+        c_table = globals().get("CLAUDE_PRICING_PER_MTOK") or {}
+        c_in, c_out = c_table.get(c_model, (5.0, 25.0))
+    except Exception:
+        c_in, c_out = (5.0, 25.0)
+    v_in, v_out = volume_rates(v_model)
+    prov_vol = volume_provider_label()
+    return {
+        "grok": {
+            "id": "grok",
+            "label": "Grok (xAI)",
+            "model": g_model,
+            "configured": _provider_key_set(("XAI_API_KEY",)),
+            "key_env": "XAI_API_KEY",
+            "rates_usd_per_mtok": {"input": g_in, "output": g_out},
+            "live_search": True,
+            "capabilities": ["reports", "desk", "live_search"],
+        },
+        "claude": {
+            "id": "claude",
+            "label": "Claude (Anthropic)",
+            "model": c_model,
+            "configured": _provider_key_set(("ANTHROPIC_API_KEY", "CLAUDE_API_KEY")),
+            "key_env": "ANTHROPIC_API_KEY",
+            "rates_usd_per_mtok": {"input": c_in, "output": c_out},
+            "live_search": False,
+            "capabilities": ["reports", "agentic", "podcast"],
+        },
+        "kimi": {
+            "id": "kimi",
+            "label": "Kimi K3 (Moonshot)" if prov_vol == "kimi" else "Volume LLM",
+            "model": v_model,
+            "configured": volume_llm_configured(),
+            "key_env": _VOLUME_KEY_SOURCE or "KIMI_API_KEY",
+            "base_url": VOLUME_LLM_BASE_URL,
+            "rates_usd_per_mtok": {"input": v_in, "output": v_out},
+            "live_search": False,
+            "master_enabled": volume_llm_enabled(),
+            "capabilities": ["desk", "volume"],
+        },
+        "both": {
+            "id": "both",
+            "label": "Grok + Claude (both)",
+            "model": f"{g_model} + {c_model}",
+            "configured": (
+                _provider_key_set(("XAI_API_KEY",))
+                and _provider_key_set(("ANTHROPIC_API_KEY", "CLAUDE_API_KEY"))
+            ),
+            "key_env": "XAI_API_KEY + ANTHROPIC_API_KEY",
+            "rates_usd_per_mtok": None,
+            "live_search": True,
+            "capabilities": ["reports"],
+            "note": "Runs both engines; ~sum of costs.",
+        },
+    }
+
+
+def default_task_route(task_id: str) -> str:
+    meta = MODEL_TASKS.get(task_id) or {}
+    d = str(meta.get("default") or "grok")
+    if d in ("kimi", "volume") and not volume_llm_configured():
+        return "grok"
+    return d
+
+
+def get_task_route(task_id: str) -> str:
+    """Resolved provider for a task (settings override → default → safe fallback)."""
+    kid = (task_id or "").strip().lower()
+    meta = MODEL_TASKS.get(kid)
+    if not meta:
+        return "grok"
+    allowed = tuple(meta.get("allowed") or ("grok",))
+    if kid in _task_route_runtime:
+        r = str(_task_route_runtime[kid] or "").lower().strip()
+    else:
+        if kid in VOLUME_LLM_JOBS:
+            if not volume_llm_enabled():
+                r = "grok"
+            elif not bool(_volume_job_runtime.get(kid, True)):
+                r = "grok"
+            else:
+                r = default_task_route(kid)
+        else:
+            r = default_task_route(kid)
+    if r == "volume":
+        r = "kimi"
+    if r not in allowed:
+        r = default_task_route(kid)
+        if r not in allowed:
+            r = allowed[0]
+    if r == "kimi" and meta.get("volume") and not volume_llm_enabled():
+        r = "grok" if "grok" in allowed else allowed[0]
+    if r == "kimi" and not volume_llm_configured():
+        r = "grok" if "grok" in allowed else allowed[0]
+    return r
+
+
+def set_task_routes(routes: dict | None) -> dict[str, str]:
+    """Merge task→provider overrides. Returns full resolved route map."""
+    global _task_route_runtime, _volume_job_runtime
+    if not isinstance(routes, dict):
+        return {k: get_task_route(k) for k in MODEL_TASKS}
+    for k, v in routes.items():
+        kid = str(k or "").strip().lower()
+        if kid not in MODEL_TASKS:
+            continue
+        prov = str(v or "").lower().strip()
+        if prov == "volume":
+            prov = "kimi"
+        allowed = tuple(MODEL_TASKS[kid].get("allowed") or ())
+        if prov not in allowed:
+            continue
+        _task_route_runtime[kid] = prov
+        if kid in VOLUME_LLM_JOBS:
+            _volume_job_runtime[kid] = prov == "kimi"
+    return {k: get_task_route(k) for k in MODEL_TASKS}
+
+
+def get_task_routes() -> dict[str, str]:
+    return {k: get_task_route(k) for k in MODEL_TASKS}
+
+
+def _resolve_model_label(provider: str, providers: dict | None = None) -> str:
+    p = (provider or "").lower()
+    cat = providers or providers_catalog()
+    if p == "both":
+        return f"{GROK_MODEL} + {CLAUDE_MODEL}"
+    if p in cat:
+        return str(cat[p].get("model") or p)
+    return p
+
+
+def model_routing_status() -> dict:
+    """Full Settings catalog: providers + every task route."""
+    providers = providers_catalog()
+    routes = get_task_routes()
+    tasks = []
+    for tid, meta in MODEL_TASKS.items():
+        allowed = list(meta.get("allowed") or [])
+        tasks.append({
+            "id": tid,
+            "label": meta.get("label") or tid,
+            "group": meta.get("group") or "Other",
+            "allowed": allowed,
+            "default": meta.get("default"),
+            "route": routes.get(tid),
+            "note": meta.get("note") or "",
+            "volume": bool(meta.get("volume")),
+            "model_resolved": _resolve_model_label(routes.get(tid) or "grok", providers),
+        })
+    return {
+        "providers": providers,
+        "tasks": tasks,
+        "routes": routes,
+        "groups": ["Research", "Desk", "Agents", "Media", "Other"],
+        "volume": volume_llm_status(),
+        "grok_model": GROK_MODEL,
+        "claude_model": CLAUDE_MODEL,
+        "volume_model": VOLUME_LLM_MODEL,
+        "agentic_model": os.environ.get("AGENTIC_MODEL", "").strip() or CLAUDE_MODEL,
+    }
 
 
 def volume_llm_status() -> dict:
@@ -426,8 +679,8 @@ def volume_llm_status() -> dict:
         j: (prov if volume_llm_enabled_for(j) else "grok")
         for j in VOLUME_LLM_JOBS
     }
-    routes["full_reports"] = "grok | claude (unchanged)"
-    routes["podcast"] = "claude | grok (unchanged)"
+    full_routes = get_task_routes()
+    routes.update({k: v for k, v in full_routes.items() if k not in routes})
     inp_r, out_r = volume_rates(VOLUME_LLM_MODEL)
     return {
         "configured": volume_llm_configured(),
@@ -445,6 +698,7 @@ def volume_llm_status() -> dict:
         "job_labels": dict(_VOLUME_JOB_LABELS),
         "job_ids": list(VOLUME_LLM_JOBS),
         "routes": routes,
+        "task_routes": full_routes,
         "rollback": "POST /api/config/volume-llm {\"enabled\": false}",
     }
 

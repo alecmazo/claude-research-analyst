@@ -6347,6 +6347,8 @@ def config_models():
         "agentic": _AGENTIC_MODEL,
         # Option 4 volume harness — never used for full reports / podcast
         "volume":  getattr(analyst, "volume_llm_status", lambda: {})(),
+        # Full task → provider matrix (Settings)
+        "routing": getattr(analyst, "model_routing_status", lambda: {})(),
     }
     try:
         # Single-ticker report envelope: ~30-45K input, 6-10K output,
@@ -6398,41 +6400,65 @@ def config_models():
 
 
 _VOLUME_KV_KEY = "dga.volume_llm.enabled"
+_ROUTING_KV_KEY = "dga.model_routing.v1"
 
 
 def _load_volume_llm_override_from_db() -> None:
-    """Hydrate Settings master + per-job toggles from kv_store."""
+    """Hydrate Settings master + per-job toggles + full task routes from kv_store."""
     try:
         raw = _kv_get(_VOLUME_KV_KEY)
-        if raw is None:
-            return
-        if isinstance(raw, dict):
-            en = raw.get("enabled")
-            jobs = raw.get("jobs")
-        else:
-            en = raw
-            jobs = None
-        if en is True or en is False:
-            analyst.set_volume_llm_runtime(bool(en))
-            print(f"[volume-llm] runtime override from DB: enabled={bool(en)}", flush=True)
-        if isinstance(jobs, dict):
-            analyst.set_volume_llm_jobs(jobs)
-            print(f"[volume-llm] job toggles from DB: {analyst.get_volume_llm_jobs()}", flush=True)
+        if raw is not None:
+            if isinstance(raw, dict):
+                en = raw.get("enabled")
+                jobs = raw.get("jobs")
+                task_routes = raw.get("task_routes") or raw.get("routes")
+            else:
+                en = raw
+                jobs = None
+                task_routes = None
+            if en is True or en is False:
+                analyst.set_volume_llm_runtime(bool(en))
+                print(f"[volume-llm] runtime override from DB: enabled={bool(en)}", flush=True)
+            if isinstance(jobs, dict):
+                analyst.set_volume_llm_jobs(jobs)
+                print(f"[volume-llm] job toggles from DB: {analyst.get_volume_llm_jobs()}", flush=True)
+            if isinstance(task_routes, dict) and hasattr(analyst, "set_task_routes"):
+                analyst.set_task_routes(task_routes)
+                print(f"[model-routing] routes from volume kv: {analyst.get_task_routes()}", flush=True)
     except Exception as e:
         print(f"[volume-llm] load override failed: {e!s:.120}", flush=True)
+    # Dedicated routing key (preferred; supersedes volume-only jobs map)
+    try:
+        raw2 = _kv_get(_ROUTING_KV_KEY)
+        if isinstance(raw2, dict) and isinstance(raw2.get("routes"), dict):
+            if hasattr(analyst, "set_task_routes"):
+                analyst.set_task_routes(raw2["routes"])
+                print(f"[model-routing] routes from DB: {analyst.get_task_routes()}", flush=True)
+            if "volume_enabled" in raw2 and raw2["volume_enabled"] is not None:
+                analyst.set_volume_llm_runtime(bool(raw2["volume_enabled"]))
+    except Exception as e:
+        print(f"[model-routing] load failed: {e!s:.120}", flush=True)
 
 
 def _persist_volume_llm_settings() -> None:
-    """Write master + per-job map to kv (survives redeploy)."""
+    """Write master + per-job map + full task routes to kv (survives redeploy)."""
     try:
         if analyst.get_volume_llm_runtime() is not None:
             en = bool(analyst.get_volume_llm_runtime())
         else:
             en = bool(analyst.volume_llm_enabled())
-        _kv_put(_VOLUME_KV_KEY, {
+        routes = analyst.get_task_routes() if hasattr(analyst, "get_task_routes") else {}
+        payload = {
             "enabled": en,
             "jobs": analyst.get_volume_llm_jobs(),
+            "task_routes": routes,
             "updated_at": _now_pacific().isoformat(),
+        }
+        _kv_put(_VOLUME_KV_KEY, payload)
+        _kv_put(_ROUTING_KV_KEY, {
+            "routes": routes,
+            "volume_enabled": en,
+            "updated_at": payload["updated_at"],
         })
     except Exception as e:
         print(f"[volume-llm] kv_put failed: {e!s:.120}", flush=True)
@@ -6445,6 +6471,50 @@ def get_volume_llm_config(request: Request):
     return {"ok": True, **analyst.volume_llm_status()}
 
 
+@app.get("/api/config/model-routing")
+def get_model_routing(request: Request):
+    """Full model catalog + per-task routes for Settings → Models."""
+    _claims_or_401(request)
+    if hasattr(analyst, "model_routing_status"):
+        return {"ok": True, **analyst.model_routing_status()}
+    return {"ok": True, **analyst.volume_llm_status()}
+
+
+@app.post("/api/config/model-routing")
+def set_model_routing(request: Request):
+    """Set per-task provider routes and/or Kimi volume master.
+
+    Body (any combination):
+      { "routes": { "full_report": "grok", "daily_brief": "kimi", ... } }
+      { "volume_enabled": true|false }   — master kill-switch for Kimi desk jobs
+    """
+    _claims_or_401(request)
+    try:
+        body = _request_json_sync(request) or {}
+    except Exception:
+        body = {}
+    if "routes" not in body and "volume_enabled" not in body and "enabled" not in body:
+        raise HTTPException(
+            status_code=422,
+            detail="Body must include {routes: {...}} and/or {volume_enabled: bool}",
+        )
+    bits = []
+    if "volume_enabled" in body or "enabled" in body:
+        en = body.get("volume_enabled", body.get("enabled"))
+        analyst.set_volume_llm_runtime(bool(en))
+        bits.append("Kimi master ON" if en else "Kimi master OFF (desk jobs → Grok)")
+    if isinstance(body.get("routes"), dict) and hasattr(analyst, "set_task_routes"):
+        routes = analyst.set_task_routes(body["routes"])
+        bits.append("Routes: " + ", ".join(f"{k}→{v}" for k, v in sorted(routes.items())))
+    _persist_volume_llm_settings()
+    st = analyst.model_routing_status() if hasattr(analyst, "model_routing_status") else {}
+    return {
+        "ok": True,
+        "message": " · ".join(bits) if bits else "Saved.",
+        **st,
+    }
+
+
 @app.post("/api/config/volume-llm")
 def set_volume_llm_config(request: Request):
     """Enable / roll back the volume LLM and/or set per-job toggles.
@@ -6452,44 +6522,50 @@ def set_volume_llm_config(request: Request):
     Body (any combination):
       { "enabled": true|false }   — master: false = all volume jobs → Grok
       { "jobs": { "daily_brief": true, "intelligence": false, ... } }
+      { "routes": { "daily_brief": "kimi", "full_report": "claude", ... } }
 
-    Full reports (Grok + Claude) and podcasts are never affected.
+    Full reports default is editable via routes; agentic stays Claude-only for now.
     """
     _claims_or_401(request)
     try:
         body = _request_json_sync(request) or {}
     except Exception:
         body = {}
-    if "enabled" not in body and "jobs" not in body:
+    if "enabled" not in body and "jobs" not in body and "routes" not in body:
         raise HTTPException(
             status_code=422,
-            detail="Body must include {enabled: bool} and/or {jobs: {job_id: bool}}",
+            detail="Body must include {enabled: bool}, {jobs: {...}}, and/or {routes: {...}}",
         )
     message_bits = []
     if "enabled" in body:
         enabled = bool(body.get("enabled"))
         analyst.set_volume_llm_runtime(enabled)
         message_bits.append(
-            "Volume master ON — jobs use Kimi (or configured volume model) when their toggle is on."
+            "Volume master ON — desk jobs use Kimi when routed to kimi."
             if enabled else
-            "Volume master OFF — all volume jobs use Grok."
+            "Volume master OFF — all Kimi desk jobs use Grok."
         )
     if "jobs" in body and isinstance(body.get("jobs"), dict):
         jobs = analyst.set_volume_llm_jobs(body.get("jobs"))
         on = [k for k, v in jobs.items() if v]
         off = [k for k, v in jobs.items() if not v]
         message_bits.append(
-            "Jobs on volume: " + (", ".join(on) if on else "none")
+            "Jobs on Kimi: " + (", ".join(on) if on else "none")
             + ((" · on Grok: " + ", ".join(off)) if off else "")
         )
+    if "routes" in body and isinstance(body.get("routes"), dict) and hasattr(analyst, "set_task_routes"):
+        routes = analyst.set_task_routes(body["routes"])
+        message_bits.append("Routes saved (" + str(len(routes)) + " tasks).")
     _persist_volume_llm_settings()
     st = analyst.volume_llm_status()
     enabled = bool(st.get("enabled"))
+    routing = analyst.model_routing_status() if hasattr(analyst, "model_routing_status") else {}
     return {
         "ok": True,
         "enabled": enabled,
         "jobs": st.get("jobs"),
         "routes": st.get("routes"),
+        "task_routes": st.get("task_routes") or routing.get("routes"),
         "model": st.get("model"),
         "configured": st.get("configured"),
         "message": " ".join(message_bits) if message_bits else "Saved.",
@@ -6500,6 +6576,7 @@ def set_volume_llm_config(request: Request):
             "jobs": st.get("jobs"),
             "routes": st.get("routes"),
         },
+        "routing": routing,
     }
 
 
