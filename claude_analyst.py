@@ -1526,12 +1526,20 @@ MANDATORY DATA VERIFICATION STEP (perform this at the VERY START):
    - LATEST_FILING_TYPE (10-K or 10-Q)
    - ANNUAL DATA table: first row is TTM (pre-computed), followed by FY annual rows
    - QUARTERLY DATA (latest quarter + same quarter prior year + YTD both years) from the latest 10-Q
+   - Optionally a MULTI-YEAR TREND block — that is for narrative trajectory ONLY, never for filling the Key Metrics table.
 4. The TTM row in the ANNUAL DATA table is already computed — use it directly for the TTM column. Do NOT attempt to recalculate TTM from quarterly data.
 5. Use the ANNUAL DATA for the main Key Metrics table (TTM column = TTM row, FY columns = annual rows).
 6. If LATEST_FILING_TYPE is 10-Q, also create the Latest Quarterly YoY Analysis table using the QUARTERLY DATA.
 7. If LATEST_FILING_TYPE is 10-K, skip the quarterly subsection entirely.
 8. If any number is 'N/A', write exactly: "N/A".
 9. All values in the VERIFIED block are in $ millions (already converted). Use them directly — do NOT divide by 1,000,000 again. EPS is in $ per share (use as-is).
+
+ABSOLUTE BAN — qualitative / vague cells in financial tables (CRITICAL):
+- Every numeric cell in Key Metrics, Quarterly YoY, balance sheet, cash flow tables MUST be a number (e.g. 1288.0, 4.49, 5.7%) or exactly "N/A".
+- FORBIDDEN inside table cells: "Elevated", "Improving", "Turning positive", "Solid", "Robust", "Healthy", "Manageable", "Higher", "Lower", "Adequate", "Strong", "Weak", "Derived ~ higher", "Neg", "~7+", or any prose adjective.
+- Put qualitative commentary ONLY in prose paragraphs BELOW the tables, never inside cells.
+- If live web/X search returns conflicting numbers or year labels, IGNORE them for tables — the VERIFIED FINANCIAL DATA block always wins.
+- Live search is ONLY for news, catalysts, filings headlines, and institutional color — never to invent or replace table figures.
 
 TABLE FORMAT REQUIREMENT (use this exact markdown format - no deviations):
 | Metric                          | TTM (as of [Date]) | FY[Year] (ended [Date]) | FY[Year-1] (ended [Date]) | FY[Year-2] (ended [Date]) |
@@ -7331,6 +7339,35 @@ def call_claude(system_prompt: str, user_content: str,
     return "".join(chunks)
 
 
+def _financial_tables_look_degraded(report_md: str) -> bool:
+    """True if Key Metrics-style tables use qualitative prose instead of numbers.
+
+    Grok + live search sometimes fills cells with 'Elevated' / 'Turning positive'
+    when multi-year year labels conflict — investors need real SEC figures.
+    """
+    if not report_md:
+        return False
+    text = str(report_md)
+    # Qualitative / vague tokens that must never appear as table cell content
+    bad_pat = re.compile(
+        r"\|\s*(?:Elevated|Improving|Turning\s+positive|Solid|Robust|Healthy|"
+        r"Manageable|Adequate|Higher(?:\s+post[-\s]?[A-Za-z]+)?|Lower|"
+        r"Strong|Weak|Derived\s*~?\s*higher|Neg\.?|~?\d+\+|"
+        r"Higher\s+post-Calpine|Investment-grade)\s*\|",
+        re.IGNORECASE,
+    )
+    hits = bad_pat.findall(text)
+    if len(hits) >= 3:
+        return True
+    # Also: TTM/FCF row with zero numeric millions in the first data column
+    # paired with lots of qualitative language nearby
+    if len(hits) >= 2 and re.search(
+            r"Free Cash Flow[^\n]{0,40}\|\s*(Turning|Improving|Elevated)",
+            text, re.I):
+        return True
+    return False
+
+
 def call_llm(provider: str, system_prompt: str, user_content: str,
              *, live_search: bool = False, on_delta=None, usage_capture=None,
              should_cancel=None) -> str:
@@ -7944,6 +7981,15 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
         # Full cache hit — read everything off disk, zero new SEC calls.
         try:
             user_msg = _cached_um_path.read_text()
+            # Append hard financial-table rules even on cache hit (older caches
+            # predate the ban on qualitative cells).
+            if "HARD RULES FOR THIS REPORT" not in user_msg:
+                user_msg = user_msg.rstrip() + (
+                    "\n\n=== HARD RULES FOR THIS REPORT (NON-NEGOTIABLE) ===\n"
+                    "Key Metrics tables: exact numbers from VERIFIED FINANCIAL DATA "
+                    "or N/A only — never Elevated/Improving/Turning positive/Solid "
+                    "in cells. Live search is for news only, not table figures.\n"
+                )
             mkt = (json.loads(_cached_mkt_path.read_text())
                    if _cached_mkt_path.exists() else fetch_market_snapshot(ticker))
             if audit_path.exists():
@@ -8222,6 +8268,19 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
         except Exception as _pe:
             print(f"   ⚠️  Peer-data fetch skipped ({_pe})")
 
+        _fin_hard_rules = (
+            "=== HARD RULES FOR THIS REPORT (NON-NEGOTIABLE) ===\n"
+            "1. Key Metrics / Financial tables: copy EXACT numbers from the PRIMARY "
+            "VERIFIED FINANCIAL DATA block above. Numbers or N/A only — never "
+            "'Elevated', 'Improving', 'Turning positive', 'Solid', 'Manageable', "
+            "'Higher', '~7+', or any adjective in a table cell.\n"
+            "2. If MULTI-YEAR TREND (SECONDARY) conflicts on year labels or magnitudes, "
+            "ignore it for tables; use PRIMARY only. Secondary is for narrative trend.\n"
+            "3. Live web/X search (if enabled) is ONLY for news, catalysts, filings "
+            "headlines, and sentiment — NEVER to fill or override financial tables.\n"
+            "4. EPS, Revenue, FCF, Debt, Cash must appear as numeric figures investors "
+            "can audit (e.g. 1288.0, 4.49, 5.7%), not prose descriptors.\n"
+        )
         user_msg = (
             f"DATE: {today}\n"
             f"TICKER: {ticker}\n"
@@ -8233,6 +8292,7 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
             f"52_WEEK_RANGE: {wk52_str}\n"
             f"LATEST_FILING_TYPE: {data.get('latest_filing_type')}\n\n"
             f"{verified_block}\n\n"
+            f"{_fin_hard_rules}\n"
             + (f"{peers_block}\n\n" if peers_block else "")
             + (f"{analyst_block}\n\n" if analyst_block else "")
             + f"Generate the full research report for {ticker} following every rule in your system prompt."
@@ -8288,6 +8348,52 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
         print(f"   ❌ {_prov.upper()} API error: {exc}")
         result["error"] = f"{_prov.title()}: {exc}"
         return result
+
+    # Safety net: Grok + live search sometimes invents qualitative table cells
+    # ("Elevated", "Turning positive") when year labels conflict. Detect and
+    # regenerate once without live search so SEC numbers win.
+    if (_live and report_text
+            and _financial_tables_look_degraded(report_text)):
+        print(f"   ⚠️  {ticker}: qualitative/degraded financial tables detected "
+              f"after live-search run — regenerating WITHOUT live search…")
+        _ck()
+        _emit_progress(on_progress, "grok", 0.55,
+                       f"{_prov.title()} — re-running tables without live search")
+        try:
+            _usage2: dict = {}
+            report_text2 = call_llm(
+                _prov, system_prompt, user_msg,
+                live_search=False,
+                on_delta=on_delta,
+                usage_capture=lambda u: _usage2.update(u or {}),
+                should_cancel=should_cancel,
+            )
+            if report_text2 and not _financial_tables_look_degraded(report_text2):
+                report_text = report_text2
+                # Merge costs (both calls)
+                try:
+                    _usage["input_tokens"] = (
+                        int(_usage.get("input_tokens") or 0)
+                        + int(_usage2.get("input_tokens") or 0))
+                    _usage["output_tokens"] = (
+                        int(_usage.get("output_tokens") or 0)
+                        + int(_usage2.get("output_tokens") or 0))
+                    _usage["cost_usd"] = (
+                        float(_usage.get("cost_usd") or 0)
+                        + float(_usage2.get("cost_usd") or 0))
+                    _usage["live_search_retry"] = True
+                except Exception:
+                    pass
+                print(f"   ✅ {ticker}: clean tables after no-search retry")
+            elif report_text2:
+                # Still degraded but prefer the no-search version (less invention)
+                report_text = report_text2
+                print(f"   ⚠️  {ticker}: tables still imperfect after retry — "
+                      f"kept no-search draft")
+        except ClaudeCancelled:
+            raise
+        except Exception as _re:
+            print(f"   ⚠️  no-search retry failed ({_re!s:.120}); keeping first draft")
 
     # Save markdown — suffixed for non-Grok providers so they don't overwrite.
     md_path = STOCKS_FOLDER / f"{ticker}_DGA_Report{_suffix}.md"

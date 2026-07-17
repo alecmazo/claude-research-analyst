@@ -987,7 +987,10 @@ def format_verified_block(data: dict) -> str:
         "GrossProfit may be derived (Revenue - CostOfRevenue) if not directly tagged. "
         "EBITDA is always derived (OperatingIncome + D&A) and is non-GAAP. "
         "If CapEx tag was absent for a period, FCF = OCF (CapEx treated as 0). "
-        "If a cell is 'N/A', write 'N/A' — do NOT write a long disclaimer phrase."
+        "If a cell is 'N/A', write 'N/A' — do NOT write a long disclaimer phrase. "
+        "NEVER put qualitative words (Elevated, Improving, Turning positive, Solid, "
+        "Manageable, Higher, ~7+) in table cells — numbers or N/A only. "
+        "This PRIMARY block wins over any multi-year trend block or live web/news."
     )
     return "\n".join(lines)
 

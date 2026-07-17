@@ -1060,11 +1060,15 @@ def format_history_block(history: dict, max_quarters: int = 10, max_annuals: int
     ans = sorted([r for r in rows if r.get("period_type") == "annual"],
                  key=lambda r: r.get("end", ""))[-max_annuals:]
     L: list[str] = []
-    L.append(f"=== MULTI-YEAR FINANCIAL TREND FOR {history.get('ticker','')} "
+    L.append(f"=== MULTI-YEAR FINANCIAL TREND (SECONDARY) FOR {history.get('ticker','')} "
              f"(SEC XBRL, calendar-labeled, $ in millions, oldest → newest) ===")
-    L.append("Use this for TRAJECTORY/trend commentary (growth, margin direction, "
-             "cash-flow trend). Cash flow is discrete per quarter; a '*' marks a "
-             "derived Q4 (FY − Q1..Q3). Margins are percentages.")
+    L.append(
+        "SECONDARY ONLY — use for TRAJECTORY / narrative commentary (growth, margin "
+        "direction, cash-flow trend). Do NOT copy these into the Key Metrics table if "
+        "they conflict with the PRIMARY VERIFIED FINANCIAL DATA block above; the "
+        "PRIMARY block always wins for tables. Cash flow is discrete per quarter; "
+        "a '*' marks a derived Q4 (FY − Q1..Q3). Margins are percentages."
+    )
     if ans:
         L.append("")
         L.append("[ANNUAL]")
