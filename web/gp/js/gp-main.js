@@ -365,20 +365,36 @@
         cost: '≈ $' + Number(est.pulse_per_ticker || 0.03).toFixed(3) + ' / ticker',
         paid: true,
       },
-      agentic: {
-        action: 'DGA Capital Analyst (agentic)',
-        provider: routeOf('agentic', 'claude'),
-        model: cfg.agentic || c,
-        cost: _llmRng(est.agentic, '≈ $0.05–0.30'),
-        paid: true,
-      },
-      strategist: {
-        action: 'Portfolio Strategist',
-        provider: routeOf('strategist', 'claude'),
-        model: cfg.agentic || c,
-        cost: _llmRng(est.strategist, '≈ $0.30–1.00'),
-        paid: true,
-      },
+      agentic: (function () {
+        const p = routeOf('agentic', 'claude');
+        const mid = p === 'grok' ? g
+          : p === 'kimi' ? ((cfg.routing && cfg.routing.kimi_model) || 'kimi-k3')
+          : p === 'deepseek' ? ((cfg.routing && cfg.routing.deepseek_model) || 'deepseek-chat')
+          : (cfg.agentic || c);
+        return {
+          action: 'DGA Capital Analyst (agentic)',
+          provider: p,
+          model: mid,
+          cost: _llmRng(est.agentic, '≈ $0.05–0.30'),
+          paid: true,
+          note: 'Settings → Models · Agents route',
+        };
+      })(),
+      strategist: (function () {
+        const p = routeOf('strategist', 'claude');
+        const mid = p === 'grok' ? g
+          : p === 'kimi' ? ((cfg.routing && cfg.routing.kimi_model) || 'kimi-k3')
+          : p === 'deepseek' ? ((cfg.routing && cfg.routing.deepseek_model) || 'deepseek-chat')
+          : (cfg.agentic || c);
+        return {
+          action: 'Portfolio Strategist',
+          provider: p,
+          model: mid,
+          cost: _llmRng(est.strategist, '≈ $0.30–1.00'),
+          paid: true,
+          note: 'Settings → Models · Agents route',
+        };
+      })(),
       lab_claude: {
         action: 'LLM Lab · compare report',
         provider: routeOf('compare', 'claude'),

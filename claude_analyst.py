@@ -354,16 +354,16 @@ MODEL_TASKS: dict[str, dict] = {
     "agentic": {
         "label": "DGA Capital Analyst (agentic Q&A)",
         "group": "Agents",
-        "allowed": ("claude",),
+        "allowed": ("claude", "grok", "kimi", "deepseek"),
         "default": "claude",
-        "note": "Tool-use agent loop — Claude only for now.",
+        "note": "Tool-use agent. Pick Grok 4.5, Claude 4.8, Kimi K3, or DeepSeek.",
     },
     "strategist": {
         "label": "Portfolio Strategist",
         "group": "Agents",
-        "allowed": ("claude",),
+        "allowed": ("claude", "grok", "kimi", "deepseek"),
         "default": "claude",
-        "note": "Same agentic stack as Analyst — Claude only for now.",
+        "note": "Same tool-use loop as Analyst — choose any wired engine.",
     },
 }
 # task_id → provider override from Settings (persisted in kv)
@@ -581,17 +581,17 @@ def providers_catalog() -> dict[str, dict]:
     return {
         "grok": {
             "id": "grok",
-            "label": "Grok (xAI)",
+            "label": "Grok 4.5 (xAI)",
             "model": g_model,
             "configured": _provider_key_set(("XAI_API_KEY",)),
             "key_env": "XAI_API_KEY",
             "rates_usd_per_mtok": {"input": g_in, "output": g_out},
             "live_search": True,
-            "capabilities": ["reports", "desk", "live_search"],
+            "capabilities": ["reports", "desk", "live_search", "agentic"],
         },
         "claude": {
             "id": "claude",
-            "label": "Claude (Anthropic)",
+            "label": "Claude Opus 4.8",
             "model": c_model,
             "configured": _provider_key_set(("ANTHROPIC_API_KEY", "CLAUDE_API_KEY")),
             "key_env": "ANTHROPIC_API_KEY",
@@ -609,12 +609,12 @@ def providers_catalog() -> dict[str, dict]:
             "rates_usd_per_mtok": {"input": k_in, "output": k_out},
             "live_search": False,
             "master_enabled": volume_llm_enabled() if kimi_configured() else False,
-            "capabilities": ["reports", "desk", "volume", "podcast"],
+            "capabilities": ["reports", "desk", "volume", "podcast", "agentic"],
             "note": "Separate from DeepSeek. Official Moonshot platform pricing.",
         },
         "deepseek": {
             "id": "deepseek",
-            "label": "DeepSeek (V4 Flash)",
+            "label": "DeepSeek V4 Flash",
             "model": DEEPSEEK_MODEL,
             "configured": deepseek_configured(),
             "key_env": _DEEPSEEK_KEY_SOURCE or "DEEPSEEK_API_KEY",
@@ -622,8 +622,8 @@ def providers_catalog() -> dict[str, dict]:
             "rates_usd_per_mtok": {"input": d_in, "output": d_out},
             "live_search": False,
             "master_enabled": volume_llm_enabled() if deepseek_configured() else False,
-            "capabilities": ["reports", "desk", "volume"],
-            "note": "Separate from Kimi. deepseek-chat → V4 Flash compat rates.",
+            "capabilities": ["reports", "desk", "volume", "agentic"],
+            "note": "Separate from Kimi K3. deepseek-chat → V4 Flash compat rates.",
         },
         "both": {
             "id": "both",

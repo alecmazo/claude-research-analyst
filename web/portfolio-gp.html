@@ -243,8 +243,9 @@
       </header>
       <div style="padding:14px 16px;">
         <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.55;margin-bottom:10px;">
-          Ask an open-ended research question. Claude autonomously pulls live quotes,
-          your saved Grok/Claude reports, sector data, and fresh news — then answers
+          Ask an open-ended research question. The agent (Settings → Models · Agents:
+          Grok 4.5 / Claude 4.8 / Kimi K3 / DeepSeek) pulls live quotes,
+          saved reports, sector data, and news — then answers
           with cited numbers. <em>Multi-step; ~$0.05–0.30 depending on depth.</em>
         </div>
         <div style="display:flex;gap:8px;align-items:flex-start;">
@@ -298,7 +299,7 @@ End with the sleeve block at this account's real market value so I can push it t
       </header>
       <div style="padding:14px 16px;">
         <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.55;margin-bottom:10px;">
-          Full investment-committee review of an entire book. Claude reasons
+          Full investment-committee review of an entire book. Agent engine (Settings) reasons
           <em>across</em> positions — concentration, correlation, EV, wipeout
           scenarios — and proposes grounded, advisory adjustments. Then hand off
           to a Portfolio Roundup podcast or a strategy memo. <em>~$0.30–1.00.</em>
@@ -2054,7 +2055,8 @@ End with the sleeve block at this account's real market value so I can push it t
           <p style="margin:0 0 10px;font-size:11px;color:#64748b;line-height:1.45;">
             Every wired provider below. Assign a model to <strong>each task</strong>.
             Desk jobs can use <strong>Kimi</strong> (cheap volume) or <strong>Grok</strong> (live search).
-            Full reports: Grok / Claude / <strong>Kimi</strong> / both. Podcast host = Kimi.
+            Full reports + Agents: Grok 4.5 · Claude Opus 4.8 · <strong>Kimi K3</strong> · DeepSeek.
+            Podcast host = Kimi K3.
             Costs tracked per call. Survives redeploys.
           </p>
 
@@ -2088,10 +2090,10 @@ End with the sleeve block at this account's real market value so I can push it t
 
           <div class="settings-help" style="margin-top:10px;padding:8px 10px;background:var(--gray-50,#f8fafc);border:1px solid var(--border-subtle,#e2e8f0);border-radius:8px;">
             Keys (separate providers): <code>XAI_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>,
-            <code>KIMI_API_KEY</code> (Moonshot · kimi-k3 · $3/$15 MTok),
+            <code>KIMI_API_KEY</code> (Moonshot · <strong>Kimi K3</strong> · $3/$15 MTok),
             <code>DEEPSEEK_API_KEY</code> (or legacy <code>VOLUME_LLM_API_KEY</code> · deepseek-chat · $0.14/$0.28 MTok).
-            Optional: <code>GROK_MODEL</code>, <code>CLAUDE_MODEL</code>, <code>KIMI_MODEL</code>, <code>AGENTIC_MODEL</code>.
-            <strong>Kimi ≠ DeepSeek</strong> — pick either per task below.
+            Optional: <code>GROK_MODEL</code>, <code>CLAUDE_MODEL</code>, <code>KIMI_MODEL</code>, <code>AGENTIC_MODEL</code> (Claude default id).
+            <strong>Kimi K3 ≠ DeepSeek</strong>. Agents (Analyst + Strategist) use the same per-task dropdowns.
           </div>
         </div>
       </section>

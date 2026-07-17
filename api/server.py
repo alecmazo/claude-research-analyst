@@ -6553,7 +6553,7 @@ def set_volume_llm_config(request: Request):
       { "jobs": { "daily_brief": true, "intelligence": false, ... } }
       { "routes": { "daily_brief": "kimi", "full_report": "claude", ... } }
 
-    Full reports default is editable via routes; agentic stays Claude-only for now.
+    Full reports + Agents (agentic/strategist) are all editable via routes.
     """
     _claims_or_401(request)
     try:
@@ -20770,7 +20770,8 @@ _AGENTIC_TOOLS = [
             "type": "object",
             "properties": {
                 "ticker": {"type": "string"},
-                "provider": {"type": "string", "enum": ["grok", "claude", "both"],
+                "provider": {"type": "string",
+                             "enum": ["grok", "claude", "kimi", "deepseek", "both"],
                              "description": "Which version to read. Default 'both'."},
             },
             "required": ["ticker"],
@@ -21160,14 +21161,22 @@ def _agentic_exec_tool(name: str, args: dict) -> str:
             if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
                 return "DB unavailable."
             with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-                cur.execute("""SELECT report_md, report_md_claude, rating, price_target,
-                                      upside_pct, generated_at
-                                 FROM analyst_reports WHERE ticker = %s""", (tk,))
+                try:
+                    cur.execute("""SELECT report_md, report_md_claude, report_md_kimi,
+                                          report_md_deepseek, rating, price_target,
+                                          upside_pct, generated_at
+                                     FROM analyst_reports WHERE ticker = %s""", (tk,))
+                except Exception:
+                    cur.execute("""SELECT report_md, report_md_claude, rating, price_target,
+                                          upside_pct, generated_at
+                                     FROM analyst_reports WHERE ticker = %s""", (tk,))
                 row = cur.fetchone()
             if not row:
                 return f"No saved report for {tk}."
             grok_md   = (row.get("report_md") or "").strip()
             claude_md = (row.get("report_md_claude") or "").strip()
+            kimi_md   = (row.get("report_md_kimi") or "").strip()
+            ds_md     = (row.get("report_md_deepseek") or "").strip()
             MAX = 8000   # truncate hard so one report can't blow the context
             parts = [f"Ticker: {tk}  rating={row.get('rating')}  "
                      f"target={row.get('price_target')}  upside={row.get('upside_pct')}%"]
@@ -21175,6 +21184,10 @@ def _agentic_exec_tool(name: str, args: dict) -> str:
                 parts.append(f"\n══ GROK REPORT ══\n{grok_md[:MAX]}")
             if provider in ("claude", "both") and claude_md:
                 parts.append(f"\n══ CLAUDE REPORT ══\n{claude_md[:MAX]}")
+            if provider in ("kimi", "both") and kimi_md:
+                parts.append(f"\n══ KIMI K3 REPORT ══\n{kimi_md[:MAX]}")
+            if provider in ("deepseek", "both") and ds_md:
+                parts.append(f"\n══ DEEPSEEK REPORT ══\n{ds_md[:MAX]}")
             return "\n".join(parts) if len(parts) > 1 else f"No {provider} report text for {tk}."
 
         if name == "get_recent_news":
@@ -21685,15 +21698,120 @@ def _render_strategist_review_pdf(review: dict) -> bytes:
     return _render_dga_memo_pdf(script, "", fund, review.get("generated_at") or date_str)
 
 
+def _agent_route_and_model(mode: str = "agentic") -> tuple[str, str]:
+    """Resolve Settings task route → (provider, model_id) for agentic/strategist."""
+    task = "strategist" if mode == "strategist" else "agentic"
+    try:
+        prov = (analyst.get_task_route(task) or "claude").lower().strip()
+    except Exception:
+        prov = "claude"
+    if prov == "volume":
+        prov = "kimi"
+    if prov == "grok":
+        return "grok", getattr(analyst, "GROK_MODEL", None) or _AGENTIC_MODEL
+    if prov == "kimi":
+        return "kimi", getattr(analyst, "KIMI_MODEL", "kimi-k3")
+    if prov == "deepseek":
+        return "deepseek", getattr(analyst, "DEEPSEEK_MODEL", "deepseek-chat")
+    # default Claude
+    return "claude", _AGENTIC_MODEL or getattr(analyst, "CLAUDE_MODEL", "claude-opus-4-8")
+
+
+def _agentic_tools_openai(tools: list) -> list:
+    """Convert Anthropic tool schemas → OpenAI tools format."""
+    out = []
+    for t in tools or []:
+        out.append({
+            "type": "function",
+            "function": {
+                "name": t.get("name") or "tool",
+                "description": t.get("description") or "",
+                "parameters": t.get("input_schema") or {"type": "object", "properties": {}},
+            },
+        })
+    return out
+
+
+def _agentic_openai_client(provider: str):
+    """OpenAI-compatible client for grok | kimi | deepseek."""
+    from openai import OpenAI
+    p = (provider or "").lower()
+    if p == "grok":
+        return OpenAI(api_key=analyst.get_grok_api_key(), base_url="https://api.x.ai/v1")
+    if p == "kimi":
+        if not getattr(analyst, "kimi_configured", lambda: False)():
+            raise RuntimeError("Kimi K3 not configured (KIMI_API_KEY)")
+        return OpenAI(api_key=analyst.KIMI_API_KEY, base_url=analyst.KIMI_BASE_URL)
+    if p == "deepseek":
+        if not getattr(analyst, "deepseek_configured", lambda: False)():
+            raise RuntimeError("DeepSeek not configured (DEEPSEEK_API_KEY)")
+        return OpenAI(api_key=analyst.DEEPSEEK_API_KEY, base_url=analyst.DEEPSEEK_BASE_URL)
+    raise RuntimeError(f"No OpenAI client for provider {provider!r}")
+
+
+def _agentic_estimate_cost(provider: str, model: str, inp: int, out: int) -> float:
+    try:
+        if provider == "claude":
+            return float(analyst.estimate_claude_cost(model, inp, out))
+        if provider == "grok":
+            return float(analyst.estimate_grok_cost(model, inp, out, 0))
+        if provider in ("kimi", "deepseek", "volume"):
+            return float(analyst.estimate_volume_cost(model, inp, out))
+    except Exception:
+        pass
+    return 0.0
+
+
+def _agentic_verify_any(provider: str, client, model: str, question: str,
+                        answer: str, tool_log: list[dict]) -> dict:
+    """Verification pass — Claude Messages API or OpenAI chat for other hosts."""
+    try:
+        tools_used = json.dumps(tool_log, default=str)[:4000]
+        sys = (
+            "You are a meticulous fact-checker for a fund's research output. You are "
+            "given a research QUESTION, the ANSWER produced by an analyst agent, and "
+            "the TOOL CALLS that agent made to gather data. Your job: flag every "
+            "numeric or factual claim in the ANSWER that is NOT directly supported by "
+            "a tool call, or that CONTRADICTS one. Be strict — an unsupported price, "
+            "multiple, return, or rating is a flag. Respond ONLY with compact JSON: "
+            '{"verdict": "clean" | "flags", "flags": [{"claim": "...", "issue": '
+            '"unsupported" | "contradicted", "note": "..."}]}. If everything is '
+            'supported, return {"verdict":"clean","flags":[]}.'
+        )
+        user = (f"QUESTION:\n{question}\n\nANSWER:\n{answer}\n\n"
+                f"TOOL CALLS (name + input the agent ran):\n{tools_used}")
+        if provider == "claude":
+            return _agentic_verify(client, model, question, answer, tool_log)
+        # OpenAI-compatible (Grok / Kimi K3 / DeepSeek)
+        resp = client.chat.completions.create(
+            model=model, temperature=0.1, max_tokens=4000,
+            messages=[
+                {"role": "system", "content": sys},
+                {"role": "user", "content": user},
+            ],
+        )
+        text = (resp.choices[0].message.content or "") if resp.choices else ""
+        parsed = _extract_json_object(text)
+        if parsed is None:
+            return {"ok": None, "verdict": "unchecked", "flags": []}
+        verdict = parsed.get("verdict") or "clean"
+        flags = parsed.get("flags") or []
+        if flags and verdict == "clean":
+            verdict = "flags"
+        return {"ok": True, "verdict": verdict, "flags": flags}
+    except Exception as e:
+        print(f"⚠️ [agentic verify] failed: {e!s:.150}", flush=True)
+        return {"ok": None, "verdict": "unchecked", "flags": []}
+
+
 def _run_agentic_analysis(job_id: str, question: str,
                            system_override: str | None = None,
                            tools: list | None = None) -> None:
-    """Background worker: manual tool-use loop. Streams progress into
-    _agentic_jobs[job_id] so the UI can poll. Tracks cost per turn.
-    system_override lets specialized modes (Portfolio Strategist) swap the
-    persona while reusing the same loop and verification. `tools` overrides the
-    tool set — the Strategist drops list_portfolios/get_portfolio_holdings so the
-    agent analyzes ONLY the provided book and never enumerates the whole firm."""
+    """Background worker: tool-use loop (Claude or OpenAI-compat engines).
+
+    Provider comes from Settings → Models task route (agentic | strategist):
+    claude · grok · kimi (Kimi K3) · deepseek.
+    """
     import anthropic as _anthropic
     _tools = tools if tools is not None else _AGENTIC_TOOLS
 
@@ -21701,80 +21819,178 @@ def _run_agentic_analysis(job_id: str, question: str,
         _agentic_jobs[job_id] = {**(_agentic_jobs.get(job_id) or {}), **kw,
                                   "updated_at": time.time()}
 
-    _set(stage="queued", status="running", label="Starting…",
-         started_at=time.time(), steps=0, tool_calls=[], cost_usd=0.0)
+    jr0 = _agentic_jobs.get(job_id) or {}
+    mode = jr0.get("mode") or "agentic"
+    provider, model = _agent_route_and_model(mode)
+    _set(stage="queued", status="running", label=f"Starting {provider}…",
+         started_at=time.time(), steps=0, tool_calls=[], cost_usd=0.0,
+         provider=provider, model=model)
     try:
-        client = _anthropic.Anthropic(api_key=analyst.get_claude_api_key(), timeout=120.0)
-        model = _AGENTIC_MODEL
-        think = _agentic_thinking_kwargs(model)
         system = system_override or _AGENTIC_SYSTEM_DEFAULT
-        messages = [{"role": "user", "content": question}]
         total_cost = 0.0
         tool_log: list[dict] = []
 
+        # ── Claude (Anthropic Messages + tool_use) ─────────────────────
+        if provider == "claude":
+            client = _anthropic.Anthropic(api_key=analyst.get_claude_api_key(), timeout=120.0)
+            think = _agentic_thinking_kwargs(model)
+            messages = [{"role": "user", "content": question}]
+
+            for step in range(_AGENTIC_MAX_STEPS):
+                _set(stage="thinking",
+                     label=f"{provider} · reasoning (step {step+1}/{_AGENTIC_MAX_STEPS})…",
+                     steps=step, tool_calls=tool_log[:], cost_usd=round(total_cost, 4),
+                     provider=provider, model=model)
+                resp = client.messages.create(
+                    model=model, max_tokens=8000,
+                    system=system, tools=_tools, messages=messages,
+                    **think,
+                )
+                try:
+                    u = resp.usage
+                    total_cost += _agentic_estimate_cost(
+                        "claude", model, u.input_tokens, u.output_tokens)
+                except Exception:
+                    pass
+
+                if resp.stop_reason != "tool_use":
+                    final = next((b.text for b in resp.content
+                                  if getattr(b, "type", None) == "text"), "")
+                    _set(stage="verifying", label="🔍 Verifying claims against tool data…",
+                         steps=step + 1, tool_calls=tool_log[:], cost_usd=round(total_cost, 4))
+                    verification = _agentic_verify_any(
+                        "claude", client, model, question, final, tool_log)
+                    _set(stage="done", status="done", label="✓ Analysis complete",
+                         steps=step + 1, tool_calls=tool_log[:],
+                         cost_usd=round(total_cost, 4),
+                         result={"answer": final, "tool_calls": tool_log[:],
+                                 "cost_usd": round(total_cost, 4), "model": model,
+                                 "provider": provider, "verification": verification})
+                    try:
+                        jr = _agentic_jobs.get(job_id) or {}
+                        if jr.get("mode") == "strategist":
+                            _persist_strategist_review(job_id, jr, final, verification,
+                                                       round(total_cost, 4), model)
+                        else:
+                            _persist_analyst_review(
+                                job_id, jr.get("source") or "analyst",
+                                question, final, verification,
+                                tool_log[:], round(total_cost, 4), model)
+                    except Exception as _pe:
+                        print(f"⚠️ [review persist] {_pe!s:.150}", flush=True)
+                    return
+
+                messages.append({"role": "assistant", "content": resp.content})
+                results = []
+                for b in resp.content:
+                    if getattr(b, "type", None) == "tool_use":
+                        label = f"{b.name}({json.dumps(b.input, default=str)[:60]})"
+                        tool_log.append({"tool": b.name, "input": b.input})
+                        _set(stage="tool", label=f"🔧 {label}",
+                             steps=step, tool_calls=tool_log[:],
+                             cost_usd=round(total_cost, 4))
+                        out = _agentic_exec_tool(b.name, b.input or {})
+                        results.append({"type": "tool_result", "tool_use_id": b.id,
+                                        "content": out})
+                messages.append({"role": "user", "content": results})
+
+            _set(stage="error", status="error",
+                 label=f"❌ Reached {_AGENTIC_MAX_STEPS}-step limit without finishing",
+                 error="step_limit", cost_usd=round(total_cost, 4))
+            return
+
+        # ── OpenAI-compat tool loop (Grok / Kimi K3 / DeepSeek) ────────
+        oai = _agentic_openai_client(provider)
+        oai_tools = _agentic_tools_openai(_tools)
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": question},
+        ]
         for step in range(_AGENTIC_MAX_STEPS):
-            _set(stage="thinking", label=f"Reasoning (step {step+1}/{_AGENTIC_MAX_STEPS})…",
-                 steps=step, tool_calls=tool_log[:], cost_usd=round(total_cost, 4))
-            resp = client.messages.create(
-                model=model, max_tokens=8000,
-                system=system, tools=_tools, messages=messages,
-                **think,
+            _set(stage="thinking",
+                 label=f"{provider} · reasoning (step {step+1}/{_AGENTIC_MAX_STEPS})…",
+                 steps=step, tool_calls=tool_log[:], cost_usd=round(total_cost, 4),
+                 provider=provider, model=model)
+            resp = oai.chat.completions.create(
+                model=model, messages=messages, tools=oai_tools,
+                temperature=0.3, max_tokens=8000,
             )
-            # cost accounting
             try:
                 u = resp.usage
-                total_cost += analyst.estimate_claude_cost(model, u.input_tokens, u.output_tokens)
+                total_cost += _agentic_estimate_cost(
+                    provider, model,
+                    int(getattr(u, "prompt_tokens", 0) or 0),
+                    int(getattr(u, "completion_tokens", 0) or 0),
+                )
             except Exception:
                 pass
 
-            if resp.stop_reason != "tool_use":
-                final = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
-                # Option B — verification pass: audit numeric claims vs tool log.
+            msg = resp.choices[0].message if resp.choices else None
+            if msg is None:
+                raise RuntimeError(f"{provider} returned empty message")
+            tcalls = getattr(msg, "tool_calls", None) or []
+            if not tcalls:
+                final = (msg.content or "").strip()
                 _set(stage="verifying", label="🔍 Verifying claims against tool data…",
                      steps=step + 1, tool_calls=tool_log[:], cost_usd=round(total_cost, 4))
-                verification = _agentic_verify(client, model, question, final, tool_log)
-                try:
-                    # the verify call is one more model turn — count its cost too
-                    total_cost += 0.0  # _agentic_verify doesn't return usage; rough no-op
-                except Exception:
-                    pass
+                verification = _agentic_verify_any(
+                    provider, oai, model, question, final, tool_log)
                 _set(stage="done", status="done", label="✓ Analysis complete",
                      steps=step + 1, tool_calls=tool_log[:],
                      cost_usd=round(total_cost, 4),
                      result={"answer": final, "tool_calls": tool_log[:],
                              "cost_usd": round(total_cost, 4), "model": model,
-                             "verification": verification})
-                # Persist the completed review so it survives dyno restarts
-                # (in-memory jobs do not) and can be re-opened / PDF'd later.
+                             "provider": provider, "verification": verification})
                 try:
                     jr = _agentic_jobs.get(job_id) or {}
                     if jr.get("mode") == "strategist":
                         _persist_strategist_review(job_id, jr, final, verification,
                                                    round(total_cost, 4), model)
                     else:
-                        _persist_analyst_review(job_id, jr.get("source") or "analyst",
-                                                question, final, verification,
-                                                tool_log[:], round(total_cost, 4), model)
+                        _persist_analyst_review(
+                            job_id, jr.get("source") or "analyst",
+                            question, final, verification,
+                            tool_log[:], round(total_cost, 4), model)
                 except Exception as _pe:
                     print(f"⚠️ [review persist] {_pe!s:.150}", flush=True)
                 return
 
-            # Execute every tool the model requested this turn
-            messages.append({"role": "assistant", "content": resp.content})
-            results = []
-            for b in resp.content:
-                if getattr(b, "type", None) == "tool_use":
-                    label = f"{b.name}({json.dumps(b.input, default=str)[:60]})"
-                    tool_log.append({"tool": b.name, "input": b.input})
-                    _set(stage="tool", label=f"🔧 {label}",
-                         steps=step, tool_calls=tool_log[:],
-                         cost_usd=round(total_cost, 4))
-                    out = _agentic_exec_tool(b.name, b.input or {})
-                    results.append({"type": "tool_result", "tool_use_id": b.id,
-                                    "content": out})
-            messages.append({"role": "user", "content": results})
+            # Append assistant turn with tool_calls, then tool results
+            messages.append({
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments or "{}",
+                        },
+                    }
+                    for tc in tcalls
+                ],
+            })
+            for tc in tcalls:
+                raw_args = tc.function.arguments or "{}"
+                try:
+                    args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+                except Exception:
+                    args = {}
+                if not isinstance(args, dict):
+                    args = {}
+                label = f"{tc.function.name}({json.dumps(args, default=str)[:60]})"
+                tool_log.append({"tool": tc.function.name, "input": args})
+                _set(stage="tool", label=f"🔧 {label}",
+                     steps=step, tool_calls=tool_log[:],
+                     cost_usd=round(total_cost, 4))
+                out = _agentic_exec_tool(tc.function.name, args)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": out if isinstance(out, str) else json.dumps(out, default=str),
+                })
 
-        # Hit the step cap without a final answer
         _set(stage="error", status="error",
              label=f"❌ Reached {_AGENTIC_MAX_STEPS}-step limit without finishing",
              error="step_limit", cost_usd=round(total_cost, 4))
@@ -21820,8 +22036,13 @@ def research_agentic_start(req: Request, background_tasks: BackgroundTasks):
                               "source": source,
                               "steps": 0, "tool_calls": [], "cost_usd": 0.0}
     background_tasks.add_task(_run_agentic_analysis, job_id, question)
-    print(f"🤖 [agentic] queued {job_id}: {question[:80]!r}  model={_AGENTIC_MODEL}", flush=True)
-    return {"ok": True, "job_id": job_id, "model": _AGENTIC_MODEL}
+    try:
+        _prov, _mdl = _agent_route_and_model("agentic")
+    except Exception:
+        _prov, _mdl = "claude", _AGENTIC_MODEL
+    print(f"🤖 [agentic] queued {job_id}: {question[:80]!r}  provider={_prov} model={_mdl}",
+          flush=True)
+    return {"ok": True, "job_id": job_id, "model": _mdl, "provider": _prov}
 
 
 @app.get("/api/research/agentic/{job_id}")
@@ -22219,9 +22440,15 @@ def research_portfolio_strategist(req: Request, background_tasks: BackgroundTask
                               "fund_id": fund_id,
                               "generated_by": claims.get("email") or claims.get("lp_id") or "gp"}
     background_tasks.add_task(_run_agentic_analysis, job_id, question, _STRATEGIST_SYSTEM, _strat_tools)
-    print(f"🧭 [strategist] queued {job_id}  {len(tickers)} positions  fund={fund_name}", flush=True)
+    try:
+        _prov, _mdl = _agent_route_and_model("strategist")
+    except Exception:
+        _prov, _mdl = "claude", _AGENTIC_MODEL
+    print(f"🧭 [strategist] queued {job_id}  {len(tickers)} positions  fund={fund_name} "
+          f"provider={_prov} model={_mdl}", flush=True)
     return {"ok": True, "job_id": job_id, "tickers": tickers,
-            "positions": positions, "fund_name": fund_name, "model": _AGENTIC_MODEL}
+            "positions": positions, "fund_name": fund_name,
+            "model": _mdl, "provider": _prov}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
