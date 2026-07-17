@@ -6334,7 +6334,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui84-20260717-inkind-ytd"
+WEB_BUILD_VERSION = "ui85-20260717-kimi-temp"
 
 
 @app.get("/api/build")
@@ -22142,9 +22142,11 @@ def _run_agentic_analysis(job_id: str, question: str,
                  label=f"{provider} · reasoning (step {step+1}/{max_steps})…",
                  steps=step, tool_calls=tool_log[:], cost_usd=round(total_cost, 4),
                  provider=provider, model=model)
+            # Kimi K3 only allows temperature=1 (Moonshot API 400 otherwise)
+            _oai_temp = 1.0 if provider in ("kimi", "volume") else 0.3
             create_kw = dict(
                 model=model, messages=messages,
-                temperature=0.3, max_tokens=8000,
+                temperature=_oai_temp, max_tokens=8000,
             )
             if last_round and tool_log:
                 # Force written dossier — no more tools (fixes Grok step-limit fail)

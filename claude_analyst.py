@@ -837,6 +837,23 @@ def _volume_client():
     return client
 
 
+def _volume_llm_temperature(provider: str, model: str, requested: float) -> float:
+    """Kimi K3 (and some Moonshot reasoning IDs) only accept temperature=1.
+
+    Sending 0.3 → HTTP 400 ``invalid temperature: only 1 is allowed for this
+    model`` and the whole Analyze job fails (CEG multi-engine Kimi miss).
+    """
+    p = (provider or "").lower()
+    m = (model or "").lower()
+    if p == "kimi" or m.startswith("kimi") or "moonshot" in m:
+        # kimi-k3 / kimi-k2.7* currently pin temp=1 on platform.moonshot.ai
+        if "k3" in m or m in ("kimi-k3",) or m.startswith("kimi-k3"):
+            return 1.0
+        # Safer default for all current Kimi chat models on this API
+        return 1.0
+    return requested
+
+
 def call_volume_llm(system_prompt: str, user_content: str,
                     model: str | None = None,
                     *,
@@ -858,9 +875,10 @@ def call_volume_llm(system_prompt: str, user_content: str,
         p = "kimi" if kimi_configured() else "deepseek"
     client, default_model, prov_id = _provider_client(p)
     mid = model or default_model
+    temp = _volume_llm_temperature(prov_id, mid, temperature)
     resp = client.chat.completions.create(
         model=mid,
-        temperature=temperature,
+        temperature=temp,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
