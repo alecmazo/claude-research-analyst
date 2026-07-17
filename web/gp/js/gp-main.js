@@ -473,7 +473,7 @@
   /** Re-stamp all known LLM controls after config load / volume toggle. */
   function llmRefreshAllStamps() {
     const pairs = [
-      ['#hero-run-btn', 'report_grok'], // refined below by engine
+      ['#hero-run-btn', 'report_grok'], // refined by multi-select engines
       ['#run-brief-btn', 'daily_brief'],
       ['#ideas-brief-run', 'daily_brief'],
       ['#trending-run-brief', 'daily_brief'],
@@ -493,13 +493,21 @@
       if (!el) return;
       let act = p[1];
       if (p[0] === '#hero-run-btn') {
-        const eng = (document.getElementById('hero-llm') || {}).value || 'grok';
-        act = eng === 'claude' ? 'report_claude'
-          : eng === 'kimi' ? 'report_kimi'
-          : eng === 'deepseek' ? 'report_deepseek'
-          : eng === 'both' ? 'report_both' : 'report_grok';
+        const sel = (typeof _heroSelectedEngines === 'function')
+          ? _heroSelectedEngines() : ['grok'];
+        act = (typeof _heroActFor === 'function')
+          ? _heroActFor(sel[0] || 'grok') : 'report_grok';
+        // Title lists all selected engines
+        try {
+          const names = sel.map(function (e) {
+            return (llmDescribe(_heroActFor(e)).model || e);
+          });
+          el.title = 'Analyze with: ' + names.join(' + ')
+            + '\nEach engine is saved as its own report in Saved Reports.';
+        } catch (_) {}
       }
-      llmStampControl(el, act);
+      if (p[0] !== '#hero-run-btn') llmStampControl(el, act);
+      else llmStampControl(el, act);
     });
     // Static chips near brief/intel if present
     const briefMeta = document.getElementById('brief-meta');
@@ -5349,85 +5357,214 @@
     if (on) { $heroCancelBtn.disabled = false; $heroCancelBtn.textContent = '✕ Cancel'; }
   }
 
-  async function runAnalysis() {
-    const ticker = ($heroTicker.value || '').trim().toUpperCase().replace(/[^A-Z.]/g,'');
-    if (!ticker) { $heroHint.style.color='var(--red)'; $heroHint.textContent='Enter a ticker first.'; return; }
-    const eng = document.getElementById('hero-llm')?.value || 'grok';
-    const act = eng === 'claude' ? 'report_claude'
-      : eng === 'kimi' ? 'report_kimi'
-      : eng === 'deepseek' ? 'report_deepseek'
-      : eng === 'both' ? 'report_both' : 'report_grok';
-    const meta = llmDescribe(act);
-    $heroBtn.disabled = true;
-    $heroBtn.innerHTML = '<span class="spin">⟳</span> ' + meta.model.slice(0, 18);
-    $heroHint.style.color = 'var(--mid)';
-    $heroHint.textContent = 'Running ' + meta.model + ' · est. ' + meta.cost
-      + (document.getElementById('hero-gamma')?.checked ? ' + Gamma deck' : '');
-    llmToast(act, 'Starting full report');
-    _heroProgSet(null, meta.model + ' · queued…');
-    _heroProgShow(true);
+  // Multi-select engines on Analyze card (each run → separate Saved Report)
+  const _HERO_ENGINES = ['grok', 'claude', 'kimi', 'deepseek'];
+  const _HERO_ENG_KEY = 'dga.hero.engines.v1';
+
+  function _heroSelectedEngines() {
+    const chips = document.querySelectorAll('#hero-llm-chips .hero-llm-chip.active');
+    const out = [];
+    chips.forEach(function (c) {
+      const v = (c.getAttribute('data-llm') || '').toLowerCase();
+      if (_HERO_ENGINES.indexOf(v) >= 0 && out.indexOf(v) < 0) out.push(v);
+    });
+    return out.length ? out : ['grok'];
+  }
+
+  function _heroActFor(eng) {
+    if (eng === 'claude') return 'report_claude';
+    if (eng === 'kimi') return 'report_kimi';
+    if (eng === 'deepseek') return 'report_deepseek';
+    return 'report_grok';
+  }
+
+  function _heroPersistEngines() {
     try {
-      const r = await window.dgaFetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ticker,
-          generate_gamma: document.getElementById('hero-gamma')?.checked === true,
-          llm_provider:   eng,
-        }),
-      });
-      if (!r.ok) throw new Error('analyze ' + r.status);
-      const job = await r.json();
-      _heroActiveJobId = job.job_id;
-      _heroShowCancel(true);
-      pollJob(job.job_id, '/api/jobs/', $heroBtn, '⚡ RUN',
-        (j) => {
-          _heroActiveJobId = null; _heroShowCancel(false);
-          _heroProgSet(100, 'Complete · ' + meta.model);
-          setTimeout(() => _heroProgShow(false), 650);
-          loadReports();
-          const tgt = j.result?.price_target ? ` · Target $${j.result.price_target}` : '';
-          // Actual LLM spend for this run (token usage × live pricing).
-          const c = j.result?.cost_usd;
-          const costTxt = (c != null && !isNaN(c))
-            ? ` · actual $${Number(c).toFixed(2)}`
-            : ` · est. ${meta.cost}`;
-          const used = j.result?.model || meta.model;
-          $heroHint.style.color = 'var(--green)';
-          $heroHint.textContent = `✅ ${ticker} · ${used}${costTxt}${tgt} — see Saved Reports`;
-          llmStampControl($heroBtn, act);
+      localStorage.setItem(_HERO_ENG_KEY, JSON.stringify(_heroSelectedEngines()));
+    } catch (_) {}
+  }
+
+  function _heroRestoreEngines() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(_HERO_ENG_KEY) || 'null'); } catch (_) {}
+    if (!Array.isArray(saved) || !saved.length) return;
+    const set = {};
+    saved.forEach(function (e) {
+      if (_HERO_ENGINES.indexOf(e) >= 0) set[e] = true;
+    });
+    if (!Object.keys(set).length) return;
+    document.querySelectorAll('#hero-llm-chips .hero-llm-chip').forEach(function (c) {
+      const v = (c.getAttribute('data-llm') || '').toLowerCase();
+      c.classList.toggle('active', !!set[v]);
+    });
+  }
+
+  function _pollJobOnce(jobId) {
+    return new Promise(function (resolve, reject) {
+      const fakeBtn = { disabled: true, textContent: '' };
+      pollJob(jobId, '/api/jobs/', fakeBtn, '⚡ RUN',
+        function (j) { resolve(j); },
+        function (j) { reject(j || new Error('failed')); },
+        function (pctInt, lbl) {
+          if (typeof _heroProgSet === 'function') {
+            /* filled by outer loop */
+          }
         },
-        () => {
-          _heroActiveJobId = null; _heroShowCancel(false);
-          _heroProgShow(false);
-          $heroHint.style.color='var(--red)'; $heroHint.textContent='Analysis failed — check logs.';
-          llmStampControl($heroBtn, act);
-        },
-        (pctInt, lbl) => _heroProgSet(pctInt, (lbl || '…') + ' · ' + meta.model),
-        () => {
-          // Canceled — quiet reset, nothing was persisted server-side.
-          _heroActiveJobId = null; _heroShowCancel(false);
-          _heroProgShow(false);
-          $heroHint.style.color = 'var(--dim)';
-          $heroHint.textContent = 'Analysis canceled — nothing saved.';
-          llmStampControl($heroBtn, act);
-        }
+        function () { reject(Object.assign(new Error('canceled'), { canceled: true })); }
       );
+    });
+  }
+
+  // Wrap poll so progress callback can update outer UI
+  function _pollJobPromise(jobId, onProgress) {
+    return new Promise(function (resolve, reject) {
+      const fakeBtn = { disabled: true, textContent: '' };
+      pollJob(jobId, '/api/jobs/', fakeBtn, '⚡ RUN',
+        function (j) { resolve({ ok: true, job: j }); },
+        function (j) { resolve({ ok: false, job: j, failed: true }); },
+        function (pctInt, lbl, job) {
+          if (typeof onProgress === 'function') onProgress(pctInt, lbl, job);
+        },
+        function (j) { resolve({ ok: false, job: j, canceled: true }); }
+      );
+    });
+  }
+
+  async function runAnalysis() {
+    const ticker = ($heroTicker.value || '').trim().toUpperCase().replace(/[^A-Z.]/g, '');
+    if (!ticker) {
+      $heroHint.style.color = 'var(--red)';
+      $heroHint.textContent = 'Enter a ticker first.';
+      return;
+    }
+    const engines = _heroSelectedEngines();
+    if (!engines.length) {
+      $heroHint.style.color = 'var(--red)';
+      $heroHint.textContent = 'Select at least one engine.';
+      return;
+    }
+    const gammaOn = document.getElementById('hero-gamma')?.checked === true;
+    const metas = engines.map(function (e) { return llmDescribe(_heroActFor(e)); });
+    const names = engines.map(function (e, i) {
+      return (metas[i] && metas[i].model) || e;
+    });
+    $heroBtn.disabled = true;
+    $heroBtn.innerHTML = '<span class="spin">⟳</span> ' + engines.length + ' eng';
+    $heroHint.style.color = 'var(--mid)';
+    $heroHint.textContent = 'Running ' + engines.length + ' engine' + (engines.length > 1 ? 's' : '')
+      + ' · ' + names.join(' + ')
+      + (gammaOn ? ' · Gamma on first (Grok only)' : '')
+      + ' · each saved separately';
+    llmToast(_heroActFor(engines[0]), 'Starting ' + engines.length + ' report(s)');
+    _heroProgSet(null, names[0] + ' · 1/' + engines.length + ' queued…');
+    _heroProgShow(true);
+    _heroShowCancel(true);
+
+    const results = [];
+    let aborted = false;
+    let totalCost = 0;
+    try {
+      for (let i = 0; i < engines.length; i++) {
+        if (aborted) break;
+        const eng = engines[i];
+        const act = _heroActFor(eng);
+        const meta = llmDescribe(act);
+        const n = i + 1;
+        const label = (meta.model || eng) + ' · ' + n + '/' + engines.length;
+        $heroBtn.innerHTML = '<span class="spin">⟳</span> ' + String(eng).slice(0, 8);
+        _heroProgSet(null, label + ' · queued…');
+        $heroHint.style.color = 'var(--mid)';
+        $heroHint.textContent = 'Running ' + label
+          + (engines.length > 1 ? ' (each engine → own Saved Report)' : '');
+
+        // Gamma only on Grok (deck is Grok-oriented); never on multi-cheap engines
+        const wantGamma = gammaOn && eng === 'grok';
+        const r = await window.dgaFetch('/api/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ticker: ticker,
+            generate_gamma: wantGamma,
+            llm_provider: eng,
+          }),
+        });
+        if (!r.ok) throw new Error('analyze ' + eng + ' ' + r.status);
+        const job = await r.json();
+        _heroActiveJobId = job.job_id;
+
+        const outcome = await _pollJobPromise(job.job_id, function (pctInt, lbl) {
+          const base = Math.round((i / engines.length) * 100);
+          const slice = Math.round(((pctInt == null ? 0 : pctInt) / engines.length));
+          _heroProgSet(
+            pctInt == null ? null : Math.min(99, base + slice),
+            (lbl || '…') + ' · ' + label
+          );
+        });
+        _heroActiveJobId = null;
+
+        if (outcome.canceled) {
+          aborted = true;
+          results.push({ eng: eng, canceled: true });
+          break;
+        }
+        if (outcome.failed || !outcome.ok) {
+          results.push({ eng: eng, failed: true, job: outcome.job });
+          continue;
+        }
+        const j = outcome.job || {};
+        const c = j.result && j.result.cost_usd;
+        if (c != null && !isNaN(c)) totalCost += Number(c);
+        results.push({
+          eng: eng,
+          ok: true,
+          model: (j.result && j.result.model) || meta.model,
+          cost: c,
+          target: j.result && j.result.price_target,
+        });
+        // Refresh list after each so user sees reports appear engine-by-engine
+        try { loadReports(); } catch (_) {}
+      }
+
+      _heroShowCancel(false);
+      $heroBtn.disabled = false;
+      $heroBtn.textContent = '⚡ RUN';
+      _heroProgSet(100, 'Complete');
+      setTimeout(function () { _heroProgShow(false); }, 650);
+      try { loadReports(); } catch (_) {}
+
+      if (aborted) {
+        $heroHint.style.color = 'var(--dim)';
+        $heroHint.textContent = 'Canceled after ' + results.filter(function (x) { return x.ok; }).length
+          + ' of ' + engines.length + ' — completed engines were saved.';
+      } else {
+        const okN = results.filter(function (x) { return x.ok; }).length;
+        const failN = results.filter(function (x) { return x.failed; }).length;
+        const bits = results.filter(function (x) { return x.ok; }).map(function (x) {
+          return (x.eng || '') + (x.model ? ('=' + String(x.model).slice(0, 18)) : '');
+        });
+        $heroHint.style.color = failN && !okN ? 'var(--red)' : 'var(--green)';
+        $heroHint.textContent = (okN ? ('✅ ' + okN + ' report' + (okN > 1 ? 's' : '') + ' saved') : '❌ none saved')
+          + (failN ? (' · ' + failN + ' failed') : '')
+          + (totalCost > 0 ? (' · $' + totalCost.toFixed(2)) : '')
+          + (bits.length ? (' · ' + bits.join(', ')) : '')
+          + ' — see Saved Reports';
+      }
+      llmStampControl($heroBtn, _heroActFor(engines[0]));
     } catch (e) {
       $heroBtn.disabled = false;
       $heroBtn.textContent = '⚡ RUN';
-      _heroActiveJobId = null; _heroShowCancel(false);
+      _heroActiveJobId = null;
+      _heroShowCancel(false);
       _heroProgShow(false);
       $heroHint.style.color = 'var(--red)';
       $heroHint.textContent = 'Error: ' + (e.message || 'unknown');
-      llmStampControl($heroBtn, act);
+      llmStampControl($heroBtn, _heroActFor(engines[0]));
     }
   }
   $heroBtn.addEventListener('click', runAnalysis);
   $heroTicker.addEventListener('keydown', e => { if (e.key === 'Enter') runAnalysis(); });
 
-  // Cancel a running analysis. The poll loop notices status 'canceled' and
-  // resets the UI; here we just flag the job and show "Canceling…".
+  // Cancel the active engine job (sequential multi-run stops after current)
   if ($heroCancelBtn) {
     $heroCancelBtn.addEventListener('click', async () => {
       if (!_heroActiveJobId) { _heroShowCancel(false); return; }
@@ -5437,79 +5574,84 @@
       try {
         const r = await window.dgaFetch('/api/jobs/' + encodeURIComponent(_heroActiveJobId) + '/cancel', { method: 'POST' });
         if (!r.ok) throw new Error('cancel ' + r.status);
-        // Poll loop takes it from here (status → 'canceled').
       } catch (e) {
-        // Job may have already finished (404) — let the poll loop resolve it.
         $heroCancelBtn.disabled = false;
         $heroCancelBtn.textContent = '✕ Cancel';
       }
     });
   }
 
-  // Engine chips → drive the hidden #hero-llm select (value contract preserved)
+  // Multi-toggle chips (each selected engine runs + saves its own report)
+  _heroRestoreEngines();
   document.querySelectorAll('#hero-llm-chips .hero-llm-chip').forEach(chip => {
     chip.addEventListener('click', () => {
-      const sel = document.getElementById('hero-llm');
-      if (sel) {
-        sel.value = chip.dataset.llm || 'grok';
-        sel.dispatchEvent(new Event('change'));   // refresh the cost estimate
+      const v = (chip.dataset.llm || '').toLowerCase();
+      if (_HERO_ENGINES.indexOf(v) < 0) return;
+      const on = chip.classList.contains('active');
+      if (on && _heroSelectedEngines().length <= 1) {
+        // Keep at least one engine selected
+        return;
       }
-      document.querySelectorAll('#hero-llm-chips .hero-llm-chip').forEach(c =>
-        c.classList.toggle('active', c === chip));
+      chip.classList.toggle('active', !on);
+      _heroPersistEngines();
       _updateHeroModelTag();
+      _updateHeroCost();
     });
   });
 
   // ── Live model ids (from server config, not hardcoded) ──────────────────
-  // Fetch once; label the Grok/Claude chips with the exact model that will run
-  // and show the active engine's model in #hero-model-tag so the card always
-  // states which Grok (or Claude) version it's using.
   var _HERO_MODELS = null;
   function _updateHeroModelTag() {
     const tag = document.getElementById('hero-model-tag');
-    if (!tag || !_HERO_MODELS) return;
-    const sel = document.getElementById('hero-llm');
-    const eng = (sel && sel.value) || 'grok';
-    const g = _HERO_MODELS.grok || 'grok', c = _HERO_MODELS.claude || 'claude';
-    const k = (_HERO_MODELS.volume && _HERO_MODELS.volume.model)
-      || (_HERO_MODELS.routing && _HERO_MODELS.routing.volume_model)
-      || 'kimi-k3';
-    const ds = (_HERO_MODELS.routing && _HERO_MODELS.routing.deepseek_model)
+    if (!tag) return;
+    const g = (_HERO_MODELS && _HERO_MODELS.grok) || 'grok';
+    const c = (_HERO_MODELS && _HERO_MODELS.claude) || 'claude';
+    const k = (_HERO_MODELS && (
+      (_HERO_MODELS.routing && _HERO_MODELS.routing.kimi_model)
+      || (_HERO_MODELS.volume && _HERO_MODELS.volume.kimi_model)
+      || (_HERO_MODELS.volume && _HERO_MODELS.volume.model)
+    )) || 'kimi-k3';
+    const ds = (_HERO_MODELS && _HERO_MODELS.routing && _HERO_MODELS.routing.deepseek_model)
       || 'deepseek-chat';
-    tag.textContent = eng === 'claude' ? c
-      : eng === 'kimi' ? k
-      : eng === 'deepseek' ? ds
-      : eng === 'both' ? (g + ' + ' + c) : g;
+    const map = { grok: g, claude: c, kimi: k, deepseek: ds };
+    const sel = _heroSelectedEngines();
+    tag.textContent = sel.map(function (e) { return map[e] || e; }).join(' + ') || '—';
+    tag.title = sel.length + ' engine' + (sel.length === 1 ? '' : 's')
+      + ' selected — each report is stored separately in Saved Reports';
   }
   (async function _loadHeroModels() {
     try {
       const r = await window.dgaFetch('/api/config/models');
       if (!r.ok) return;
       _HERO_MODELS = await r.json();
-      // Feed global catalog used by llmDescribe() for every LLM button
       window.DGA_LLM = Object.assign(window.DGA_LLM || {}, {
         grok: _HERO_MODELS.grok,
         claude: _HERO_MODELS.claude,
         agentic: _HERO_MODELS.agentic,
         volume: _HERO_MODELS.volume || { enabled: false },
+        routing: _HERO_MODELS.routing,
         est: _HERO_MODELS.est || {},
       });
       const gc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="grok"]');
       const cc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="claude"]');
       const kc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="kimi"]');
-      if (gc) gc.title = (_HERO_MODELS.grok || 'Grok') + ' · full report · ' + (_HERO_COST_EST.grok || '');
-      if (cc) cc.title = (_HERO_MODELS.claude || 'Claude') + ' · full report · ' + (_HERO_COST_EST.claude || '');
+      const dc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="deepseek"]');
+      if (gc) gc.title = (_HERO_MODELS.grok || 'Grok') + ' · full report · ' + (_HERO_COST_EST.grok || '') + ' · toggle multi-select';
+      if (cc) cc.title = (_HERO_MODELS.claude || 'Claude') + ' · full report · ' + (_HERO_COST_EST.claude || '') + ' · toggle multi-select';
       if (kc) {
-        const km = (_HERO_MODELS.volume && _HERO_MODELS.volume.model) || 'kimi-k3';
-        kc.title = km + ' · full report · ' + (_HERO_COST_EST.kimi || '');
+        const km = (_HERO_MODELS.routing && _HERO_MODELS.routing.kimi_model) || 'kimi-k3';
+        kc.title = km + ' · full report · ' + (_HERO_COST_EST.kimi || '') + ' · toggle multi-select';
+      }
+      if (dc) {
+        const dm = (_HERO_MODELS.routing && _HERO_MODELS.routing.deepseek_model) || 'deepseek-chat';
+        dc.title = dm + ' · full report · ' + (_HERO_COST_EST.deepseek || '') + ' · toggle multi-select';
       }
       const est = _HERO_MODELS.est;
       if (est) {
         const rng = a => Array.isArray(a) && a[0] != null
           ? ('$' + Number(a[0]).toFixed(2) + '–' + Number(a[1]).toFixed(2)) : '';
-        if (est.grok_report)   _HERO_COST_EST.grok   = rng(est.grok_report);
-        if (est.claude_report) _HERO_COST_EST.claude = rng(est.claude_report);
-        if (est.both_report)   _HERO_COST_EST.both   = rng(est.both_report);
+        if (est.grok_report)     _HERO_COST_EST.grok     = rng(est.grok_report);
+        if (est.claude_report)   _HERO_COST_EST.claude   = rng(est.claude_report);
         if (est.kimi_report)     _HERO_COST_EST.kimi     = rng(est.kimi_report);
         if (est.deepseek_report) _HERO_COST_EST.deepseek = rng(est.deepseek_report);
         if (est.pulse_per_ticker) _PULSE_COST_PER_TICKER = est.pulse_per_ticker;
@@ -5522,26 +5664,27 @@
     } catch (e) { /* leave the em-dash placeholder */ }
   })();
 
-  // ── Per-run cost estimate ──────────────────────────────────────────────
-  // Static fallbacks only — /api/config/models returns live estimates computed
-  // from the server's pricing tables for the ACTUAL configured models, and
-  // _loadHeroModels overwrites these on load (so a GROK_MODEL swap re-prices
-  // every chip with zero UI changes).
-  const $heroLlm   = document.getElementById('hero-llm');
+  // ── Per-run cost estimate (sum of all selected engines) ─────────────────
   const $heroGamma2 = document.getElementById('hero-gamma');
   const $heroCost  = document.getElementById('hero-cost-est');
   let _HERO_COST_EST = {
     grok: '$0.30–0.60', claude: '$0.50–1.00',
-    kimi: '$0.15–0.60', deepseek: '$0.01–0.05', both: '$0.80–1.60',
+    kimi: '$0.15–0.60', deepseek: '$0.01–0.05',
   };
   function _updateHeroCost() {
     if (!$heroCost) return;
-    const eng = ($heroLlm && $heroLlm.value) || 'grok';
-    let s = '≈ ' + (_HERO_COST_EST[eng] || _HERO_COST_EST.grok) + ' / report';
+    const engines = _heroSelectedEngines();
+    const parts = engines.map(function (e) {
+      return e + ' ' + (_HERO_COST_EST[e] || '?');
+    });
+    let s = engines.length > 1
+      ? ('≈ ' + engines.length + ' reports · ' + parts.join(' + '))
+      : ('≈ ' + (_HERO_COST_EST[engines[0]] || _HERO_COST_EST.grok) + ' / report');
     if ($heroGamma2 && $heroGamma2.checked) s += ' + deck';
     $heroCost.textContent = s;
+    $heroCost.title = 'Each selected engine is saved as its own report in Saved Reports. '
+      + parts.join('; ');
   }
-  if ($heroLlm)    $heroLlm.addEventListener('change', _updateHeroCost);
   if ($heroGamma2) $heroGamma2.addEventListener('change', _updateHeroCost);
   _updateHeroCost();
 
@@ -13698,19 +13841,8 @@
             est: mj.est || (window.DGA_LLM && window.DGA_LLM.est),
           });
         }
-        // Apply default full_report engine to hero selector
-        try {
-          const fr = (window.DGA_LLM.routes || {})['full_report']
-            || (window.DGA_LLM.routing && window.DGA_LLM.routing.routes && window.DGA_LLM.routing.routes.full_report);
-          const sel = document.getElementById('hero-llm');
-          if (sel && fr && (fr === 'grok' || fr === 'claude' || fr === 'both')) {
-            sel.value = fr;
-            document.querySelectorAll('#hero-llm-chips .hero-llm-chip').forEach(function (c) {
-              c.classList.toggle('active', c.getAttribute('data-llm') === fr);
-            });
-            if (typeof _updateHeroModelTag === 'function') _updateHeroModelTag();
-          }
-        } catch (_) {}
+        // Do not override multi-select engines from settings full_report —
+        // hero chip selection is independent (localStorage).
         if (typeof llmRefreshAllStamps === 'function') llmRefreshAllStamps();
       } catch (_) {}
     }

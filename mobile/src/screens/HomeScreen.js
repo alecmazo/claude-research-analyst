@@ -146,10 +146,25 @@ export default function HomeScreen({ navigation, route }) {
     haptics.onPressPrimary();
     setLoading(true);
     setRunningTicker(t);
+    // Multi-select engines: comma-separated (e.g. "grok,claude,kimi")
+    const engines = String(llmProvider || 'grok').split(',').map(s => s.trim()).filter(Boolean);
+    const list = engines.length ? engines : ['grok'];
     try {
-      const job = await api.startAnalysis(t, gammaEnabled, llmProvider);
+      // First engine navigates to progress; remaining run in background sequentially
+      // via chained navigations is awkward — start all sequentially here, navigate to first.
+      const first = list[0];
+      const job = await api.startAnalysis(t, gammaEnabled && first === 'grok', first);
       setTicker('');
-      navigation.navigate('Analysis', { jobId: job.job_id, ticker: t });
+      navigation.navigate('Analysis', { jobId: job.job_id, ticker: t, engine: first });
+      // Fire remaining engines (each persists its own Saved Report)
+      for (let i = 1; i < list.length; i++) {
+        const eng = list[i];
+        try {
+          await api.startAnalysis(t, false, eng);
+        } catch (e) {
+          console.warn('extra engine failed', eng, e?.message);
+        }
+      }
     } catch (err) {
       haptics.onError();
       if (err?.isAuthError) {
@@ -539,20 +554,33 @@ export default function HomeScreen({ navigation, route }) {
               <View style={s.optionsRow}>
                 <View style={s.llmPicker}>
                   {[
-                    { v: 'grok',   label: 'Grok' },
-                    { v: 'claude', label: 'Claude' },
-                    { v: 'kimi',   label: 'Kimi' },
-                    { v: 'both',   label: 'Both' },
-                  ].map(opt => (
+                    { v: 'grok',     label: 'Grok' },
+                    { v: 'claude',   label: 'Claude' },
+                    { v: 'kimi',     label: 'Kimi' },
+                    { v: 'deepseek', label: 'DeepSeek' },
+                  ].map(opt => {
+                    // Multi-select: llmProvider may be comma-separated list
+                    const selected = String(llmProvider || 'grok').split(',').filter(Boolean);
+                    const on = selected.indexOf(opt.v) >= 0;
+                    return (
                     <TouchableOpacity
                       key={opt.v}
-                      onPress={() => setLlmProvider(opt.v)}
+                      onPress={() => {
+                        let next = selected.slice();
+                        if (on) {
+                          if (next.length <= 1) return; // keep ≥1
+                          next = next.filter(x => x !== opt.v);
+                        } else {
+                          next.push(opt.v);
+                        }
+                        setLlmProvider(next.join(','));
+                      }}
                       style={[
                         s.llmPickerOpt,
-                        llmProvider === opt.v && (
+                        on && (
                           opt.v === 'claude' ? s.llmPickerOptActiveClaude :
                           opt.v === 'kimi'   ? s.llmPickerOptActiveKimi   :
-                          opt.v === 'both'   ? s.llmPickerOptActiveBoth   :
+                          opt.v === 'deepseek' ? s.llmPickerOptActiveBoth :
                                                 s.llmPickerOptActiveGrok
                         ),
                       ]}
@@ -560,10 +588,11 @@ export default function HomeScreen({ navigation, route }) {
                     >
                       <Text style={[
                         s.llmPickerOptText,
-                        llmProvider === opt.v && s.llmPickerOptTextActive,
+                        on && s.llmPickerOptTextActive,
                       ]}>{opt.label}</Text>
                     </TouchableOpacity>
-                  ))}
+                    );
+                  })}
                 </View>
                 <View style={{ flex: 1 }} />
                 <Text style={s.gammaLabel}>Presentation</Text>

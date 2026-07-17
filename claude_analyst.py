@@ -302,9 +302,9 @@ MODEL_TASKS: dict[str, dict] = {
     "full_report": {
         "label": "Full equity report (Analyze)",
         "group": "Research",
-        "allowed": ("grok", "claude", "kimi", "deepseek", "both"),
+        "allowed": ("grok", "claude", "kimi", "deepseek"),
         "default": "grok",
-        "note": "Per-run chips can still override. Live web/X only on Grok.",
+        "note": "Analyze card multi-selects engines; each run saves its own report.",
     },
     "compare": {
         "label": "LLM Lab · compare report",

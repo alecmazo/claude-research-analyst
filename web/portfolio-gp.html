@@ -535,29 +535,20 @@ End with the sleeve block at this account's real market value so I can push it t
       </div>
       <div id="hero-hint"></div>
       <div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--panel-edge);display:flex;align-items:center;gap:9px;flex-wrap:wrap;">
-        <label style="display:flex;align-items:center;gap:4px;cursor:default;user-select:none;">
-          <span style="font-size:8px;color:var(--mid);font-weight:800;letter-spacing:0.8px;">ENGINE:</span>
-          <!-- The <select> keeps its id + value contract (runAnalysis / cost estimator
-               read #hero-llm.value) but is hidden; the chips drive it. -->
-          <select id="hero-llm" style="display:none;">
-            <option value="grok"   selected>Grok (default · live search)</option>
-            <option value="claude">Claude</option>
-            <option value="kimi">Kimi K3</option>
-            <option value="deepseek">DeepSeek</option>
-            <option value="both">Both Grok+Claude (~5 min)</option>
-          </select>
-          <span id="hero-llm-chips" style="display:inline-flex;gap:4px;flex-wrap:wrap;">
-            <button type="button" class="hero-llm-chip active" data-llm="grok" title="Grok · live web/X">Grok</button>
-            <button type="button" class="hero-llm-chip" data-llm="claude" title="Claude">Claude</button>
-            <button type="button" class="hero-llm-chip" data-llm="kimi" title="Kimi K3 · Moonshot (not DeepSeek)">Kimi</button>
-            <button type="button" class="hero-llm-chip" data-llm="deepseek" title="DeepSeek V4 Flash (not Kimi)">DeepSeek</button>
-            <button type="button" class="hero-llm-chip" data-llm="both" title="Both Grok + Claude">Both</button>
+        <label style="display:flex;align-items:center;gap:4px;cursor:default;user-select:none;flex-wrap:wrap;">
+          <span style="font-size:8px;color:var(--mid);font-weight:800;letter-spacing:0.8px;" title="Toggle one or more engines — each selected run is saved as its own report">ENGINES:</span>
+          <!-- Multi-select chips: each active engine runs and is stored separately in Saved Reports. -->
+          <span id="hero-llm-chips" style="display:inline-flex;gap:4px;flex-wrap:wrap;" role="group" aria-label="Select analysis engines">
+            <button type="button" class="hero-llm-chip active" data-llm="grok" title="Grok · live web/X · toggle on/off">Grok</button>
+            <button type="button" class="hero-llm-chip" data-llm="claude" title="Claude · toggle on/off">Claude</button>
+            <button type="button" class="hero-llm-chip" data-llm="kimi" title="Kimi K3 · toggle on/off">Kimi</button>
+            <button type="button" class="hero-llm-chip" data-llm="deepseek" title="DeepSeek · toggle on/off">DeepSeek</button>
           </span>
-          <span id="hero-model-tag" title="The exact model this engine will call (live from server config)"
+          <span id="hero-model-tag" title="Models for the selected engines"
                 style="font-size:8.5px;font-weight:700;color:var(--mid);background:rgba(0,0,0,0.04);border-radius:4px;padding:1px 6px;white-space:nowrap;">—</span>
         </label>
         <span id="hero-cost-est"
-              title="Estimated LLM cost for one report run (input/output tokens + live-search). Actual varies with report length and how much the model searches."
+              title="Estimated LLM cost for all selected engines. Each report is saved separately."
               style="font-size:9px;font-weight:700;color:var(--blue-dark,#3E9AB8);background:rgba(91,184,212,0.10);border:1px solid rgba(91,184,212,0.30);border-radius:5px;padding:1px 6px;white-space:nowrap;">≈ $0.30–0.60 / report</span>
         <label style="display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none;">
           <input type="checkbox" id="hero-gamma" style="accent-color:var(--blue);width:12px;height:12px;cursor:pointer;">
