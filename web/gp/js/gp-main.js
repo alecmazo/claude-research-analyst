@@ -5126,9 +5126,8 @@
                     ? 'PowerPoint was generated from an earlier report run. Re-run the analyzer with the Gamma checkbox to refresh.'
                     : 'PowerPoint presentation') + '">PPT</span>'
               : '') +
-            // LLM provider pills — each is independently clickable to open
-            // that engine's specific report. When BOTH ran, render TWO pills
-            // side-by-side so the user has a one-click path into each version.
+            // LLM provider pills — each opens that engine's saved report.
+            // Grok / Claude / Kimi K3 / DeepSeek all get a labeled pill.
             ((rep.providers || []).includes('grok')
               ? '<span class="rep-pill rep-pill-llm rep-pill-llm-grok rep-pill-clickable" '
                 + 'data-rep-open="' + rep.ticker + '" data-rep-provider="grok"'
@@ -5141,8 +5140,20 @@
                 + ' title="Click to open Claude report"'
                 + ' onclick="event.stopPropagation();">CLAUDE</span>'
               : '') +
+            ((rep.providers || []).includes('kimi')
+              ? '<span class="rep-pill rep-pill-llm rep-pill-llm-kimi rep-pill-clickable" '
+                + 'data-rep-open="' + rep.ticker + '" data-rep-provider="kimi"'
+                + ' title="Click to open Kimi K3 report"'
+                + ' onclick="event.stopPropagation();">KIMI</span>'
+              : '') +
+            ((rep.providers || []).includes('deepseek')
+              ? '<span class="rep-pill rep-pill-llm rep-pill-llm-deepseek rep-pill-clickable" '
+                + 'data-rep-open="' + rep.ticker + '" data-rep-provider="deepseek"'
+                + ' title="Click to open DeepSeek report"'
+                + ' onclick="event.stopPropagation();">DEEPSEEK</span>'
+              : '') +
             '<button class="rep-compare-btn" data-compare-ticker="' + rep.ticker + '"'
-              + ' title="Compare Grok report with Claude (≈2-3 min)"'
+              + ' title="Compare engines side-by-side (≈2-3 min)"'
               + ' onclick="event.stopPropagation();">🔬</button>' +
             // 🎙️ Podcast — only when an episode exists for this ticker.
             // Click opens the LLM Lab tab + auto-plays this episode.
@@ -15923,10 +15934,24 @@
   async function openReport(ticker, provider) {
     if (!ticker) return;
     provider = (provider || 'grok').toLowerCase();
+    if (provider === 'volume') provider = 'kimi';
+    if (['grok', 'claude', 'kimi', 'deepseek'].indexOf(provider) < 0) provider = 'grok';
 
     closeReportModal();
 
     const maxBtnId = 'rm-max-btn-' + Date.now();
+    const _provBadge = (function () {
+      const styles = {
+        grok:     'background:#0A1628;color:#fff;',
+        claude:   'background:#d97706;color:#fff;',
+        kimi:     'background:#166534;color:#fff;',
+        deepseek: 'background:#1e3a8a;color:#fff;',
+      };
+      const labels = { grok: 'GROK', claude: 'CLAUDE', kimi: 'KIMI K3', deepseek: 'DEEPSEEK' };
+      return '<span style="font-size:9px;font-weight:800;letter-spacing:0.5px;padding:2px 6px;border-radius:3px;'
+        + (styles[provider] || styles.grok) + '">'
+        + (labels[provider] || provider.toUpperCase()) + '</span>';
+    })();
 
     const overlay = document.createElement('div');
     overlay.id = 'report-modal';
@@ -15936,9 +15961,7 @@
       <div class="dga-dialog" style="display:flex;flex-direction:column;max-height:92vh;">
         <div class="dga-dialog-handle" style="display:flex;align-items:center;gap:8px;padding:11px 16px 10px;border-bottom:1px solid var(--panel-edge);flex-wrap:wrap;">
           <span id="rm-ticker" style="font-size:15px;font-weight:800;color:var(--text-primary);letter-spacing:0.8px;">${ticker}</span>
-          ${provider !== 'grok'
-            ? `<span style="font-size:9px;font-weight:800;letter-spacing:0.5px;padding:2px 6px;border-radius:3px;background:#d97706;color:#fff;">${provider.toUpperCase()}</span>`
-            : `<span style="font-size:9px;font-weight:800;letter-spacing:0.5px;padding:2px 6px;border-radius:3px;background:#0A1628;color:#fff;">GROK</span>`}
+          ${_provBadge}
           <span id="rm-date"   style="font-size:10px;color:var(--dim);margin-left:2px;"></span>
           <span id="rm-fresh" class="desk-fresh" style="display:none;"></span>
           <div style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">

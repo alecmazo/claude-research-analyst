@@ -6334,7 +6334,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui81-20260717-earnings-preprint"
+WEB_BUILD_VERSION = "ui82-20260717-kimi-pills"
 
 
 @app.get("/api/build")
@@ -6878,18 +6878,34 @@ def get_report(ticker: str, provider: str = "grok", request: Request = None):
     """Return the full markdown report text for *ticker* from `provider`.
 
     provider:
-      • 'grok'   — canonical report (analyst_reports.report_md). Default.
-      • 'claude' — alternate report (analyst_reports.report_md_claude).
-                   Falls back to {TICKER}_DGA_Report_claude.md on disk
-                   when DB is unavailable.
+      • 'grok'     — canonical report (analyst_reports.report_md). Default.
+      • 'claude'   — report_md_claude
+      • 'kimi'     — report_md_kimi (Kimi K3)
+      • 'deepseek' — report_md_deepseek
 
     Primary source: PostgreSQL `analyst_reports` table.
     Fallback: reads the corresponding .md file from STOCKS_FOLDER.
     """
     ticker = ticker.strip().upper()
     provider = (provider or "grok").lower().strip()
-    if provider not in ("grok", "claude"):
+    if provider == "volume":
+        provider = "kimi"
+    if provider not in ("grok", "claude", "kimi", "deepseek"):
         provider = "grok"
+
+    def _iso(v):
+        if v is None:
+            return None
+        try:
+            return v.isoformat() if hasattr(v, "isoformat") else str(v)
+        except Exception:
+            return str(v)
+
+    def _f(v):
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
 
     # ── Primary: PostgreSQL ──────────────────────────────────────────────────
     if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
@@ -6898,49 +6914,108 @@ def get_report(ticker: str, provider: str = "grok", request: Request = None):
                 cur.execute("""
                     SELECT report_md, has_docx, has_pptx, generated_at, gamma_url,
                            report_md_claude, claude_generated_at,
+                           report_md_kimi, kimi_generated_at,
+                           report_md_deepseek, deepseek_generated_at,
                            rating, price_target, upside_pct,
-                           claude_rating, claude_price_target, claude_upside_pct
+                           claude_rating, claude_price_target, claude_upside_pct,
+                           kimi_rating, kimi_price_target, kimi_upside_pct,
+                           deepseek_rating, deepseek_price_target, deepseek_upside_pct
                     FROM analyst_reports
                     WHERE ticker = %s
                 """, (ticker,))
                 row = cur.fetchone()
             if row:
-                if provider == "claude" and row.get("report_md_claude"):
+                if provider == "claude" and (row.get("report_md_claude") or "").strip():
                     return {
                         "ticker": ticker,
                         "provider": "claude",
                         "report_md": row["report_md_claude"],
-                        "generated_at": row["claude_generated_at"].isoformat() if row.get("claude_generated_at") else None,
-                        "has_docx": False,    # Claude path doesn't render DOCX yet
+                        "generated_at": _iso(row.get("claude_generated_at")),
+                        "has_docx": False,
                         "has_pptx": False,
                         "gamma_url": None,
                         "gamma_generated_at": None,
                         "rating": row.get("claude_rating") or row.get("rating"),
-                        "price_target": (float(row["claude_price_target"])
+                        "price_target": _f(row.get("claude_price_target"))
                                          if row.get("claude_price_target") is not None
-                                         else (float(row["price_target"])
-                                               if row.get("price_target") is not None else None)),
-                        "upside_pct": (float(row["claude_upside_pct"])
+                                         else _f(row.get("price_target")),
+                        "upside_pct": _f(row.get("claude_upside_pct"))
                                        if row.get("claude_upside_pct") is not None
-                                       else (float(row["upside_pct"])
-                                             if row.get("upside_pct") is not None else None)),
+                                       else _f(row.get("upside_pct")),
                     }
-                if provider == "grok" and row["report_md"]:
+                if provider == "kimi" and (row.get("report_md_kimi") or "").strip():
+                    return {
+                        "ticker": ticker,
+                        "provider": "kimi",
+                        "report_md": row["report_md_kimi"],
+                        "generated_at": _iso(row.get("kimi_generated_at")),
+                        "has_docx": False,
+                        "has_pptx": False,
+                        "gamma_url": None,
+                        "gamma_generated_at": None,
+                        "rating": row.get("kimi_rating") or row.get("rating"),
+                        "price_target": _f(row.get("kimi_price_target"))
+                                         if row.get("kimi_price_target") is not None
+                                         else _f(row.get("price_target")),
+                        "upside_pct": _f(row.get("kimi_upside_pct"))
+                                       if row.get("kimi_upside_pct") is not None
+                                       else _f(row.get("upside_pct")),
+                    }
+                if provider == "deepseek" and (row.get("report_md_deepseek") or "").strip():
+                    return {
+                        "ticker": ticker,
+                        "provider": "deepseek",
+                        "report_md": row["report_md_deepseek"],
+                        "generated_at": _iso(row.get("deepseek_generated_at")),
+                        "has_docx": False,
+                        "has_pptx": False,
+                        "gamma_url": None,
+                        "gamma_generated_at": None,
+                        "rating": row.get("deepseek_rating") or row.get("rating"),
+                        "price_target": _f(row.get("deepseek_price_target"))
+                                         if row.get("deepseek_price_target") is not None
+                                         else _f(row.get("price_target")),
+                        "upside_pct": _f(row.get("deepseek_upside_pct"))
+                                       if row.get("deepseek_upside_pct") is not None
+                                       else _f(row.get("upside_pct")),
+                    }
+                if provider == "grok" and (row.get("report_md") or "").strip():
                     return {
                         "ticker": ticker,
                         "provider": "grok",
                         "report_md": row["report_md"],
-                        "generated_at": row["generated_at"].isoformat() if row["generated_at"] else None,
+                        "generated_at": _iso(row.get("generated_at")),
                         "has_docx": row["has_docx"],
                         "has_pptx": row["has_pptx"],
                         "gamma_url": row["gamma_url"],
                         "gamma_generated_at": None,
                         "rating": row.get("rating"),
-                        "price_target": (float(row["price_target"])
-                                         if row.get("price_target") is not None else None),
-                        "upside_pct": (float(row["upside_pct"])
-                                       if row.get("upside_pct") is not None else None),
+                        "price_target": _f(row.get("price_target")),
+                        "upside_pct": _f(row.get("upside_pct")),
                     }
+                # Requested engine missing — try any available rather than
+                # silently returning the wrong provider's text.
+                for alt, md_key, ts_key, rat_key, pt_key, up_key in (
+                    ("grok", "report_md", "generated_at", "rating", "price_target", "upside_pct"),
+                    ("claude", "report_md_claude", "claude_generated_at", "claude_rating", "claude_price_target", "claude_upside_pct"),
+                    ("kimi", "report_md_kimi", "kimi_generated_at", "kimi_rating", "kimi_price_target", "kimi_upside_pct"),
+                    ("deepseek", "report_md_deepseek", "deepseek_generated_at", "deepseek_rating", "deepseek_price_target", "deepseek_upside_pct"),
+                ):
+                    if (row.get(md_key) or "").strip():
+                        return {
+                            "ticker": ticker,
+                            "provider": alt,
+                            "report_md": row[md_key],
+                            "generated_at": _iso(row.get(ts_key)),
+                            "has_docx": bool(row.get("has_docx")) if alt == "grok" else False,
+                            "has_pptx": bool(row.get("has_pptx")) if alt == "grok" else False,
+                            "gamma_url": row.get("gamma_url") if alt == "grok" else None,
+                            "gamma_generated_at": None,
+                            "rating": row.get(rat_key) or row.get("rating"),
+                            "price_target": _f(row.get(pt_key)) if row.get(pt_key) is not None else _f(row.get("price_target")),
+                            "upside_pct": _f(row.get(up_key)) if row.get(up_key) is not None else _f(row.get("upside_pct")),
+                            "note": f"Requested {provider} not found; showing {alt}.",
+                        }
         except Exception as _e:
             print(f"[analyst_reports] get_report DB query failed for {ticker} (falling back): {_e!s:.200}")
 
@@ -10511,7 +10586,14 @@ def list_reports(request: Request = None):
                            claude_generated_at, claude_rating,
                            claude_price_target, claude_upside_pct,
                            report_date, claude_report_date,
-                           kimi_generated_at, deepseek_generated_at
+                           kimi_generated_at, deepseek_generated_at,
+                           kimi_rating, kimi_price_target, kimi_upside_pct,
+                           deepseek_rating, deepseek_price_target, deepseek_upside_pct,
+                           -- Content presence (avoid loading full report_md into list)
+                           (COALESCE(length(report_md), 0) > 200)            AS has_grok_md,
+                           (COALESCE(length(report_md_claude), 0) > 200)     AS has_claude_md,
+                           (COALESCE(length(report_md_kimi), 0) > 200)       AS has_kimi_md,
+                           (COALESCE(length(report_md_deepseek), 0) > 200)   AS has_deepseek_md
                     FROM analyst_reports
                     WHERE archived IS NOT TRUE
                     ORDER BY GREATEST(
@@ -10526,16 +10608,21 @@ def list_reports(request: Request = None):
             if rows:
                 out = []
                 for r in rows:
-                    # Detect which providers have a report
-                    # Detect provider presence by timestamp only — requiring
-                    # price_target made Claude reports invisible whenever the
-                    # extractor's regex couldn't find one (different formatting
-                    # from Grok). The pill should always appear so the user
-                    # can click in and read the report regardless.
-                    has_grok   = bool(r["generated_at"])
-                    has_claude = bool(r["claude_generated_at"])
-                    has_kimi   = bool(r.get("kimi_generated_at"))
-                    has_ds     = bool(r.get("deepseek_generated_at"))
+                    # Provider pills: content length first (so Kimi/DeepSeek show
+                    # when report_md_* is populated), then timestamps as fallback.
+                    has_grok   = bool(r.get("has_grok_md")) or bool(r.get("generated_at") and r.get("has_grok_md") is None)
+                    has_claude = bool(r.get("has_claude_md")) or bool(r.get("claude_generated_at"))
+                    has_kimi   = bool(r.get("has_kimi_md")) or bool(r.get("kimi_generated_at"))
+                    has_ds     = bool(r.get("has_deepseek_md")) or bool(r.get("deepseek_generated_at"))
+                    # Prefer explicit content flags when the SELECT succeeded
+                    if r.get("has_grok_md") is not None:
+                        has_grok = bool(r.get("has_grok_md"))
+                    if r.get("has_claude_md") is not None:
+                        has_claude = bool(r.get("has_claude_md")) or bool(r.get("claude_generated_at"))
+                    if r.get("has_kimi_md") is not None:
+                        has_kimi = bool(r.get("has_kimi_md")) or bool(r.get("kimi_generated_at"))
+                    if r.get("has_deepseek_md") is not None:
+                        has_ds = bool(r.get("has_deepseek_md")) or bool(r.get("deepseek_generated_at"))
                     providers = []
                     if has_grok:   providers.append("grok")
                     if has_claude: providers.append("claude")
@@ -10555,16 +10642,16 @@ def list_reports(request: Request = None):
                     # use it directly.
                     pt_g  = float(r["price_target"])         if r["price_target"]         is not None else None
                     pt_c  = float(r["claude_price_target"])  if r["claude_price_target"]  is not None else None
+                    pt_k  = float(r["kimi_price_target"])    if r.get("kimi_price_target") is not None else None
+                    pt_ds = float(r["deepseek_price_target"]) if r.get("deepseek_price_target") is not None else None
                     up_g  = float(r["upside_pct"])           if r["upside_pct"]           is not None else None
                     up_c  = float(r["claude_upside_pct"])    if r["claude_upside_pct"]    is not None else None
-                    if pt_g is not None and pt_c is not None:
-                        eff_pt = min(pt_g, pt_c)
-                    else:
-                        eff_pt = pt_g if pt_g is not None else pt_c
-                    if up_g is not None and up_c is not None:
-                        eff_up = min(up_g, up_c)
-                    else:
-                        eff_up = up_g if up_g is not None else up_c
+                    up_k  = float(r["kimi_upside_pct"])      if r.get("kimi_upside_pct")  is not None else None
+                    up_ds = float(r["deepseek_upside_pct"])  if r.get("deepseek_upside_pct") is not None else None
+                    pts = [p for p in (pt_g, pt_c, pt_k, pt_ds) if p is not None]
+                    ups = [u for u in (up_g, up_c, up_k, up_ds) if u is not None]
+                    eff_pt = min(pts) if pts else None
+                    eff_up = min(ups) if ups else None
 
                     out.append({
                         "ticker":              r["ticker"],
@@ -10583,6 +10670,10 @@ def list_reports(request: Request = None):
                         "grok_upside_pct":     up_g,
                         "claude_price_target": pt_c,
                         "claude_upside_pct":   up_c,
+                        "kimi_price_target":   pt_k,
+                        "kimi_upside_pct":     up_k,
+                        "deepseek_price_target": pt_ds,
+                        "deepseek_upside_pct": up_ds,
                         "claude_generated_at": r["claude_generated_at"].isoformat() if r["claude_generated_at"] else None,
                         "kimi_generated_at": (
                             r["kimi_generated_at"].isoformat()
@@ -10593,6 +10684,8 @@ def list_reports(request: Request = None):
                             if r.get("deepseek_generated_at") else None
                         ),
                         "claude_rating":       r["claude_rating"],
+                        "kimi_rating":         r.get("kimi_rating"),
+                        "deepseek_rating":     r.get("deepseek_rating"),
                         "providers":           providers,
                         "provider_badge":      provider_badge,
                         # As-of dates pulled from each LLM's report header

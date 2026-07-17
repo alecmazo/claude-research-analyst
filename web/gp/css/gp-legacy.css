@@ -1195,9 +1195,11 @@
   .rep-pill-ppt { background: var(--blue); color: var(--navy); }
   /* LLM provider badge — shown next to DOC/PPT so user knows which engine
      produced (or both produced) this saved report */
-  .rep-pill-llm-grok   { background: #0A1628; color: #fff; }
-  .rep-pill-llm-claude { background: #d97706; color: #fff; }
-  .rep-pill-llm-both   { background: linear-gradient(90deg, #0A1628 50%, #d97706 50%); color: #fff; }
+  .rep-pill-llm-grok     { background: #0A1628; color: #fff; }
+  .rep-pill-llm-claude   { background: #d97706; color: #fff; }
+  .rep-pill-llm-kimi     { background: #166534; color: #fff; }
+  .rep-pill-llm-deepseek { background: #1e3a8a; color: #fff; }
+  .rep-pill-llm-both     { background: linear-gradient(90deg, #0A1628 50%, #d97706 50%); color: #fff; }
   .rep-pill-clickable { cursor: pointer; transition: opacity .12s, transform .08s; }
   .rep-pill-clickable:hover { opacity: 0.85; transform: translateY(-1px); }
   .rep-pill-clickable:active { transform: translateY(0); }
