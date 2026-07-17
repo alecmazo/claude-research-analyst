@@ -13780,10 +13780,15 @@
                 const pxSpan = (r.jan1_price != null || r.end_price != null)
                   ? `${r.jan1_price != null ? fmtUSD(r.jan1_price) : '—'} <span style="color:var(--blue);opacity:.5;">→</span> ${r.end_price != null ? fmtUSD(r.end_price) : '—'}`
                   : '—';
+                const entryTip = r.origin_transfer
+                  ? 'In-kind equity insert: treated as cash-in + buy at transfer-day price — returns tracked from entry only (no pre-entry YTD credit)'
+                  : (r.origin_buy
+                    ? (r.closed ? 'Bought this year: avg buy price → avg exit price' : 'Bought this year (no Jan-1 close): avg buy price → last price')
+                    : (r.closed ? 'Jan-1 close → avg exit price' : 'Jan-1 close → last price'));
                 return `<tr>
-                  <td style="font-weight:800;color:var(--blue);">${r.ticker || '—'}${r.closed ? ' <span style="font-size:8px;font-weight:700;color:var(--text-secondary,#58616f);background:rgba(0,0,0,0.06);border-radius:3px;padding:0 4px;vertical-align:middle;">SOLD</span>' : ''}${r.predecessor ? ' <span title="Traded in the predecessor account before it was consolidated into this one" style="font-size:8px;font-weight:700;color:var(--text-secondary,#58616f);background:rgba(0,0,0,0.06);border-radius:3px;padding:0 4px;vertical-align:middle;">PRIOR ACCT</span>' : ''}</td>
+                  <td style="font-weight:800;color:var(--blue);">${r.ticker || '—'}${r.closed ? ' <span style="font-size:8px;font-weight:700;color:var(--text-secondary,#58616f);background:rgba(0,0,0,0.06);border-radius:3px;padding:0 4px;vertical-align:middle;">SOLD</span>' : ''}${r.predecessor ? ' <span title="Traded in the predecessor account before it was consolidated into this one" style="font-size:8px;font-weight:700;color:var(--text-secondary,#58616f);background:rgba(0,0,0,0.06);border-radius:3px;padding:0 4px;vertical-align:middle;">PRIOR ACCT</span>' : ''}${r.origin_transfer ? ' <span title="' + entryTip + '" style="font-size:8px;font-weight:700;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:3px;padding:0 4px;vertical-align:middle;">IN-KIND</span>' : ''}</td>
                   <td class="num">${r.end_shares != null && r.end_shares > 0 ? r.end_shares.toFixed(2) : '—'}</td>
-                  <td class="num" title="${r.origin_buy ? (r.closed ? 'Bought this year: avg buy price → avg exit price' : 'Bought this year (no Jan-1 close): avg buy price → last price') : (r.closed ? 'Jan-1 close → avg exit price' : 'Jan-1 close → last price')}">${pxSpan}</td>
+                  <td class="num" title="${entryTip}">${pxSpan}</td>
                   <td class="num" style="font-weight:700;${gain == null ? 'color:var(--dim);' : (gain >= 0 ? 'color:var(--green);' : 'color:var(--red);')}">${gain != null ? fmtUSD(gain) : '—'}</td>
                   <td class="num" style="${(retPct||0) >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtP(retPct)}</td>
                   <td>${contribBar(contrib)}</td>

@@ -6334,7 +6334,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui83-20260717-fin-tables"
+WEB_BUILD_VERSION = "ui84-20260717-inkind-ytd"
 
 
 @app.get("/api/build")
@@ -30007,12 +30007,41 @@ def _snaptrade_parse_activity(a: dict) -> dict | None:
 _SNAP_BUY_TYPES   = {"BUY", "REINVESTMENT", "DRIP", "REI"}
 _SNAP_SELL_TYPES  = {"SELL"}
 # External cash flows (move money in/out of the account; not performance).
+# In-kind security transfers (TRANSFER / TRANSFER_IN with units) are treated as
+# cash-in (or cash-out) at marked value on the transfer date — same as if cash
+# arrived and bought the shares that day. Without that, YTD market-value jumps
+# get booked as portfolio GAIN (EM-DEF / AYI incident: 20% → 30.6%).
 _SNAP_FLOW_TYPES  = {"CONTRIBUTION", "DEPOSIT", "WITHDRAWAL", "TRANSFER",
-                     "TRANSFER_IN", "TRANSFER_OUT", "FUNDING"}
+                     "TRANSFER_IN", "TRANSFER_OUT", "FUNDING", "ACATS",
+                     "ACATS_TRANSFER", "ACATS_TRANSFER_IN", "ACATS_TRANSFER_OUT",
+                     "IN_KIND", "IN_KIND_TRANSFER"}
 # Income/expense buckets for the automatic monthly balance records.
 _SNAP_DIV_TYPES   = {"DIVIDEND", "CASH_DIVIDEND"}
 _SNAP_INT_TYPES   = {"INTEREST"}
 _SNAP_FEE_TYPES   = {"FEE", "MANAGEMENT_FEE", "ADMINISTRATIVE_FEE"}
+
+
+def _snap_activity_cash_value(units, price, amount) -> float:
+    """Market value of an activity leg for cash-flow / basis math.
+
+    Prefer |amount| when present; else |units| × |price|. Pure in-kind
+    transfers from SnapTrade often ship units+price with amount=0 — without
+    the fallback, transfer value is lost and YTD attributes free gain.
+    """
+    try:
+        amt = float(amount) if amount is not None else 0.0
+    except (TypeError, ValueError):
+        amt = 0.0
+    if abs(amt) > 1e-9:
+        return abs(amt)
+    try:
+        u = abs(float(units) if units is not None else 0.0)
+        px = abs(float(price) if price is not None else 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if u > 1e-9 and px > 1e-9:
+        return u * px
+    return 0.0
 
 # Money-market / core-cash symbols — cash sweeps "trade" constantly (every
 # deposit/settlement buys or sells the sweep), so letting them into per-stock
@@ -30276,15 +30305,12 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         u_abs = abs(u)
         gross = (u_abs * px) if (u_abs and px) else abs(amt)
         if t in _SNAP_FLOW_TYPES:
-            # Transfers move SHARES + (maybe) a marked value. Units ALWAYS
-            # move — zero-valued legs (outbound/fractional in-kind legs often
-            # carry amount:0) must not null the symbol outright: matching
-            # consumes them first (a matched leg needs no value at all), and
-            # only a RESIDUAL unmatched unvalued leg nulls the gain. Value
-            # rides xfer_net_val; trade stats stay pure (exit avg / SOLD use
-            # real sells only).
+            # Transfers move SHARES + a marked value. Value = |amount| when set,
+            # else |units|×|price| (SnapTrade often sends amount:0 for pure
+            # in-kind). EXTERNAL unmatched transfer-IN is treated as cash-in
+            # + same-day buy at that value — no pre-entry YTD credit.
             if u_abs > 1e-9:
-                val = abs(amt)
+                val = _snap_activity_cash_value(u, px, amt)
                 side = "in" if u > 0 else "out"
                 e["net_units"] += u_abs if u > 0 else -u_abs
                 e[f"xfer_{side}_units"] = e.get(f"xfer_{side}_units", 0.0) + u_abs
@@ -30294,6 +30320,11 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
                 else:
                     e[f"xfer_{side}_unval"] = e.get(f"xfer_{side}_unval", 0.0) + u_abs
                 e["had_unit_transfer"] = True
+                if side == "in" and val > 0:
+                    e["external_entry"] = True  # label: equity insert at entry
+            elif abs(amt) > 1e-9:
+                # Cash-only transfer / contribution (no share units)
+                e["cash_flow"] = e.get("cash_flow", 0.0) + amt
             return
         if t in _SNAP_BUY_TYPES:
             e["net_units"] += u_abs
@@ -30617,33 +30648,48 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
                     - tr.get("xfer_net_val", 0.0)
                     + tr["dividends"])
         # Stock return: live price vs Jan-1 for open names. Closed names use
-        # their average EXIT price (they rendered null across the board); for
-        # within-year round trips (not held on Jan 1) the base is the average
-        # BUY price — the Jan-1 close is meaningless for those.
+        # their average EXIT price; within-year entries use acquisition price
+        # (cash buy OR external in-kind transfer marked value — never Jan-1
+        # close, which would credit pre-entry YTD on transferred shares).
         closed = end_qty <= 1e-6 and tr["sold_units"] > 1e-6
         px_for_ret = end_px
         base_px = jan1_px
         origin_buy = False
+        origin_transfer = False
         if closed:
             px_for_ret = tr["sell_proceeds"] / tr["sold_units"]
-        # Positions NOT held on Jan 1 (bought this year — IPOs like PSUS have
-        # no Jan-1 close at all) originate at the average ACQUISITION price
-        # from the activity records; the Jan-1 close is meaningless/absent.
+        # Cash buys this year (not held on Jan 1)
         if jan1_qty <= 1e-6 and tr["bought_units"] > 1e-6:
             base_px = tr["buy_cost"] / tr["bought_units"]
             origin_buy = True
+        # External in-kind transfer in (no matching internal OUT leg residual):
+        # origin = transfer-day marked price, as if cash-in + buy that day.
+        xfer_in_u = float(tr.get("xfer_in_units") or 0.0)
+        xfer_in_v = float(tr.get("xfer_in_val") or 0.0)
+        if (jan1_qty <= 1e-6 and xfer_in_u > 1e-6 and xfer_in_v > 1e-6
+                and not origin_buy):
+            base_px = xfer_in_v / xfer_in_u
+            origin_buy = True
+            origin_transfer = True
         ret = ((px_for_ret / base_px - 1.0) * 100.0) if (px_for_ret and base_px) else None
         contrib = (gain / begin_value * 100.0) if (gain is not None and begin_value) else None
-        if end_qty <= 1e-6 and not (tr["buy_cost"] or tr["sell_proceeds"]):
+        if end_qty <= 1e-6 and not (tr["buy_cost"] or tr["sell_proceeds"]
+                                    or tr.get("xfer_in_units") or tr.get("xfer_out_units")):
             continue   # neither held nor traded this year
         rows.append({
             "ticker": sym,
             "end_shares": round(end_qty, 4),
             # For this-year entries the "origin" column shows the avg
-            # acquisition price (flagged origin_buy), not a Jan-1 close.
+            # acquisition / transfer-in price (flagged origin_buy), not Jan-1.
             "jan1_price": (round(base_px, 4) if origin_buy and base_px
                            else (round(jan1_px, 4) if jan1_px is not None else None)),
             "origin_buy": origin_buy,
+            "origin_transfer": origin_transfer,
+            "entry_label": (
+                "In-kind equity insert (cash-in + buy at entry)"
+                if origin_transfer else
+                ("Bought this year" if origin_buy else "Held since Jan 1")
+            ),
             # Closed names show their average EXIT price, not a live quote.
             "end_price": round(px_for_ret, 4) if px_for_ret is not None else None,
             "dollar_gain": round(gain, 2) if gain is not None else None,
@@ -30733,12 +30779,14 @@ def _snaptrade_rebuild_balance_history(cur, fund_id: str) -> dict | None:
     # attribution + flows refreshed even when no new balance month is added.
 
     # Month-level activity aggregates (empty when the plan gates get_activities).
+    # For in-kind TRANSFER rows, sum per-row cash value (amount OR units×price)
+    # so pure share inserts count as deposits/withdrawals — otherwise balance
+    # jumps with zero flow inflate TWRR/MWRR (EM-DEF AYI case).
     cur.execute("""
         SELECT date_trunc('month', trade_date)::date AS mo, type,
-               COALESCE(SUM(amount),0) AS amt, COALESCE(SUM(ABS(COALESCE(fee,0))),0) AS fees
+               units, price, amount, COALESCE(ABS(COALESCE(fee,0)),0) AS fee
           FROM snaptrade_activities
          WHERE account_id = ANY(%s) AND trade_date IS NOT NULL
-         GROUP BY 1, 2
     """, (acct_ids,))
     acts_by_month = {}
     has_acts = False
@@ -30747,21 +30795,33 @@ def _snaptrade_rebuild_balance_history(cur, fund_id: str) -> dict | None:
         key = (r["mo"].year, r["mo"].month)
         b = acts_by_month.setdefault(key, {"deposits": 0.0, "withdrawals": 0.0,
                                            "dividends": 0.0, "interest": 0.0, "fees": 0.0})
-        t, amt = (r["type"] or ""), float(r["amt"] or 0)
-        b["fees"] += float(r["fees"] or 0)
+        t = (r["type"] or "").upper()
+        b["fees"] += float(r["fee"] or 0)
         if t in _SNAP_FLOW_TYPES:
-            if amt >= 0:
-                b["deposits"] += amt
+            u = float(r["units"] or 0)
+            px = float(r["price"] or 0)
+            raw_amt = float(r["amount"] or 0)
+            val = _snap_activity_cash_value(u, px, raw_amt)
+            # Direction: prefer amount sign; for pure unit transfers use unit sign
+            # (units > 0 = shares in = deposit; units < 0 = shares out = withdrawal)
+            if abs(raw_amt) > 1e-9:
+                signed = raw_amt
+            elif abs(u) > 1e-9:
+                signed = val if u > 0 else -val
             else:
-                b["withdrawals"] += -amt
+                signed = val  # treat bare positive value as deposit
+            if signed >= 0:
+                b["deposits"] += abs(signed)
+            else:
+                b["withdrawals"] += abs(signed)
         elif t in _SNAP_DIV_TYPES:
-            b["dividends"] += amt
+            b["dividends"] += float(r["amount"] or 0)
         elif t in _SNAP_INT_TYPES:
-            b["interest"] += amt
-        elif t in _SNAP_FEE_TYPES and float(r["fees"] or 0) == 0:
+            b["interest"] += float(r["amount"] or 0)
+        elif t in _SNAP_FEE_TYPES and float(r["fee"] or 0) == 0:
             # FEE activities usually carry the charge in `amount`; only count it
             # when the `fee` column (already summed above) didn't capture it.
-            b["fees"] += abs(amt)
+            b["fees"] += abs(float(r["amount"] or 0))
 
     synth = []
     prev_end = float(csv_rows[-1]["end_balance"]) if csv_rows else None

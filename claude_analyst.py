@@ -3913,6 +3913,23 @@ def parse_activity_for_attribution(raw_text: str) -> dict:
             amount = 0.0
 
         # ── Classify ────────────────────────────────────────────────────────
+        # External in-kind stock inserts (TRANSFERRED FROM / IN KIND TRANSFER /
+        # ACATS TRANSFER IN with a symbol) must be treated as a BUY at the
+        # transfer-day marked value — as if cash arrived and bought the shares
+        # that day. Otherwise start_shares rewinds to Jan 1 and YTD attributes
+        # the full pre-entry stock move (or free gain if basis is missing).
+        _is_xfer_in = (
+            quantity > 0
+            and symbol
+            and (
+                "IN KIND" in action
+                or "ACATS TRANSFER IN" in action
+                or "TRANSFER IN" in action
+                or ("TRANSFERRED FROM" in action and "YOU BOUGHT" not in action)
+                or ("RECEIVED" in action and "DIVIDEND" not in action
+                    and "INTEREST" not in action and quantity > 0)
+            )
+        )
         if "YOU SOLD" in action:
             if quantity > 0 and price > 0:
                 trades.append({
@@ -3923,15 +3940,24 @@ def parse_activity_for_attribution(raw_text: str) -> dict:
                     "price":  round(price, 4),
                     "amount": round(abs(amount), 2),  # proceeds received
                 })
-        elif "YOU BOUGHT" in action:
-            if quantity > 0 and price > 0:
+        elif "YOU BOUGHT" in action or _is_xfer_in:
+            # Price: prefer CSV price; else amount/qty; else leave 0 (still
+            # records shares so start_shares rewind doesn't invent Jan-1 hold).
+            px = price
+            cost = abs(amount) if amount else 0.0
+            if px <= 0 and quantity > 0 and cost > 0:
+                px = cost / quantity
+            if cost <= 0 and px > 0 and quantity > 0:
+                cost = px * quantity
+            if quantity > 0 and (px > 0 or cost > 0 or _is_xfer_in):
                 trades.append({
                     "date":   date_str,
                     "ticker": symbol,
                     "type":   "BUY",
                     "shares": round(quantity, 4),
-                    "price":  round(price, 4),
-                    "amount": round(abs(amount), 2),  # cost paid
+                    "price":  round(px, 4) if px > 0 else 0.0,
+                    "amount": round(cost, 2) if cost > 0 else round(px * quantity, 2),
+                    "entry":  "in_kind_transfer" if _is_xfer_in else "buy",
                 })
         elif "REINVESTMENT" in action:
             # Reinvested dividend buys more fractional shares
@@ -4800,15 +4826,16 @@ _FIDELITY_TRANSFER_ACTIONS = frozenset({
     # an external source) or withdrew it (TRANSFERRED TO an external destination).
     # Excluding them would cause Personal Return to ignore real timing effects.
     #
+    # IN KIND / ACATS security inserts are ALSO treated as cash flows (deposit
+    # of market value on the transfer date) — same economics as cash-in + buy.
+    # They are NOT in this exclude set so MWRR sees the capital arrival; the
+    # attribution parser additionally books them as BUY at transfer-day value.
+    #
     # The only transactions we exclude are ones Fidelity uses internally to
     # reorganise positions without any actual money moving:
     "JOURNALED FROM",             # Fidelity internal journal — no external cash
     "JOURNALED TO",               # Fidelity internal journal — no external cash
     "JOURNAL",                    # generic Fidelity journal entry
-    "ACATS TRANSFER IN",          # whole-account ACATS move (position reorg)
-    "ACATS TRANSFER OUT",         # whole-account ACATS move (position reorg)
-    "ACATS",                      # generic ACATS catch-all
-    "IN KIND TRANSFER",           # securities transferred in-kind (no cash)
     "INTERNAL TRANSFER",          # explicit Fidelity internal-account label
 })
 
@@ -4978,14 +5005,46 @@ def parse_fidelity_history(raw_text: str) -> dict:
         # uppercased above) before the internal-investment-activity check.
         is_transfer = any(kw in action for kw in _FIDELITY_TRANSFER_ACTIONS)
 
+        # In-kind security transfers (shares, not cash): treat market value as
+        # external deposit/withdrawal on the transfer date.
+        qty_raw = (row.get("Quantity") or "").replace(",", "").strip()
+        try:
+            qty_f = abs(float(qty_raw)) if qty_raw else 0.0
+        except ValueError:
+            qty_f = 0.0
+        px_raw = (row.get("Price ($)") or row.get("Price") or "").replace("$", "").replace(",", "").strip()
+        try:
+            px_f = abs(float(px_raw)) if px_raw else 0.0
+        except ValueError:
+            px_f = 0.0
+        _inkind = (
+            qty_f > 0 and symbol
+            and (
+                "IN KIND" in action
+                or "ACATS" in action
+                or "TRANSFER IN" in action
+                or "TRANSFERRED FROM" in action
+                or "TRANSFERRED TO" in action
+            )
+        )
+        flow_amt = amount
+        if _inkind and abs(flow_amt) < 1e-9 and px_f > 0:
+            flow_amt = qty_f * px_f
+            # TRANSFERRED TO = outflow of shares
+            if "TRANSFERRED TO" in action or "TRANSFER OUT" in action:
+                flow_amt = -abs(flow_amt)
+            else:
+                flow_amt = abs(flow_amt)
+
         # Record every transaction for full history (with transfer flag)
         tx_row = {
             "date":                date_str,
-            "amount":              round(amount, 2),
+            "amount":              round(flow_amt if _inkind else amount, 2),
             "action":              action,
             "symbol":              symbol,
             "type":                tx_type,
             "is_internal_transfer": is_transfer,
+            "is_inkind_equity":     _inkind,
         }
         all_transactions.append(tx_row)
 
@@ -4994,20 +5053,22 @@ def parse_fidelity_history(raw_text: str) -> dict:
             internal_transfers.append(tx_row)
             continue
 
-        if amount == 0:
+        if abs(flow_amt if _inkind else amount) < 1e-12 and not _inkind:
             continue
 
         # ── Blocklist: skip known-internal investment activity ─────────────────
         # Everything else (transfers, ACH, wire, journal entries, bill payments,
         # etc.) is an external cash flow regardless of the exact action string.
         is_internal = any(kw in action for kw in _FIDELITY_INTERNAL_ACTIONS)
-        if is_internal:
+        if is_internal and not _inkind:
             continue
 
         flows.append({
             "date":   date_str,
-            "amount": round(amount, 2),
-            "action": action,
+            "amount": round(flow_amt if _inkind else amount, 2),
+            "action": action + (" [IN-KIND→CASH-IN]" if _inkind and flow_amt > 0 else
+                                " [IN-KIND→CASH-OUT]" if _inkind else ""),
+            "symbol": symbol or None,
         })
 
     net_flow = sum(f["amount"] for f in flows)
