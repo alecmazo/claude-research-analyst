@@ -3286,6 +3286,25 @@ def earnings_detail(ticker: str, request: Request):
             }
     except Exception:
         pass
+    # Enrich free notes with DGA report rating/PT when we have one
+    try:
+        notes = card.get("notes") if isinstance(card.get("notes"), dict) else {}
+        bullets = list(notes.get("bullets") or [])
+        if report_meta:
+            bits = []
+            if report_meta.get("rating"):
+                bits.append(str(report_meta["rating"]))
+            if report_meta.get("price_target") is not None:
+                bits.append(f"PT ${float(report_meta['price_target']):.0f}")
+            if report_meta.get("upside_pct") is not None:
+                bits.append(f"{float(report_meta['upside_pct']):+.1f}% upside")
+            if bits:
+                bullets.append("DGA report · " + " · ".join(bits))
+                notes["bullets"] = bullets[:8]
+                notes["has_dga_report"] = True
+                card["notes"] = notes
+    except Exception:
+        pass
     # Stock-moving Q&A highlights from indexed earnings-call chunks (free, no LLM)
     try:
         ev_date = None

@@ -1143,6 +1143,41 @@
           '</tbody></table>';
       }
 
+      // Free notes / vs-analysts block (fills empty white space under EPS hero)
+      const notes = d.notes || {};
+      const noteBullets = Array.isArray(notes.bullets) ? notes.bullets : [];
+      const tone = notes.tone || '';
+      const toneBg = tone === 'beat' ? '#f0fdf4'
+        : (tone === 'miss' ? '#fef2f2'
+          : (tone === 'pending' ? '#fffbeb' : '#f8fafc'));
+      const toneBorder = tone === 'beat' ? '#bbf7d0'
+        : (tone === 'miss' ? '#fecaca'
+          : (tone === 'pending' ? '#fde68a' : 'var(--panel-edge)'));
+      const toneFg = tone === 'beat' ? '#166534'
+        : (tone === 'miss' ? '#991b1b'
+          : (tone === 'pending' ? '#92400e' : 'var(--text-primary)'));
+      let notesHtml = '';
+      if (noteBullets.length || notes.vs_analysts) {
+        notesHtml =
+          '<div class="earn-notes" style="margin-top:14px;padding:10px 12px;border-radius:10px;'
+          + 'background:' + toneBg + ';border:1px solid ' + toneBorder + ';">'
+          + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;">'
+          + '<span style="font-size:10px;font-weight:800;letter-spacing:0.55px;text-transform:uppercase;color:' + toneFg + ';">'
+          + 'vs analysts · key points</span>'
+          + (notes.vs_analysts
+            ? '<span style="font-size:11px;font-weight:800;color:' + toneFg + ';">'
+              + _cfEsc(notes.vs_analysts) + '</span>'
+            : '')
+          + '<span style="margin-left:auto;font-size:9px;font-weight:600;color:var(--dim);">free · no AI</span>'
+          + '</div>'
+          + '<ul style="margin:0;padding:0 0 0 16px;font-size:12px;line-height:1.45;color:var(--text-primary);">'
+          + noteBullets.map(function (b) {
+            return '<li style="margin:3px 0;">' + _cfEsc(b) + '</li>';
+          }).join('')
+          + '</ul>'
+          + '</div>';
+      }
+
       // Stock-moving Q&A from indexed earnings call (newest quarter only)
       const ch = d.call_highlights || {};
       const hl = Array.isArray(ch.highlights) ? ch.highlights : [];
@@ -1179,10 +1214,10 @@
           '</details>';
       } else if (ch.note) {
         qaHtml =
-          '<div style="margin-top:14px;padding:8px 10px;border-radius:8px;background:' +
+          '<div style="margin-top:10px;padding:7px 10px;border-radius:8px;background:' +
             (ch.stale ? '#fffbeb' : '#f8fafc') + ';border:1px dashed ' +
             (ch.stale ? '#fde68a' : 'var(--panel-edge)') +
-            ';font-size:11px;color:' + (ch.stale ? '#92400e' : 'var(--dim)') +
+            ';font-size:10.5px;color:' + (ch.stale ? '#92400e' : 'var(--dim)') +
             ';line-height:1.4;">' +
             '📞 ' + _cfEsc(ch.note) +
           '</div>';
@@ -1193,9 +1228,10 @@
         '<div style="font-size:12px;font-weight:600;margin-bottom:4px;">' + _cfEsc(whenLine) + '</div>' +
         '<div style="font-size:12px;margin-bottom:12px;">Price ' + pxLine + '</div>' +
         hero +
+        notesHtml +
         qaHtml +
         histHtml +
-        '<div style="margin-top:12px;font-size:10px;color:var(--dim);">Not investment advice. EPS from Nasdaq/Yahoo · call Q&amp;A from indexed transcripts'
+        '<div style="margin-top:12px;font-size:10px;color:var(--dim);">Not investment advice. EPS from Nasdaq/Yahoo · notes free · call Q&amp;A from indexed transcripts'
           + (d.source ? (' · EPS source ' + _cfEsc(d.source)) : '') + '.</div>';
 
       const repBtn = overlay.querySelector('#ec-report');

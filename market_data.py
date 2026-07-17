@@ -984,6 +984,33 @@ def earnings_card(symbol: str, horizon_days: int = 5,
         except Exception:
             pass
 
+    # Street range / revenue consensus from Yahoo calendar (free, no LLM)
+    street_range: dict = {}
+    try:
+        street_range = yfinance_earnings_calendar_context(sym) or {}
+    except Exception as e:
+        print(f"[market_data] calendar context {sym}: {e!s:.100}", flush=True)
+
+    notes = build_earnings_notes(
+        symbol=sym,
+        status=status,
+        beat=beat,
+        surprise_pct=surprise_pct,
+        eps_actual=(result or {}).get("eps_actual"),
+        eps_estimate=eps_est,
+        history=history,
+        event={
+            "date": (upcoming or {}).get("date") or (result or {}).get("date_reported"),
+            "fiscal_quarter": (
+                (upcoming or {}).get("fiscal_quarter")
+                or (result or {}).get("fiscal_quarter") or ""
+            ),
+            "session": session,
+            "name": (upcoming or {}).get("name") or "",
+        },
+        street=street_range,
+    )
+
     return {
         "ok": True,
         "ticker": sym,
@@ -1008,7 +1035,258 @@ def earnings_card(symbol: str, horizon_days: int = 5,
             "beat": beat,  # beat | miss | inline | null
             "date_reported": (result or {}).get("date_reported"),
             "fiscal_quarter": (result or {}).get("fiscal_quarter"),
-        } if (result or eps_est is not None) else None,
+            "eps_high": street_range.get("eps_high"),
+            "eps_low": street_range.get("eps_low"),
+            "eps_avg": street_range.get("eps_avg"),
+            "revenue_estimate": street_range.get("revenue_avg"),
+            "revenue_high": street_range.get("revenue_high"),
+            "revenue_low": street_range.get("revenue_low"),
+        } if (result or eps_est is not None or street_range) else None,
         "history": history[:8],
+        "notes": notes,
         "cost": "free · no LLM",
+    }
+
+
+def yfinance_earnings_calendar_context(symbol: str) -> dict:
+    """Street range (EPS high/low/avg + revenue band) from yfinance calendar."""
+    import time as _time
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return {}
+    hit = _EARNINGS_DETAIL_CACHE.get(("yf_cal", sym))
+    if hit and _time.time() - hit[0] < 1800:
+        return hit[1]
+    out: dict = {}
+    try:
+        import yfinance as yf
+        cal = getattr(yf.Ticker(sym), "calendar", None) or {}
+        if isinstance(cal, dict):
+            for src, dst in (
+                ("Earnings High", "eps_high"),
+                ("Earnings Low", "eps_low"),
+                ("Earnings Average", "eps_avg"),
+                ("Revenue High", "revenue_high"),
+                ("Revenue Low", "revenue_low"),
+                ("Revenue Average", "revenue_avg"),
+            ):
+                v = cal.get(src)
+                if v is None:
+                    continue
+                try:
+                    out[dst] = float(v)
+                except (TypeError, ValueError):
+                    pass
+            # Next earnings date list if present
+            ed = cal.get("Earnings Date")
+            if isinstance(ed, (list, tuple)) and ed:
+                try:
+                    d0 = ed[0]
+                    out["next_earnings_date"] = (
+                        d0.isoformat() if hasattr(d0, "isoformat") else str(d0)[:10]
+                    )
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[market_data] yf calendar {sym}: {e!s:.100}", flush=True)
+    _EARNINGS_DETAIL_CACHE[("yf_cal", sym)] = (_time.time(), out)
+    return out
+
+
+def yahoo_earnings_headlines(symbol: str, limit: int = 4) -> list[dict]:
+    """Recent free Yahoo headlines mentioning earnings / print (no LLM)."""
+    import time as _time
+    import re as _re
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return []
+    hit = _EARNINGS_DETAIL_CACHE.get(("yf_news", sym))
+    if hit and _time.time() - hit[0] < 900:
+        return hit[1]
+    out: list[dict] = []
+    keys = _re.compile(
+        r"earn|eps|quarter|guidance|outlook|beat|miss|forecast|results|print|revenue|profit",
+        _re.I,
+    )
+    try:
+        import yfinance as yf
+        news = getattr(yf.Ticker(sym), "news", None) or []
+        for item in news:
+            c = item.get("content") if isinstance(item, dict) else None
+            if not isinstance(c, dict):
+                c = item if isinstance(item, dict) else {}
+            title = (c.get("title") or item.get("title") or "").strip()
+            if not title or not keys.search(title):
+                continue
+            pub = ""
+            try:
+                pub = (
+                    (c.get("provider") or {}).get("displayName")
+                    or item.get("publisher")
+                    or ""
+                )
+            except Exception:
+                pub = item.get("publisher") or ""
+            url = ""
+            try:
+                url = (
+                    (c.get("canonicalUrl") or {}).get("url")
+                    or (c.get("clickThroughUrl") or {}).get("url")
+                    or item.get("link")
+                    or ""
+                )
+            except Exception:
+                url = item.get("link") or ""
+            out.append({"title": title[:180], "publisher": str(pub)[:60], "url": url})
+            if len(out) >= limit:
+                break
+    except Exception as e:
+        print(f"[market_data] yf news {sym}: {e!s:.100}", flush=True)
+    _EARNINGS_DETAIL_CACHE[("yf_news", sym)] = (_time.time(), out)
+    return out
+
+
+def build_earnings_notes(
+    *,
+    symbol: str,
+    status: str,
+    beat: str | None,
+    surprise_pct,
+    eps_actual,
+    eps_estimate,
+    history: list | None,
+    event: dict | None,
+    street: dict | None,
+) -> dict:
+    """Structured free commentary for the earnings card empty space (no LLM)."""
+    bullets: list[str] = []
+    vs = ""
+    tone = "neutral"
+    fq = (event or {}).get("fiscal_quarter") or ""
+    name = (event or {}).get("name") or symbol
+
+    def _fmt_eps(v):
+        try:
+            return f"${float(v):.2f}"
+        except Exception:
+            return "—"
+
+    def _fmt_rev(v):
+        try:
+            n = float(v)
+            if abs(n) >= 1e9:
+                return f"${n/1e9:.2f}B"
+            if abs(n) >= 1e6:
+                return f"${n/1e6:.1f}M"
+            return f"${n:,.0f}"
+        except Exception:
+            return "—"
+
+    if status == "reported" and eps_actual is not None:
+        sp = None
+        try:
+            sp = float(surprise_pct) if surprise_pct is not None else None
+        except Exception:
+            sp = None
+        if beat == "beat":
+            tone = "beat"
+            vs = f"Beat Street" + (f" by {sp:+.1f}%" if sp is not None else "")
+            bullets.append(
+                f"EPS {_fmt_eps(eps_actual)} vs {_fmt_eps(eps_estimate)} consensus"
+                + (f" · beat {sp:+.1f}%" if sp is not None else " · beat")
+                + (f" · {fq}" if fq else "")
+            )
+        elif beat == "miss":
+            tone = "miss"
+            vs = f"Missed Street" + (f" by {sp:.1f}%" if sp is not None else "")
+            bullets.append(
+                f"EPS {_fmt_eps(eps_actual)} vs {_fmt_eps(eps_estimate)} consensus"
+                + (f" · miss {sp:.1f}%" if sp is not None else " · miss")
+                + (f" · {fq}" if fq else "")
+            )
+        elif beat == "inline":
+            tone = "inline"
+            vs = "In line with Street"
+            bullets.append(
+                f"EPS {_fmt_eps(eps_actual)} matched {_fmt_eps(eps_estimate)} consensus"
+                + (f" · {fq}" if fq else "")
+            )
+        else:
+            bullets.append(
+                f"EPS {_fmt_eps(eps_actual)}"
+                + (f" vs {_fmt_eps(eps_estimate)} est" if eps_estimate is not None else "")
+                + (f" · {fq}" if fq else "")
+            )
+    elif status == "pending_update":
+        tone = "pending"
+        vs = "Print window passed · results lagging free feeds"
+        if eps_estimate is not None:
+            bullets.append(f"Street was at {_fmt_eps(eps_estimate)} EPS — actual not in free sources yet")
+        else:
+            bullets.append("Awaiting free EPS actual (Yahoo/Nasdaq often lag BMO/AMC by hours)")
+    else:
+        if eps_estimate is not None:
+            bullets.append(
+                f"Consensus EPS {_fmt_eps(eps_estimate)}"
+                + (f" · {fq}" if fq else "")
+                + " — not yet reported"
+            )
+            vs = "Awaiting print"
+        else:
+            bullets.append("No Street EPS estimate in free calendar yet")
+
+    st = street or {}
+    if st.get("eps_low") is not None and st.get("eps_high") is not None:
+        lo, hi = st["eps_low"], st["eps_high"]
+        line = f"Street EPS range {_fmt_eps(lo)} – {_fmt_eps(hi)}"
+        if eps_actual is not None:
+            try:
+                a = float(eps_actual)
+                if a > float(hi):
+                    line += " · print above high end of range"
+                elif a < float(lo):
+                    line += " · print below low end of range"
+                else:
+                    mid = (float(lo) + float(hi)) / 2.0
+                    side = "upper half" if a >= mid else "lower half"
+                    line += f" · print in {side} of range"
+            except Exception:
+                pass
+        bullets.append(line)
+
+    if st.get("revenue_avg") is not None:
+        rev_line = f"Street revenue ~{_fmt_rev(st['revenue_avg'])}"
+        if st.get("revenue_low") is not None and st.get("revenue_high") is not None:
+            rev_line += f" (band {_fmt_rev(st['revenue_low'])}–{_fmt_rev(st['revenue_high'])})"
+        bullets.append(rev_line)
+
+    # Beat/miss streak from history
+    hist = list(history or [])
+    beats = [h for h in hist[:6] if h.get("beat") in ("beat", "miss", "inline")]
+    if beats:
+        n_beat = sum(1 for h in beats if h.get("beat") == "beat")
+        n_miss = sum(1 for h in beats if h.get("beat") == "miss")
+        n = len(beats)
+        bullets.append(
+            f"Last {n} quarters: {n_beat} beat · {n_miss} miss · {n - n_beat - n_miss} inline"
+        )
+
+    # Free headlines (earnings-related)
+    headlines = yahoo_earnings_headlines(symbol, limit=3)
+    for h in headlines[:3]:
+        t = (h.get("title") or "").strip()
+        if t:
+            bullets.append(t)
+
+    # Cap length for UI
+    bullets = bullets[:7]
+    return {
+        "tone": tone,
+        "vs_analysts": vs,
+        "headline": (
+            f"{name}: {vs}" if vs else f"{name} earnings"
+        )[:140],
+        "bullets": bullets,
+        "headlines": headlines[:3],
+        "source": "free · yahoo/nasdaq · no LLM",
     }
