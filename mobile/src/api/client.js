@@ -469,6 +469,10 @@ export const api = {
   addToWatchlist:      (ticker) => request(`/api/watchlist/${ticker}`, { method: 'POST' }),
   removeFromWatchlist: (ticker) => request(`/api/watchlist/${ticker}`, { method: 'DELETE' }),
 
+  // Free (zero-LLM) stock snapshot — same payload as the desktop ticker expand card
+  getStockInfo: (ticker) =>
+    request(`/api/stock-info/${encodeURIComponent(String(ticker || '').trim().toUpperCase())}`),
+
   // ---------- Market Scan ----------
   startScan:     (tickers) => request('/api/scan', {
     method: 'POST', body: JSON.stringify({ tickers }),

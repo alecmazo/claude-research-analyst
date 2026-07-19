@@ -18,12 +18,14 @@ import {
   ActivityIndicator,
   Animated,
   Modal,
+  Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { v2Fetch, getV2User } from '../api/client';
+import { v2Fetch, getV2User, api } from '../api/client';
 import { colors } from '../components/theme';
+import StockInfoCard, { StockInfoScroll } from '../components/StockInfoCard';
 import { useTheme } from '../design';
 
 const VIEW_CONFIG_KEY = 'positions_view_config_v1';
@@ -129,7 +131,9 @@ function BlotterRow({ p, t, onPress }) {
 }
 
 // ── Bottom-sheet detail for one position ─────────────────────────────────────
-function PositionSheet({ p, t, onClose, onReport }) {
+// Free stock-info card (same as desktop ticker expand) + position context.
+// "View report" is optional and secondary — default content is NOT the report.
+function PositionSheet({ p, t, onClose, onReport, onAnalyze }) {
   if (!p) return null;
   const gain = p.unrealized_gain != null ? Number(p.unrealized_gain) : null;
   const pct = p.unrealized_gain_pct != null
@@ -147,16 +151,18 @@ function PositionSheet({ p, t, onClose, onReport }) {
     ? Number(p.day_change_abs) * qty : null;
   const name = p.name && String(p.name).trim().toUpperCase() !== String(p.symbol || '').toUpperCase()
     ? String(p.name).trim() : null;
-  const meta = [
-    qty != null ? qty.toLocaleString('en-US') + ' sh' : null,
-    p.last_price != null ? '@ ' + fmtPrice(p.last_price) : null,
-    avgCost != null ? 'avg ' + fmtPrice(avgCost) : null,
-    p._acct_title || null,
-  ].filter(Boolean).join('  ·  ');
+  const posCtx = {
+    qty,
+    value: p.market_value != null ? Number(p.market_value) : null,
+    weight: p._scope_weight_pct != null ? Number(p._scope_weight_pct)
+      : (p._acct_weight_pct != null ? Number(p._acct_weight_pct) : null),
+    avgCost,
+    pl: gain,
+  };
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>
       <TouchableOpacity style={bl.sheetBackdrop} activeOpacity={1} onPress={onClose} />
-      <View style={[bl.sheet, { backgroundColor: t.surface }]}>
+      <View style={[bl.sheet, bl.sheetTall, { backgroundColor: t.surface }]}>
         <View style={bl.sheetGrab} />
         <View style={bl.sheetHead}>
           <Text style={[bl.sheetTicker, { color: t.textPrimary }]} numberOfLines={1}>
@@ -164,20 +170,29 @@ function PositionSheet({ p, t, onClose, onReport }) {
           </Text>
           {plTxt ? <Text style={[bl.sheetPl, { color: plColor }]}>P/L {plTxt}</Text> : null}
         </View>
-        {meta ? <Text style={[bl.sheetMeta, { color: t.textSecondary }]}>{meta}</Text> : null}
+        {p._acct_title ? (
+          <Text style={[bl.sheetMeta, { color: t.textSecondary }]}>{p._acct_title}</Text>
+        ) : null}
         {dayAbs != null ? (
           <Text style={[bl.sheetDay, { color: dayAbs >= 0 ? GREEN : RED }]}>
             Today {fmtAbs(dayAbs)}{p.day_change_pct != null ? '  ·  ' + fmtPct(p.day_change_pct) : ''}
           </Text>
         ) : null}
-        <View style={bl.sheetBtns}>
-          <TouchableOpacity style={bl.sheetBtnPrimary} onPress={() => onReport(p)} activeOpacity={0.75}>
-            <Text style={bl.sheetBtnPrimaryTxt}>View report</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[bl.sheetBtn, { borderColor: t.border }]} onPress={onClose} activeOpacity={0.75}>
-            <Text style={[bl.sheetBtnTxt, { color: t.textSecondary }]}>Close</Text>
-          </TouchableOpacity>
-        </View>
+        <StockInfoScroll style={{ flex: 1, marginTop: 8 }}>
+          <StockInfoCard
+            ticker={p.symbol}
+            positionCtx={posCtx}
+            onOpenReport={onReport ? () => onReport(p) : undefined}
+            onRunAnalysis={onAnalyze ? () => onAnalyze(p) : undefined}
+          />
+        </StockInfoScroll>
+        <TouchableOpacity
+          style={[bl.sheetBtn, { borderColor: t.border, marginTop: 10 }]}
+          onPress={onClose}
+          activeOpacity={0.75}
+        >
+          <Text style={[bl.sheetBtnTxt, { color: t.textSecondary }]}>Close</Text>
+        </TouchableOpacity>
       </View>
     </Modal>
   );
@@ -376,8 +391,45 @@ export default function WatchlistScreen({ navigation }) {
 
   // ── Row press ─────────────────────────────────────────────────────────────
 
-  const handleRowPress = useCallback((item) => {
-    try { navigation?.navigate('Report', { ticker: item.symbol }); } catch {}
+  const handleOpenReport = useCallback((item) => {
+    try {
+      navigation?.navigate('Research', {
+        screen: 'Report',
+        params: { ticker: item.symbol },
+      });
+    } catch {
+      try { navigation?.navigate('Report', { ticker: item.symbol }); } catch {}
+    }
+  }, [navigation]);
+
+  const handleRunAnalysis = useCallback((item) => {
+    const tk = item?.symbol;
+    if (!tk) return;
+    Alert.alert(
+      'Run AI analysis?',
+      `${tk} full equity report costs tokens (Grok). This is deliberate — not automatic.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Run',
+          onPress: async () => {
+            try {
+              const job = await api.startAnalysis(tk, false, 'grok');
+              try {
+                navigation?.navigate('Research', {
+                  screen: 'Analysis',
+                  params: { jobId: job.job_id, ticker: tk },
+                });
+              } catch {
+                navigation?.navigate('Analysis', { jobId: job.job_id, ticker: tk });
+              }
+            } catch (e) {
+              Alert.alert('Analysis failed', e.message || String(e));
+            }
+          },
+        },
+      ],
+    );
   }, [navigation]);
 
   // ── Blotter scope: filter → weight → sort ─────────────────────────────────
@@ -597,7 +649,8 @@ export default function WatchlistScreen({ navigation }) {
           p={sheetItem}
           t={t}
           onClose={() => setSheetItem(null)}
-          onReport={(pp) => { setSheetItem(null); handleRowPress(pp); }}
+          onReport={(pp) => { setSheetItem(null); handleOpenReport(pp); }}
+          onAnalyze={(pp) => { setSheetItem(null); handleRunAnalysis(pp); }}
         />
       ) : null}
 
@@ -654,6 +707,9 @@ const bl = StyleSheet.create({
     borderTopLeftRadius: 16, borderTopRightRadius: 16,
     borderTopWidth: 2, borderTopColor: BLUE,
     paddingHorizontal: 18, paddingTop: 8, paddingBottom: 30,
+  },
+  sheetTall: {
+    height: '82%',
   },
   sheetGrab: {
     width: 34, height: 4, borderRadius: 2, backgroundColor: 'rgba(128,140,155,0.45)',
