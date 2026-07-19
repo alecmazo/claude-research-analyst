@@ -11,13 +11,20 @@ import {
   ActivityIndicator, KeyboardAvoidingView, Platform, Modal, Alert,
   RefreshControl,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Markdown from 'react-native-markdown-display';
 import { api, getV2User } from '../api/client';
 import { spacing, radius, fontSize, Card, haptics, makeMdStyles, useTheme } from '../design';
 import { relativeTime } from '../design/format';
 
-const ANALYST_BUILD = 'an-v2-20260717';
+const ANALYST_BUILD = 'an-v3-20260719';
+const ENGINE_KEY = '@dga_agentic_engine_v1';
+const ENGINES = [
+  { id: 'claude', label: 'Claude', sub: 'Opus 4.8' },
+  { id: 'grok', label: 'Grok', sub: '4.5' },
+  { id: 'deepseek', label: 'DeepSeek', sub: 'cheap' },
+];
 
 const TOOL_ICON = {
   get_quote: '💹', get_sector: '🏷', read_saved_report: '📄',
@@ -82,6 +89,7 @@ export default function AnalystScreen() {
   const md = useMemo(() => makeMdStyles(t), [t]);
 
   const [question, setQuestion] = useState('');
+  const [engine, setEngine] = useState('claude');
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(null);
   const [result, setResult] = useState(null);   // live or re-opened
@@ -117,10 +125,19 @@ export default function AnalystScreen() {
   }, []);
 
   useEffect(() => {
+    AsyncStorage.getItem(ENGINE_KEY).then((v) => {
+      if (v && ENGINES.some((e) => e.id === v)) setEngine(v);
+    }).catch(() => {});
     setReviewsLoading(true);
     loadReviews().finally(() => setReviewsLoading(false));
     return () => stopPoll();
   }, [loadReviews]);
+
+  const pickEngine = useCallback((id) => {
+    setEngine(id);
+    AsyncStorage.setItem(ENGINE_KEY, id).catch(() => {});
+    try { haptics.onPressPrimary?.(); } catch {}
+  }, []);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -137,7 +154,7 @@ export default function AnalystScreen() {
     setProgress({ label: 'Starting…', steps: 0, tool_calls: [], cost_usd: 0 });
     const t0 = Date.now();
     try {
-      const d0 = await api.startAgentic(q);
+      const d0 = await api.startAgentic(q, engine);
       if (!d0.ok) throw new Error(d0.error || 'Failed to start');
       const jobId = d0.job_id;
       pollRef.current = setInterval(async () => {
@@ -168,7 +185,7 @@ export default function AnalystScreen() {
     } catch (e) {
       setRunning(false); setError(String(e?.message || e));
     }
-  }, [question, loadReviews]);
+  }, [question, engine, loadReviews]);
 
   const openReview = useCallback(async (id) => {
     try { haptics.onPressPrimary?.(); } catch {}
@@ -308,6 +325,25 @@ export default function AnalystScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.gold} />
           }
         >
+          <Text style={s.engineLabel}>ENGINE</Text>
+          <View style={s.engineRow}>
+            {ENGINES.map((e) => {
+              const on = engine === e.id;
+              return (
+                <TouchableOpacity
+                  key={e.id}
+                  style={[s.engineChip, on && s.engineChipOn]}
+                  onPress={() => pickEngine(e.id)}
+                  disabled={running}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[s.engineChipTxt, on && s.engineChipTxtOn]}>{e.label}</Text>
+                  <Text style={[s.engineChipSub, on && s.engineChipTxtOn]}>{e.sub}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
           <TextInput
             style={s.input}
             placeholder="Ask a research question — e.g. compare NVDA and AMD on valuation and catalysts using our reports."
@@ -323,7 +359,9 @@ export default function AnalystScreen() {
             onPress={run} disabled={running} activeOpacity={0.85}>
             {running
               ? <ActivityIndicator color={t.onAccent} />
-              : <Text style={s.runBtnTxt}>🤖  Analyze</Text>}
+              : <Text style={s.runBtnTxt}>
+                  🤖  Analyze · {ENGINES.find((x) => x.id === engine)?.label || 'Claude'}
+                </Text>}
           </TouchableOpacity>
 
           {!running && !result && (
@@ -542,6 +580,21 @@ function makeStyles(t) {
     brand: { fontSize: fontSize.xl, fontWeight: '800', color: t.textPrimary, letterSpacing: -0.3 },
     brandSub: { fontSize: fontSize.small, color: t.textSecondary, marginTop: 2 },
 
+    engineLabel: {
+      fontSize: 9, fontWeight: '800', letterSpacing: 0.8, color: t.textSecondary,
+      marginBottom: 6,
+    },
+    engineRow: { flexDirection: 'row', gap: 8, marginBottom: spacing.md },
+    engineChip: {
+      flex: 1, borderWidth: 1, borderColor: t.border, borderRadius: radius.md,
+      backgroundColor: t.surface, paddingVertical: 8, paddingHorizontal: 6, alignItems: 'center',
+    },
+    engineChipOn: {
+      borderColor: t.primary, backgroundColor: t.primary,
+    },
+    engineChipTxt: { fontSize: fontSize.small, fontWeight: '800', color: t.textPrimary },
+    engineChipSub: { fontSize: 9, fontWeight: '600', color: t.textSecondary, marginTop: 1 },
+    engineChipTxtOn: { color: t.onAccent || '#0A1628' },
     input: {
       backgroundColor: t.surface, borderWidth: 1, borderColor: t.border,
       borderRadius: radius.md, padding: spacing.md, fontSize: fontSize.body,

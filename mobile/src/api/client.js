@@ -314,10 +314,14 @@ export const api = {
   // Claude runs a tool-use loop over platform data (quotes, saved reports,
   // SEC financials, news, YTD) and answers with cited numbers. GP-only —
   // requires a v2 session (request() piggybacks the v2 token automatically).
-  startAgentic: (question) =>
+  startAgentic: (question, llmProvider = null) =>
     request('/api/research/agentic', {
       method: 'POST',
-      body: JSON.stringify({ question, source: 'analyst' }),
+      body: JSON.stringify({
+        question,
+        source: 'analyst',
+        ...(llmProvider ? { llm_provider: String(llmProvider).toLowerCase() } : {}),
+      }),
     }),
   getAgentic: (jobId) => request(`/api/research/agentic/${encodeURIComponent(jobId)}`),
 

@@ -6342,7 +6342,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui86-20260717-no-kimi-pulse-stale"
+WEB_BUILD_VERSION = "ui87-20260719-agent-engine-pick"
 
 
 @app.get("/api/build")
@@ -21894,19 +21894,27 @@ def _render_strategist_review_pdf(review: dict) -> bytes:
     return _render_dga_memo_pdf(script, "", fund, review.get("generated_at") or date_str)
 
 
-def _agent_route_and_model(mode: str = "agentic") -> tuple[str, str]:
+def _agent_route_and_model(mode: str = "agentic",
+                           provider_override: str | None = None) -> tuple[str, str]:
     """Resolve Settings task route → (provider, model_id) for agentic/strategist.
 
-    Kimi is not offered for agentic/strategist — fall back to Claude.
+    provider_override: optional per-run choice from the desk/mobile cards
+    ('claude' | 'grok' | 'deepseek'). Kimi is not offered — falls back to Claude.
     """
     task = "strategist" if mode == "strategist" else "agentic"
-    try:
-        prov = (analyst.get_task_route(task) or "claude").lower().strip()
-    except Exception:
-        prov = "claude"
-    if prov in ("volume", "kimi"):
-        # Advanced agents no longer route through Kimi
-        prov = "claude"
+    ov = (provider_override or "").lower().strip()
+    if ov in ("volume", "kimi"):
+        ov = ""
+    if ov in ("claude", "grok", "deepseek"):
+        prov = ov
+    else:
+        try:
+            prov = (analyst.get_task_route(task) or "claude").lower().strip()
+        except Exception:
+            prov = "claude"
+        if prov in ("volume", "kimi"):
+            # Advanced agents no longer route through Kimi
+            prov = "claude"
     if prov == "grok":
         return "grok", getattr(analyst, "GROK_MODEL", None) or _AGENTIC_MODEL
     if prov == "deepseek":
@@ -22023,7 +22031,9 @@ def _run_agentic_analysis(job_id: str, question: str,
 
     jr0 = _agentic_jobs.get(job_id) or {}
     mode = jr0.get("mode") or "agentic"
-    provider, model = _agent_route_and_model(mode)
+    # Per-run override from desk/mobile engine chips (falls back to Settings route)
+    _ov = (jr0.get("llm_provider") or jr0.get("provider_override") or "").lower().strip()
+    provider, model = _agent_route_and_model(mode, provider_override=_ov or None)
     max_steps = (
         _STRATEGIST_MAX_STEPS if mode == "strategist" else _AGENTIC_MAX_STEPS
     )
@@ -22296,7 +22306,8 @@ def research_agentic_start(req: Request, background_tasks: BackgroundTasks):
             "markdown": s.get("markdown") or "*demo*",
         }
         return {"ok": True, "job_id": "demo-agentic"}
-    """Kick off an agentic research run. Body: {question: str}.
+    """Kick off an agentic research run.
+    Body: {question: str, source?: str, llm_provider?: 'claude'|'grok'|'deepseek'}.
     Returns {ok, job_id}; poll GET /api/research/agentic/{job_id}."""
     claims = _claims_or_401(req)
     if claims.get("role") not in ("gp", "admin"):
@@ -22313,16 +22324,26 @@ def research_agentic_start(req: Request, background_tasks: BackgroundTasks):
     # source tags where the run came from ('analyst' = main Research card,
     # 'transcript' = transcript-scoped) so each list shows only its own.
     source = ((body or {}).get("source") or "analyst").strip()[:40] or "analyst"
+    # Optional per-run engine (card chips). Empty → Settings → Models route.
+    _lp = ((body or {}).get("llm_provider") or (body or {}).get("provider") or "").lower().strip()
+    if _lp in ("volume", "kimi"):
+        _lp = ""
+    if _lp and _lp not in ("claude", "grok", "deepseek"):
+        return JSONResponse(
+            {"ok": False, "error": "llm_provider must be claude | grok | deepseek"},
+            status_code=422,
+        )
     import uuid as _uuid
     job_id = "AGENTIC_" + _uuid.uuid4().hex[:12]
     _agentic_jobs[job_id] = {"stage": "queued", "status": "running",
                               "label": "Queued…", "started_at": time.time(),
                               "updated_at": time.time(), "question": question,
                               "source": source,
+                              "llm_provider": _lp or None,
                               "steps": 0, "tool_calls": [], "cost_usd": 0.0}
     background_tasks.add_task(_run_agentic_analysis, job_id, question)
     try:
-        _prov, _mdl = _agent_route_and_model("agentic")
+        _prov, _mdl = _agent_route_and_model("agentic", provider_override=_lp or None)
     except Exception:
         _prov, _mdl = "claude", _AGENTIC_MODEL
     print(f"🤖 [agentic] queued {job_id}: {question[:80]!r}  provider={_prov} model={_mdl}",
@@ -22716,6 +22737,14 @@ def research_portfolio_strategist(req: Request, background_tasks: BackgroundTask
     # pull other accounts — it must reason from the book provided above.
     _strat_tools = [t for t in _AGENTIC_TOOLS
                     if t.get("name") not in ("list_portfolios", "get_portfolio_holdings")]
+    _lp = ((body or {}).get("llm_provider") or (body or {}).get("provider") or "").lower().strip()
+    if _lp in ("volume", "kimi"):
+        _lp = ""
+    if _lp and _lp not in ("claude", "grok", "deepseek"):
+        return JSONResponse(
+            {"ok": False, "error": "llm_provider must be claude | grok | deepseek"},
+            status_code=422,
+        )
     import uuid as _uuid
     job_id = "STRAT_" + _uuid.uuid4().hex[:12]
     _agentic_jobs[job_id] = {"stage": "queued", "status": "running",
@@ -22725,10 +22754,11 @@ def research_portfolio_strategist(req: Request, background_tasks: BackgroundTask
                               "mode": "strategist", "positions": positions,
                               "tickers": tickers, "fund_name": fund_name,
                               "fund_id": fund_id,
+                              "llm_provider": _lp or None,
                               "generated_by": claims.get("email") or claims.get("lp_id") or "gp"}
     background_tasks.add_task(_run_agentic_analysis, job_id, question, _STRATEGIST_SYSTEM, _strat_tools)
     try:
-        _prov, _mdl = _agent_route_and_model("strategist")
+        _prov, _mdl = _agent_route_and_model("strategist", provider_override=_lp or None)
     except Exception:
         _prov, _mdl = "claude", _AGENTIC_MODEL
     print(f"🧭 [strategist] queued {job_id}  {len(tickers)} positions  fund={fund_name} "

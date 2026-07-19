@@ -4145,6 +4145,82 @@
   }
   window._loadTranscriptLog = loadTranscriptLog;
 
+  // Shared single-select engine chips (Analyst / Strategist cards).
+  // Same visual language as Analyze multi-chips, but one engine per agent run.
+  function _wireAgentEngineChips(chipsId, storageKey, tagId, defaultProv) {
+    const root = document.getElementById(chipsId);
+    const allowed = ['claude', 'grok', 'deepseek'];
+    const def = allowed.indexOf(defaultProv) >= 0 ? defaultProv : 'claude';
+    function selected() {
+      if (!root) return def;
+      const a = root.querySelector('.hero-llm-chip.active');
+      const v = ((a && a.getAttribute('data-llm')) || '').toLowerCase();
+      return allowed.indexOf(v) >= 0 ? v : def;
+    }
+    if (!root) return selected;
+    if (root.dataset.wired) return selected;
+    root.dataset.wired = '1';
+    function persist(v) {
+      try { localStorage.setItem(storageKey, v); } catch (_) {}
+    }
+    function restore() {
+      let saved = null;
+      try { saved = localStorage.getItem(storageKey); } catch (_) {}
+      // Prefer Settings route if no local pick yet
+      if (!saved || allowed.indexOf(saved) < 0) {
+        try {
+          const routes = (window.DGA_LLM && window.DGA_LLM.routes) || {};
+          const task = storageKey.indexOf('strat') >= 0 ? 'strategist' : 'agentic';
+          const r = (routes[task] || '').toLowerCase();
+          if (allowed.indexOf(r) >= 0) saved = r;
+        } catch (_) {}
+      }
+      if (!saved || allowed.indexOf(saved) < 0) saved = def;
+      root.querySelectorAll('.hero-llm-chip').forEach(function (c) {
+        c.classList.toggle('active', (c.getAttribute('data-llm') || '') === saved);
+      });
+    }
+    function updateTag() {
+      const tag = tagId ? document.getElementById(tagId) : null;
+      if (!tag) return;
+      const p = selected();
+      const cfg = window.DGA_LLM || {};
+      const map = {
+        claude: cfg.claude || cfg.agentic || 'claude-opus-4-8',
+        grok: cfg.grok || 'grok-4.5',
+        deepseek: (cfg.routing && cfg.routing.deepseek_model) || 'deepseek-chat',
+      };
+      tag.textContent = map[p] || p;
+      tag.title = 'Engine for this run · ' + p;
+    }
+    root.querySelectorAll('.hero-llm-chip').forEach(function (chip) {
+      chip.addEventListener('click', function () {
+        const v = (chip.getAttribute('data-llm') || '').toLowerCase();
+        if (allowed.indexOf(v) < 0) return;
+        root.querySelectorAll('.hero-llm-chip').forEach(function (c) {
+          c.classList.toggle('active', c === chip);
+        });
+        persist(v);
+        updateTag();
+      });
+    });
+    restore();
+    updateTag();
+    // Refresh model ids when catalog loads
+    try {
+      const _orig = window.applyLlmCatalog;
+      if (typeof _orig === 'function' && !root.dataset.catalogHook) {
+        root.dataset.catalogHook = '1';
+        window.applyLlmCatalog = function (src) {
+          const r = _orig(src);
+          try { updateTag(); } catch (_) {}
+          return r;
+        };
+      }
+    } catch (_) {}
+    return selected;
+  }
+
   // ── 🤖 AI Analyst (agentic) — kick off a run + poll live progress ──
   (function wireAgentic() {
     const btn = document.getElementById('agentic-run-btn');
@@ -4153,6 +4229,10 @@
     if (!btn || !qEl || !out) return;
     if (btn.dataset.wired) return;
     btn.dataset.wired = '1';
+
+    const agenticEngine = _wireAgentEngineChips(
+      'agentic-llm-chips', 'dga.agentic.engine.v1', 'agentic-engine-tag', 'claude'
+    );
 
     document.querySelectorAll('.agentic-ex').forEach(chip => {
       chip.addEventListener('click', () => { qEl.value = chip.textContent.trim(); qEl.focus(); });
@@ -4562,17 +4642,20 @@
       const question = (qEl.value || '').trim();
       if (question.length < 4) { window.toast('Ask a real question.', {type:'warn'}); return; }
       _lastQuestion = question;
+      const eng = (typeof agenticEngine === 'function' ? agenticEngine() : 'claude') || 'claude';
       const meta = llmDescribe('agentic');
-      btn.disabled = true; btn.textContent = '⏳ ' + (meta.model || 'Claude').slice(0, 18) + '…';
-      llmToast('agentic', 'Starting analyst');
+      const engLabel = eng === 'grok' ? 'Grok' : eng === 'deepseek' ? 'DeepSeek' : 'Claude';
+      btn.disabled = true; btn.textContent = '⏳ ' + engLabel + '…';
+      llmToast('agentic', 'Starting analyst · ' + engLabel);
       out.style.display = 'block';
       out.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:8px 0;">'
-        + 'Starting · <strong>' + meta.model + '</strong> · ' + meta.cost + '</div>';
+        + 'Starting · <strong>' + engLabel + '</strong>'
+        + (meta.cost ? ' · ' + meta.cost : '') + '</div>';
       const t0 = Date.now();
       try {
         const r0 = await window.dgaFetch('/api/research/agentic', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ question }),
+          body: JSON.stringify({ question, llm_provider: eng }),
         });
         const d0 = await r0.json();
         if (!d0.ok) throw new Error(d0.error || 'Failed to start');
@@ -4632,6 +4715,9 @@
     const out = document.getElementById('strat-out');
     if (!btn || !out || btn.dataset.wired) return;
     btn.dataset.wired = '1';
+    const stratEngine = _wireAgentEngineChips(
+      'strat-llm-chips', 'dga.strategist.engine.v1', 'strat-engine-tag', 'claude'
+    );
     const esc = s => (s || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]);
     const TOOL_ICON = { get_quote:'💹', get_sector:'🏷', read_saved_report:'📄',
                         get_recent_news:'📰', list_saved_reports:'📚',
@@ -4881,9 +4967,13 @@
 
     async function start(payload, fundLabel) {
       _stratFund = fundLabel || '';
-      btn.disabled = true; btn.textContent = '⏳ Reviewing…';
+      const eng = (typeof stratEngine === 'function' ? stratEngine() : 'claude') || 'claude';
+      payload = Object.assign({}, payload || {}, { llm_provider: eng });
+      const engLabel = eng === 'grok' ? 'Grok' : eng === 'deepseek' ? 'DeepSeek' : 'Claude';
+      btn.disabled = true; btn.textContent = '⏳ ' + engLabel + '…';
       out.style.display = 'block';
-      out.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:8px 0;">Loading book…</div>';
+      out.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:8px 0;">Loading book · <strong>'
+        + engLabel + '</strong>…</div>';
       const t0 = Date.now();
       try {
         const r0 = await window.dgaFetch('/api/research/portfolio-strategist', {

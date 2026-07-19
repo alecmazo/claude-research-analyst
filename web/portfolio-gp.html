@@ -243,10 +243,18 @@
       </header>
       <div style="padding:14px 16px;">
         <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.55;margin-bottom:10px;">
-          Ask an open-ended research question. The agent (Settings → Models · Agents:
-          Grok 4.5 / Claude 4.8 / DeepSeek) pulls live quotes,
-          saved reports, sector data, and news — then answers
-          with cited numbers. <em>Multi-step; ~$0.05–0.30 depending on depth.</em>
+          Ask an open-ended research question. Pick an engine below (or leave Settings default),
+          then run — pulls live quotes, saved reports, sector data, and news with cited numbers.
+          <em>Multi-step; ~$0.05–0.30 depending on depth and engine.</em>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+          <span style="font-size:8px;color:var(--mid);font-weight:800;letter-spacing:0.8px;">ENGINE:</span>
+          <span id="agentic-llm-chips" style="display:inline-flex;gap:4px;flex-wrap:wrap;" role="group" aria-label="Analyst engine">
+            <button type="button" class="hero-llm-chip active" data-llm="claude" title="Claude Opus 4.8 · tool-use default">Claude</button>
+            <button type="button" class="hero-llm-chip" data-llm="grok" title="Grok 4.5 · strong for live/current markets">Grok</button>
+            <button type="button" class="hero-llm-chip" data-llm="deepseek" title="DeepSeek · cheapest agent path">DeepSeek</button>
+          </span>
+          <span id="agentic-engine-tag" style="font-size:8.5px;font-weight:700;color:var(--mid);background:rgba(0,0,0,0.04);border-radius:4px;padding:1px 6px;">—</span>
         </div>
         <div style="display:flex;gap:8px;align-items:flex-start;">
           <textarea id="agentic-q" rows="2" placeholder="e.g. Compare NVDA and AMD on valuation and recent catalysts — which has more upside from here? Use our saved reports."
@@ -299,10 +307,19 @@ End with the sleeve block at this account's real market value so I can push it t
       </header>
       <div style="padding:14px 16px;">
         <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.55;margin-bottom:10px;">
-          Full investment-committee review of an entire book. Agent engine (Settings) reasons
-          <em>across</em> positions — concentration, correlation, EV, wipeout
-          scenarios — and proposes grounded, advisory adjustments. Then hand off
-          to a Portfolio Roundup podcast or a strategy memo. <em>~$0.30–1.00.</em>
+          Full investment-committee review of an entire book. Pick an engine, then run —
+          reasons <em>across</em> positions (concentration, correlation, EV, wipeout)
+          and proposes grounded adjustments. Hand off to Roundup podcast or strategy memo.
+          <em>~$0.30–1.00 by engine.</em>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+          <span style="font-size:8px;color:var(--mid);font-weight:800;letter-spacing:0.8px;">ENGINE:</span>
+          <span id="strat-llm-chips" style="display:inline-flex;gap:4px;flex-wrap:wrap;" role="group" aria-label="Strategist engine">
+            <button type="button" class="hero-llm-chip active" data-llm="claude" title="Claude Opus 4.8 · best for long multi-section dossiers">Claude</button>
+            <button type="button" class="hero-llm-chip" data-llm="grok" title="Grok 4.5 · faster / cheaper whole-book pass">Grok</button>
+            <button type="button" class="hero-llm-chip" data-llm="deepseek" title="DeepSeek · lowest cost">DeepSeek</button>
+          </span>
+          <span id="strat-engine-tag" style="font-size:8.5px;font-weight:700;color:var(--mid);background:rgba(0,0,0,0.04);border-radius:4px;padding:1px 6px;">—</span>
         </div>
         <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:8px;">
           <div style="display:flex;flex-direction:column;gap:4px;">
