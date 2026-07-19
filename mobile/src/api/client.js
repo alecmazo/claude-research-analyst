@@ -317,9 +317,31 @@ export const api = {
   startAgentic: (question) =>
     request('/api/research/agentic', {
       method: 'POST',
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, source: 'analyst' }),
     }),
   getAgentic: (jobId) => request(`/api/research/agentic/${encodeURIComponent(jobId)}`),
+
+  // Saved AI Analyst runs (persisted server-side after each completed job)
+  listAnalystReviews: (source = 'analyst') =>
+    request(`/api/research/analyst/reviews?source=${encodeURIComponent(source)}`),
+  getAnalystReview: (id) =>
+    request(`/api/research/analyst/reviews/${encodeURIComponent(id)}`),
+  deleteAnalystReview: (id) =>
+    request(`/api/research/analyst/reviews/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // Email a DGA-branded PDF of an analysis (same endpoint as the web desk)
+  emailResearchPdf: ({ title, question, answerHtml, stamp, to, subject } = {}) =>
+    request('/api/research/email-pdf', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: title || 'AI Analyst',
+        question: question || '',
+        answer_html: answerHtml || '',
+        stamp: stamp || '',
+        to: to || '',
+        subject: subject || undefined,
+      }),
+    }),
 
   // ---------- Single-ticker analysis ----------
   // llmProvider: 'grok' (default) | 'claude' | 'kimi' | 'both'
