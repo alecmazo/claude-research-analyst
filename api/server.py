@@ -6342,7 +6342,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui89-20260720-grok-agentic-parity"
+WEB_BUILD_VERSION = "ui90-20260720-pulse-deepseek-label"
 
 
 @app.get("/api/build")
@@ -6393,39 +6393,53 @@ def config_models():
         # VOLUME_PRICING_PER_MTOK so Settings chips match real rates.
         vol = out.get("volume") or {}
         vol_on = bool(vol.get("enabled"))
+        # Price volume chips from the *actual* route majority (DeepSeek when
+        # Settings point desk jobs there) — not the legacy Kimi VOLUME_* alias.
         v_model = vol.get("model") or getattr(analyst, "VOLUME_LLM_MODEL", "kimi-k3")
+        ds_model = vol.get("deepseek_model") or getattr(analyst, "DEEPSEEK_MODEL", "deepseek-chat")
+        km_model = vol.get("kimi_model") or getattr(analyst, "KIMI_MODEL", "kimi-k3")
+        routes = (vol.get("task_routes") or vol.get("routes")
+                  or (out.get("routing") or {}).get("routes") or {})
         est_v = getattr(analyst, "estimate_volume_cost", None)
-        def _vc(inp, outp):
+        def _vc(inp, outp, model=None):
+            mid = model or v_model
             if callable(est_v):
-                return round(float(est_v(v_model, inp, outp)), 4)
+                return round(float(est_v(mid, inp, outp)), 4)
             return None
+        def _vc_job(job, inp, outp):
+            r = (routes.get(job) or "").lower()
+            if r == "deepseek":
+                return _vc(inp, outp, ds_model)
+            if r in ("kimi", "volume"):
+                return _vc(inp, outp, km_model)
+            return _vc(inp, outp, v_model)
         out["est"] = {
             "grok_report":   [round(g_lo, 2), round(g_hi, 2)],
             "claude_report": [round(c_lo, 2), round(c_hi, 2)],
             "both_report":   [round(g_lo + c_lo, 2), round(g_hi + c_hi, 2)],
             "pulse_per_ticker": round(p_est, 3),
             # Daily brief / intel when volume on vs Grok+live
-            "daily_brief_volume": [ _vc(8_000, 3_000), _vc(15_000, 6_000) ],
+            "daily_brief_volume": [ _vc_job("daily_brief", 8_000, 3_000),
+                                    _vc_job("daily_brief", 15_000, 6_000) ],
             "daily_brief_grok":   [round(analyst.estimate_grok_cost(g_model, 8_000, 3_000, 3), 2),
                                    round(analyst.estimate_grok_cost(g_model, 15_000, 6_000, 6), 2)],
-            "intel_volume":       [ _vc(10_000, 4_000), _vc(20_000, 8_000) ],
+            "intel_volume":       [ _vc_job("intelligence", 10_000, 4_000),
+                                    _vc_job("intelligence", 20_000, 8_000) ],
             "intel_grok":         [round(analyst.estimate_grok_cost(g_model, 10_000, 4_000, 4), 2),
                                    round(analyst.estimate_grok_cost(g_model, 20_000, 8_000, 8), 2)],
-            "prioritize_volume":  [ _vc(6_000, 1_500), _vc(12_000, 3_000) ],
+            "prioritize_volume":  [ _vc_job("prioritize", 6_000, 1_500),
+                                    _vc_job("prioritize", 12_000, 3_000) ],
             "prioritize_grok":    [round(analyst.estimate_grok_cost(g_model, 6_000, 1_500, 0), 3),
                                    round(analyst.estimate_grok_cost(g_model, 12_000, 3_000, 0), 2)],
-            # Market pulse / per-ticker scan
-            "pulse_volume":       [ _vc(2_000, 600), _vc(4_000, 1_200) ],
+            # Market pulse / per-ticker scan — priced on market_pulse route model
+            "pulse_volume":       [ _vc_job("market_pulse", 2_000, 600),
+                                    _vc_job("market_pulse", 4_000, 1_200) ],
             # Full Kimi equity report (kimi-k3 rates · $3/$15 MTok)
-            "kimi_report":        [ _vc(30_000, 8_000), _vc(45_000, 16_000) ],
+            "kimi_report":        [ _vc(30_000, 8_000, km_model), _vc(45_000, 16_000, km_model) ],
             # Full DeepSeek report (V4 Flash rates · $0.14/$0.28)
             "deepseek_report":    [
-                round(float(est_v(
-                    getattr(analyst, "DEEPSEEK_MODEL", "deepseek-chat"), 30_000, 8_000)), 4)
-                if callable(est_v) else 0.01,
-                round(float(est_v(
-                    getattr(analyst, "DEEPSEEK_MODEL", "deepseek-chat"), 45_000, 16_000)), 4)
-                if callable(est_v) else 0.05,
+                round(float(est_v(ds_model, 30_000, 8_000)), 4) if callable(est_v) else 0.01,
+                round(float(est_v(ds_model, 45_000, 16_000)), 4) if callable(est_v) else 0.05,
             ],
             "agentic":            [0.05, 0.30],
             "strategist":         [0.30, 1.00],
@@ -6433,6 +6447,11 @@ def config_models():
             "volume_model":       v_model,
             "volume_rates":       (vol.get("rates_usd_per_mtok")
                                    or {"input": None, "output": None}),
+            "market_pulse_model": (
+                ds_model if (routes.get("market_pulse") or "").lower() == "deepseek"
+                else (km_model if (routes.get("market_pulse") or "").lower() in ("kimi", "volume")
+                      else v_model)
+            ),
         }
     except Exception:
         pass    # estimates are optional — UI falls back to its static strings

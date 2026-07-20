@@ -446,6 +446,20 @@ def volume_provider_label(model: str | None = None) -> str:
         return "kimi"
     if deepseek_configured() and not kimi_configured():
         return "deepseek"
+    # Both cheap hosts configured: prefer majority of desk job *routes*
+    # (Settings may point every volume job at DeepSeek while VOLUME_* alias
+    # still names Kimi as the legacy default — never mislabel as kimi-k3).
+    try:
+        routes = get_task_routes()
+        cheap = [routes.get(j) for j in VOLUME_LLM_JOBS]
+        n_ds = sum(1 for r in cheap if r == "deepseek")
+        n_km = sum(1 for r in cheap if r in ("kimi", "volume"))
+        if n_ds > n_km and deepseek_configured():
+            return "deepseek"
+        if n_km > n_ds and kimi_configured():
+            return "kimi"
+    except Exception:
+        pass
     # Prefer model currently on VOLUME_* alias
     base = (VOLUME_LLM_BASE_URL or "").lower()
     if "moonshot" in base or "kimi" in base:
@@ -453,6 +467,23 @@ def volume_provider_label(model: str | None = None) -> str:
     if "deepseek" in base:
         return "deepseek"
     return "volume"
+
+
+def model_for_provider(provider: str | None) -> str:
+    """Resolve the concrete model id for a provider label after a call.
+
+    Never return Kimi's id when the provider was DeepSeek (and vice versa) —
+    that mislabel is what made Market Pulse show ``kimi-k3`` while Settings
+    routed the job to DeepSeek.
+    """
+    p = (provider or "").lower().strip()
+    if p == "deepseek":
+        return DEEPSEEK_MODEL
+    if p in ("kimi", "volume"):
+        return KIMI_MODEL or VOLUME_LLM_MODEL
+    if p == "claude":
+        return CLAUDE_MODEL
+    return GROK_MODEL
 
 
 def volume_rates(model: str | None = None) -> tuple[float, float]:
@@ -506,12 +537,22 @@ def set_volume_llm_jobs(jobs: dict | None) -> dict[str, bool]:
     global _volume_job_runtime, _task_route_runtime
     if not isinstance(jobs, dict):
         return get_volume_llm_jobs()
-    cheap_default = "kimi" if kimi_configured() else "deepseek"
+    # Prefer DeepSeek when both hosts are configured (cheaper); only use Kimi
+    # if DeepSeek is missing. Never clobber an existing explicit kimi/deepseek route.
+    cheap_default = (
+        "deepseek" if deepseek_configured()
+        else ("kimi" if kimi_configured() else "grok")
+    )
     for k, v in jobs.items():
         kid = str(k or "").strip().lower()
         if kid in VOLUME_LLM_JOBS:
             _volume_job_runtime[kid] = bool(v)
-            _task_route_runtime[kid] = cheap_default if bool(v) else "grok"
+            if bool(v):
+                cur = (_task_route_runtime.get(kid) or "").lower()
+                if cur not in ("kimi", "deepseek"):
+                    _task_route_runtime[kid] = cheap_default
+            else:
+                _task_route_runtime[kid] = "grok"
     return get_volume_llm_jobs()
 
 
@@ -775,20 +816,27 @@ def volume_llm_status() -> dict:
     """Snapshot for Settings / config API (no secrets)."""
     master = volume_llm_enabled()
     jobs = get_volume_llm_jobs()
-    prov = volume_provider_label()
     # Use per-task routes (kimi | deepseek | grok) — never force all desk jobs to "kimi"
     full_routes = get_task_routes()
+    # Provider/model shown in Settings & cost chips = majority of desk routes,
+    # not the legacy VOLUME_* alias (which stays Kimi whenever KIMI_API_KEY is set).
+    prov = volume_provider_label()
+    display_model = model_for_provider(prov)
+    display_base = (
+        DEEPSEEK_BASE_URL if prov == "deepseek"
+        else (KIMI_BASE_URL if prov == "kimi" else VOLUME_LLM_BASE_URL)
+    )
     routes = {j: full_routes.get(j) or ("grok" if not volume_llm_enabled_for(j) else prov)
               for j in VOLUME_LLM_JOBS}
     routes.update({k: v for k, v in full_routes.items() if k not in routes})
-    inp_r, out_r = volume_rates(VOLUME_LLM_MODEL)
+    inp_r, out_r = volume_rates(display_model)
     return {
         "configured": volume_llm_configured(),
         "enabled": master,
         "runtime_override": _volume_llm_runtime,
         "env_default": _VOLUME_ENV_DEFAULT or "(auto: on if key present)",
-        "base_url": VOLUME_LLM_BASE_URL,
-        "model": VOLUME_LLM_MODEL,
+        "base_url": display_base,
+        "model": display_model,
         "provider": prov,
         "provider_label": (
             "Kimi K3" if prov == "kimi"
@@ -800,6 +848,8 @@ def volume_llm_status() -> dict:
         "deepseek_configured": deepseek_configured(),
         "kimi_model": KIMI_MODEL,
         "deepseek_model": DEEPSEEK_MODEL,
+        # Legacy alias still available for debugging
+        "volume_alias_model": VOLUME_LLM_MODEL,
         "rates_usd_per_mtok": {"input": inp_r, "output": out_r},
         "jobs": jobs,
         "job_labels": dict(_VOLUME_JOB_LABELS),
@@ -2234,8 +2284,10 @@ def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
         ),
     )
 
+    _route_hint = get_task_route("market_pulse") if use_vol else "grok"
     if verbose:
-        route = f"volume/{VOLUME_LLM_MODEL}" if use_vol else f"grok/{GROK_MODEL}+live"
+        _rm = model_for_provider(_route_hint) if use_vol else GROK_MODEL
+        route = f"{_route_hint}/{_rm}" if use_vol else f"grok/{GROK_MODEL}+live"
         print(f"   📡 Scanning {ticker} via {route} "
               f"(${price}, {sign}{pct_abs:.2f}%)…")
 
@@ -2256,7 +2308,13 @@ def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
                 live_search=False, grok_live_on_fallback=True,
                 usage_capture=_cap,
             )
-            model_used = VOLUME_LLM_MODEL if provider != "grok" else GROK_MODEL
+            # Use the provider actually called — never stamp kimi-k3 when
+            # Settings routed market_pulse → deepseek (VOLUME_LLM_MODEL is
+            # still the Kimi alias when both keys exist).
+            model_used = (
+                (_usage.get("model") if isinstance(_usage.get("model"), str) else None)
+                or model_for_provider(provider)
+            )
         else:
             markdown = call_grok(SCAN_SYSTEM_PROMPT, user_msg, live_search=True,
                                  usage_capture=_cap)
@@ -2610,7 +2668,11 @@ def run_market_intelligence(sector: str = "Tech") -> dict:
         )
 
     use_vol = volume_llm_enabled_for("intelligence")
-    route = f"volume/{VOLUME_LLM_MODEL}" if use_vol else f"grok/{GROK_INTEL_MODEL}+live"
+    _route_p = get_task_route("intelligence") if use_vol else "grok"
+    route = (
+        f"{_route_p}/{model_for_provider(_route_p)}" if use_vol
+        else f"grok/{GROK_INTEL_MODEL}+live"
+    )
     print(f"🧠 Running market intelligence (sector: {sector}) via {route}…")
 
     _usage: dict = {}
@@ -2674,7 +2736,13 @@ def run_market_intelligence(sector: str = "Tech") -> dict:
         "tickers": tickers,
         "error": None,
         "provider": provider,
-        "model": VOLUME_LLM_MODEL if provider != "grok" else GROK_INTEL_MODEL,
+        "model": (
+            (
+                (_usage.get("model") if isinstance(_usage.get("model"), str) else None)
+                or model_for_provider(provider)
+            )
+            if provider != "grok" else GROK_INTEL_MODEL
+        ),
         "cost_usd": _usage.get("cost_usd"),
         "input_tokens": _usage.get("input_tokens"),
         "output_tokens": _usage.get("output_tokens"),
@@ -2844,7 +2912,11 @@ def run_daily_brief(book_tickers: list[str] | None = None,
         )
 
     use_vol = volume_llm_enabled_for("daily_brief")
-    route = f"volume/{VOLUME_LLM_MODEL}" if use_vol else f"grok/{GROK_INTEL_MODEL}+live"
+    _route_p = get_task_route("daily_brief") if use_vol else "grok"
+    route = (
+        f"{_route_p}/{model_for_provider(_route_p)}" if use_vol
+        else f"grok/{GROK_INTEL_MODEL}+live"
+    )
     print(f"📰 Running Daily Brief via {route}…")
 
     _usage: dict = {}
@@ -2902,7 +2974,13 @@ def run_daily_brief(book_tickers: list[str] | None = None,
         "tickers": tickers,
         "error": None,
         "provider": provider,
-        "model": VOLUME_LLM_MODEL if provider != "grok" else GROK_INTEL_MODEL,
+        "model": (
+            (
+                (_usage.get("model") if isinstance(_usage.get("model"), str) else None)
+                or model_for_provider(provider)
+            )
+            if provider != "grok" else GROK_INTEL_MODEL
+        ),
         "cost_usd": _usage.get("cost_usd"),
         "input_tokens": _usage.get("input_tokens"),
         "output_tokens": _usage.get("output_tokens"),
