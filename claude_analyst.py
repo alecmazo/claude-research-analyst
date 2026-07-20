@@ -2230,7 +2230,8 @@ def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
         }
     """
     ticker = ticker.strip().upper()
-    now_iso = datetime.utcnow().isoformat()
+    # Z-suffix so clients parse as UTC (naive ISO → local in JS → negative "ago")
+    now_iso = datetime.utcnow().isoformat() + "Z"
 
     mkt = fetch_market_snapshot(ticker)
     price = mkt.get("price")
@@ -2404,7 +2405,7 @@ def run_portfolio_scan(
             "results": {TICKER: {...}, ...},
         }
     """
-    scanned_at = datetime.utcnow().isoformat()
+    scanned_at = datetime.utcnow().isoformat() + "Z"
     results: dict[str, dict] = {}
     was_cancelled = False
 

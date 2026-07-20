@@ -9682,8 +9682,12 @@
   function _pulseAgeMs(res) {
     const sa = res && (res._scanned_at || res.scanned_at);
     if (!sa) return Infinity;
-    const t = new Date(sa).getTime();
-    return isNaN(t) ? Infinity : (Date.now() - t);
+    // Must use _parseServerDate: scan.pulse stores naive UTC without Z;
+    // new Date(iso) treats that as *local* → negative "ago" (e.g. -416m in PT).
+    const d = (typeof _parseServerDate === 'function') ? _parseServerDate(sa) : new Date(sa);
+    const t = d && !isNaN(d) ? d.getTime() : NaN;
+    if (isNaN(t)) return Infinity;
+    return Math.max(0, Date.now() - t);
   }
   function _pulseIsStale(res) {
     return _pulseAgeMs(res) > _PULSE_STALE_MS;
@@ -9691,10 +9695,19 @@
   function _pulseAgeLabel(res) {
     const ms = _pulseAgeMs(res);
     if (!isFinite(ms)) return 'unknown age';
-    const m = Math.round(ms / 60000);
+    const m = Math.max(0, Math.round(ms / 60000));
     if (m < 60) return m + 'm ago';
     if (m < 60 * 48) return Math.round(m / 60) + 'h ago';
     return Math.round(m / 1440) + 'd ago';
+  }
+  function _pulseHeaderAgeLabel(iso) {
+    if (!iso) return '—';
+    const d = (typeof _parseServerDate === 'function') ? _parseServerDate(iso) : new Date(iso);
+    if (!d || isNaN(d)) return '—';
+    const age = Math.max(0, Math.round((Date.now() - d.getTime()) / 60000));
+    if (age < 60) return '⟳ ' + age + 'm ago';
+    if (age < 60 * 48) return '⟳ ' + Math.round(age / 60) + 'h ago';
+    return '⟳ ' + Math.round(age / 1440) + 'd ago';
   }
 
   /** Kick a single-ticker rescan; merges into _pulseLatest when done. */
@@ -9880,13 +9893,7 @@
     const ts   = document.getElementById(prefix + '-ts');
     if (!rows) return;
     if (ts) {
-      if (_pulseScannedAt) {
-        const age = Math.round((Date.now() - new Date(_pulseScannedAt)) / 60000);
-        ts.textContent = isNaN(age) ? '—'
-          : (age < 60 ? '⟳ ' + age + 'm ago'
-             : age < 60 * 48 ? '⟳ ' + Math.round(age / 60) + 'h ago'
-             : '⟳ ' + Math.round(age / 1440) + 'd ago');
-      } else ts.textContent = '—';
+      ts.textContent = _pulseScannedAt ? _pulseHeaderAgeLabel(_pulseScannedAt) : '—';
     }
     const entries = Object.entries(_pulseLatest || {});
     if (!entries.length) {
@@ -17246,10 +17253,18 @@
         return;
       }
       if (ts) {
-        const age = d.scanned_at
-          ? Math.round((Date.now() - new Date(d.scanned_at)) / 60000)
-          : null;
-        ts.textContent = age != null ? `⟳ ${age}m ago` : '⟳ now';
+        // Naive UTC ISO without Z must use _parseServerDate (not new Date)
+        ts.textContent = d.scanned_at
+          ? (typeof _pulseHeaderAgeLabel === 'function'
+              ? _pulseHeaderAgeLabel(d.scanned_at)
+              : (function () {
+                  const d0 = (typeof _parseServerDate === 'function')
+                    ? _parseServerDate(d.scanned_at) : new Date(d.scanned_at);
+                  if (!d0 || isNaN(d0)) return '⟳ now';
+                  const age = Math.max(0, Math.round((Date.now() - d0.getTime()) / 60000));
+                  return '⟳ ' + age + 'm ago';
+                })())
+          : '⟳ now';
       }
       const entries = Object.entries(d.results);
       el.innerHTML = entries.map(([tk, res]) => {

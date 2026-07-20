@@ -6342,7 +6342,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui90-20260720-pulse-deepseek-label"
+WEB_BUILD_VERSION = "ui91-20260720-pulse-age-utc"
 
 
 @app.get("/api/build")
@@ -11017,9 +11017,11 @@ def _run_scan(job_id: str, tickers: list[str]) -> None:
         # Stream each result immediately into scan.pulse so Market Pulse
         # updates ticker-by-ticker without waiting for the full scan to finish.
         try:
-            scanned_at = datetime.utcnow().isoformat()
+            # Always Z-suffix UTC so browsers don't parse as local (was -416m ago)
+            scanned_at = datetime.utcnow().isoformat() + "Z"
             pulse = _kv_get("scan.pulse") or {}
-            pulse[ticker] = dict(result, _scanned_at=scanned_at)
+            pulse[ticker] = dict(result, _scanned_at=scanned_at,
+                                 scanned_at=result.get("scanned_at") or scanned_at)
             _kv_put("scan.pulse", pulse)
         except Exception as _pe:
             print(f"[scan] streaming kv persist failed for {ticker}: {_pe}")
@@ -11047,8 +11049,18 @@ def _run_scan(job_id: str, tickers: list[str]) -> None:
         try:
             existing = _kv_get("scan.pulse") or {}
             merged = dict(existing)
+            fin_at = final.get("scanned_at") or (datetime.utcnow().isoformat() + "Z")
+            if isinstance(fin_at, str) and not (
+                fin_at.endswith("Z") or "+" in fin_at[10:] or fin_at.endswith("00:00")
+            ):
+                fin_at = fin_at + "Z"
             for tk, res in final["results"].items():
-                merged[tk] = dict(res, _scanned_at=final["scanned_at"])
+                r_at = (res or {}).get("scanned_at") or fin_at
+                if isinstance(r_at, str) and not (
+                    r_at.endswith("Z") or "+" in r_at[10:]
+                ):
+                    r_at = r_at + "Z"
+                merged[tk] = dict(res, _scanned_at=r_at, scanned_at=r_at)
             _kv_put("scan.pulse", merged)
         except Exception as _ke:
             print(f"[scan] kv persist failed (non-fatal): {_ke}")
@@ -11156,13 +11168,32 @@ def get_latest_scan(request: Request = None):
     # Primary: kv_store merged pulse
     pulse = _kv_get("scan.pulse")
     if pulse and isinstance(pulse, dict):
-        # Find newest individual scan timestamp for display
-        timestamps = [v.get("_scanned_at") for v in pulse.values() if isinstance(v, dict) and v.get("_scanned_at")]
+        def _utc_z(s: str | None) -> str | None:
+            if not s or not isinstance(s, str):
+                return s
+            t = s.strip()
+            if t.endswith("Z") or "+" in t[10:] or t.endswith("00:00"):
+                return t if not t.endswith("+00:00") else t[:-6] + "Z"
+            # Naive ISO from utcnow() — treat as UTC
+            if len(t) >= 19 and t[4] == "-" and (t[10] in " T"):
+                return t.replace(" ", "T") + ("Z" if not t.endswith("Z") else "")
+            return t
+
+        # Normalize stamps so older rows without Z don't show as "future" in UI
+        fixed: dict = {}
+        for tk, v in pulse.items():
+            if isinstance(v, dict):
+                sa = _utc_z(v.get("_scanned_at") or v.get("scanned_at"))
+                fixed[tk] = dict(v, _scanned_at=sa, scanned_at=v.get("scanned_at") and _utc_z(v.get("scanned_at")) or sa)
+            else:
+                fixed[tk] = v
+        timestamps = [v.get("_scanned_at") for v in fixed.values()
+                      if isinstance(v, dict) and v.get("_scanned_at")]
         scanned_at = max(timestamps) if timestamps else None
         return {
             "exists": True,
             "scanned_at": scanned_at,
-            "results": pulse,
+            "results": fixed,
         }
     # Fallback: legacy disk file
     path = analyst.SCAN_RESULTS_FILE
