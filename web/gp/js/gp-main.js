@@ -4660,14 +4660,12 @@
         const d0 = await r0.json();
         if (!d0.ok) throw new Error(d0.error || 'Failed to start');
         const jobId = d0.job_id;
-        // 10-min safety cap (was 3 min). Heavy runs — two portfolios + live
-        // option scans — legitimately exceed 3 min, and the backend has NO
-        // wall-clock cap (it runs to a real answer or its 12-step limit), so a
-        // short client cap just hid finished work. We poll until the job reaches
-        // a terminal state; the cap only guards against a dead backend, and even
-        // then we do a FINAL status check so a just-finished result isn't lost.
+        // Poll until terminal. Soft warn at 8 min; hard stop at 15 min with a
+        // final status fetch (Grok used to look "stalled" at the old 10‑min cut).
+        let _softWarned = false;
         pollTimer = setInterval(async () => {
-          if (Date.now() - t0 > 600000) {   // 10-min safety cap
+          const elapsed = Date.now() - t0;
+          if (elapsed > 900000) {   // 15-min hard cap
             try {
               const rf = await window.dgaFetch('/api/research/agentic/' + encodeURIComponent(jobId));
               const df = await rf.json();
@@ -4675,9 +4673,14 @@
                 stopPoll(); renderResult(df.result);
                 btn.disabled = false; btn.textContent = '🤖 Analyze'; return;
               }
-            } catch (_) { /* fall through to the timeout notice */ }
+              if (df.status === 'error') {
+                stopPoll();
+                out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + esc(df.label || df.error || 'failed') + '</div>';
+                btn.disabled = false; btn.textContent = '🤖 Analyze'; return;
+              }
+            } catch (_) { /* fall through */ }
             stopPoll();
-            out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ Still running after 10 min — this is an unusually heavy request. It may finish in the background; re-open the analyst shortly, or split it into smaller questions.</div>';
+            out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ Still running after 15 min. Check Saved analyses below — the server may have finished after this tab stopped polling. Prefer Claude for long multi-account questions, or split the ask.</div>';
             btn.disabled = false; btn.textContent = '🤖 Analyze'; return;
           }
           try {
@@ -4691,7 +4694,17 @@
               out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + esc(d.label || d.error || 'failed') + '</div>';
               btn.disabled = false; btn.textContent = '🤖 Analyze';
             } else {
-              renderProgress(d, Date.now() - t0);
+              renderProgress(d, elapsed);
+              if (!_softWarned && elapsed > 480000) {
+                _softWarned = true;
+                // Keep polling — just surface that heavy Grok runs can take a few more minutes
+                try {
+                  window.toast && window.toast(
+                    'Still working (' + Math.round(elapsed / 60000) + 'm) — server will force a write-up if needed',
+                    { type: 'info', ttl: 5000 }
+                  );
+                } catch (_) {}
+              }
             }
           } catch (_) { /* transient */ }
         }, 1500);

@@ -6342,7 +6342,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui87-20260719-agent-engine-pick"
+WEB_BUILD_VERSION = "ui88-20260720-agentic-grok-stall"
 
 
 @app.get("/api/build")
@@ -21939,19 +21939,37 @@ def _agentic_tools_openai(tools: list) -> list:
 
 
 def _agentic_openai_client(provider: str):
-    """OpenAI-compatible client for grok | kimi | deepseek."""
+    """OpenAI-compatible client for grok | kimi | deepseek.
+
+    Per-request timeout (120s) — without it a hung xAI/Moonshot call can pin
+    the agentic worker until the browser's 10‑min poll cap, looking 'stalled'.
+    """
     from openai import OpenAI
     p = (provider or "").lower()
+    # httpx timeout via openai SDK: float = connect+read budget for the call
+    _to = 120.0
     if p == "grok":
-        return OpenAI(api_key=analyst.get_grok_api_key(), base_url="https://api.x.ai/v1")
+        return OpenAI(
+            api_key=analyst.get_grok_api_key(),
+            base_url="https://api.x.ai/v1",
+            timeout=_to,
+        )
     if p == "kimi":
         if not getattr(analyst, "kimi_configured", lambda: False)():
             raise RuntimeError("Kimi K3 not configured (KIMI_API_KEY)")
-        return OpenAI(api_key=analyst.KIMI_API_KEY, base_url=analyst.KIMI_BASE_URL)
+        return OpenAI(
+            api_key=analyst.KIMI_API_KEY,
+            base_url=analyst.KIMI_BASE_URL,
+            timeout=_to,
+        )
     if p == "deepseek":
         if not getattr(analyst, "deepseek_configured", lambda: False)():
             raise RuntimeError("DeepSeek not configured (DEEPSEEK_API_KEY)")
-        return OpenAI(api_key=analyst.DEEPSEEK_API_KEY, base_url=analyst.DEEPSEEK_BASE_URL)
+        return OpenAI(
+            api_key=analyst.DEEPSEEK_API_KEY,
+            base_url=analyst.DEEPSEEK_BASE_URL,
+            timeout=_to,
+        )
     raise RuntimeError(f"No OpenAI client for provider {provider!r}")
 
 
@@ -22163,8 +22181,20 @@ def _run_agentic_analysis(job_id: str, question: str,
             {"role": "system", "content": system},
             {"role": "user", "content": question},
         ]
+        # Wall-clock budget so Grok can't tool-loop past the UI 10-min cap.
+        # Strategist gets a bit more; plain analyst must finish sooner.
+        _wall_s = 480.0 if mode == "strategist" else 360.0  # 8 min / 6 min
+        _loop_t0 = time.time()
         for step in range(max_steps):
+            _elapsed = time.time() - _loop_t0
+            # Force write-up when near wall or on last step (need some tool evidence)
             last_round = step >= max_steps - 1
+            if (not last_round) and tool_log and _elapsed >= (_wall_s * 0.75):
+                last_round = True
+                _set(stage="thinking",
+                     label=f"{provider} · wrapping up (time budget)…",
+                     steps=step, tool_calls=tool_log[:], cost_usd=round(total_cost, 4),
+                     provider=provider, model=model)
             _set(stage="thinking",
                  label=f"{provider} · reasoning (step {step+1}/{max_steps})…",
                  steps=step, tool_calls=tool_log[:], cost_usd=round(total_cost, 4),
@@ -22200,6 +22230,37 @@ def _run_agentic_analysis(job_id: str, question: str,
                     create_kw.pop("tool_choice", None)
                     create_kw.pop("tools", None)
                     resp = oai.chat.completions.create(**create_kw)
+                elif tool_log and (
+                    "timeout" in str(_oe).lower()
+                    or "timed out" in str(_oe).lower()
+                    or "DeadlineExceeded" in str(_oe)
+                ):
+                    # Hung mid-loop: synthesize from whatever tools already ran
+                    print(f"⚠️ [agentic {provider}] call timeout at step {step+1}; "
+                          f"forcing write-up ({len(tool_log)} tools)", flush=True)
+                    try:
+                        synth = oai.chat.completions.create(
+                            model=model, temperature=_oai_temp, max_tokens=8000,
+                            messages=messages + [{
+                                "role": "user",
+                                "content": (
+                                    "The previous model call timed out. Using ONLY the "
+                                    "tool results already above, write the complete final "
+                                    "answer now. No more tools."
+                                ),
+                            }],
+                        )
+                        final = (
+                            (synth.choices[0].message.content or "").strip()
+                            if synth.choices else ""
+                        )
+                        _finish(final or "(Timed out gathering more evidence — partial answer.)",
+                                step + 1, oai, forced=True)
+                        return
+                    except Exception as _se:
+                        raise RuntimeError(
+                            f"{provider} timed out and recovery failed: {_se!s:.160}"
+                        ) from _oe
                 else:
                     raise
             try:
@@ -22286,6 +22347,29 @@ def _run_agentic_analysis(job_id: str, question: str,
                     "content": out if isinstance(out, str) else json.dumps(out, default=str),
                 })
 
+        # Exhausted steps without a write-up — try one last forced answer
+        if tool_log:
+            try:
+                synth = oai.chat.completions.create(
+                    model=model,
+                    temperature=1.0 if provider in ("kimi", "volume") else 0.3,
+                    max_tokens=8000,
+                    messages=messages + [{
+                        "role": "user",
+                        "content": (
+                            "You hit the tool-step limit. Write the COMPLETE final "
+                            "answer now from tool results already above. No tools."
+                        ),
+                    }],
+                )
+                final = (
+                    (synth.choices[0].message.content or "").strip()
+                    if synth.choices else ""
+                )
+                _finish(final, max_steps, oai, forced=True)
+                return
+            except Exception as _fe:
+                print(f"⚠️ [agentic step-limit synth] {_fe!s:.200}", flush=True)
         _set(stage="error", status="error",
              label=f"❌ Reached {max_steps}-step limit without finishing",
              error="step_limit", cost_usd=round(total_cost, 4))

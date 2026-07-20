@@ -348,16 +348,20 @@ export const api = {
     }),
 
   // ---------- Single-ticker analysis ----------
-  // llmProvider: 'grok' (default) | 'claude' | 'kimi' | 'both'
-  startAnalysis: (ticker, generateGamma = false, llmProvider = 'grok') =>
-    request('/api/analyze', {
+  // llmProvider: 'grok' (default) | 'claude' | 'deepseek' | 'both'
+  // Kimi is not accepted for full equity reports (server 422s).
+  startAnalysis: (ticker, generateGamma = false, llmProvider = 'grok') => {
+    let p = String(llmProvider || 'grok').toLowerCase().trim();
+    if (p === 'kimi' || p === 'volume') p = 'deepseek';
+    return request('/api/analyze', {
       method: 'POST',
       body: JSON.stringify({
         ticker,
         generate_gamma: generateGamma,
-        llm_provider:   llmProvider,
+        llm_provider:   p,
       }),
-    }),
+    });
+  },
 
   getJobStatus: (jobId) => request(`/api/jobs/${jobId}`),
   cancelJob:    (jobId) => request('/api/jobs/' + encodeURIComponent(jobId) + '/cancel', { method: 'POST' }),

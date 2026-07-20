@@ -146,8 +146,12 @@ export default function HomeScreen({ navigation, route }) {
     haptics.onPressPrimary();
     setLoading(true);
     setRunningTicker(t);
-    // Multi-select engines: comma-separated (e.g. "grok,claude,kimi")
-    const engines = String(llmProvider || 'grok').split(',').map(s => s.trim()).filter(Boolean);
+    // Multi-select engines: comma-separated (e.g. "grok,claude,deepseek")
+    // Kimi is not offered for full equity reports (desktop parity).
+    const engines = String(llmProvider || 'grok')
+      .split(',')
+      .map(s => s.trim().toLowerCase())
+      .filter(s => s && s !== 'kimi' && ['grok', 'claude', 'deepseek'].includes(s));
     const list = engines.length ? engines : ['grok'];
     try {
       // First engine navigates to progress; remaining run in background sequentially
@@ -556,11 +560,14 @@ export default function HomeScreen({ navigation, route }) {
                   {[
                     { v: 'grok',     label: 'Grok' },
                     { v: 'claude',   label: 'Claude' },
-                    { v: 'kimi',     label: 'Kimi' },
                     { v: 'deepseek', label: 'DeepSeek' },
                   ].map(opt => {
                     // Multi-select: llmProvider may be comma-separated list
-                    const selected = String(llmProvider || 'grok').split(',').filter(Boolean);
+                    // (kimi stripped — not available for full reports)
+                    const selected = String(llmProvider || 'grok')
+                      .split(',')
+                      .map(s => s.trim())
+                      .filter(s => s && s !== 'kimi');
                     const on = selected.indexOf(opt.v) >= 0;
                     return (
                     <TouchableOpacity
@@ -579,7 +586,6 @@ export default function HomeScreen({ navigation, route }) {
                         s.llmPickerOpt,
                         on && (
                           opt.v === 'claude' ? s.llmPickerOptActiveClaude :
-                          opt.v === 'kimi'   ? s.llmPickerOptActiveKimi   :
                           opt.v === 'deepseek' ? s.llmPickerOptActiveBoth :
                                                 s.llmPickerOptActiveGrok
                         ),
