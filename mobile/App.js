@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { View, ActivityIndicator } from 'react-native';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { View, ActivityIndicator, AppState } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -110,17 +110,32 @@ function LPTabs({ onLogout, isDemo, onSwitchToAdmin }) {
   );
 }
 
-// ── Auto-OTA on cold launch ─────────────────────────────────────────────────
-async function checkForOtaUpdate() {
+// ── Auto-OTA: cold launch + return-to-foreground ────────────────────────────
+// LPs stay on TestFlight binaries; JS UI ships via the production channel.
+// Without a foreground re-check they can sit on a stale bundle for days.
+let _otaInFlight = false;
+let _otaLastCheckMs = 0;
+const OTA_MIN_INTERVAL_MS = 60_000; // don't hammer Expo on every blur/focus
+
+async function checkForOtaUpdate(reason = 'launch') {
   try {
     if (__DEV__) return;
+    if (!Updates.isEnabled) return;
+    if (_otaInFlight) return;
+    const now = Date.now();
+    if (now - _otaLastCheckMs < OTA_MIN_INTERVAL_MS) return;
+    _otaInFlight = true;
+    _otaLastCheckMs = now;
     const result = await Updates.checkForUpdateAsync();
     if (result.isAvailable) {
+      console.log('[OTA] update available (' + reason + ') — fetching…');
       await Updates.fetchUpdateAsync();
       await Updates.reloadAsync();
     }
   } catch (e) {
     console.log('[OTA] update check skipped:', e?.message || e);
+  } finally {
+    _otaInFlight = false;
   }
 }
 
@@ -130,6 +145,7 @@ export default function App() {
   const [authState, setAuthState] = useState(null);
   // Demo admin can toggle between GP admin view and LP investor view
   const [lpMode, setLpMode] = useState(false);
+  const appStateRef = useRef(AppState.currentState);
 
   // Reconcile auth on launch + whenever someone logs in/out
   const refreshAuth = useCallback(async () => {
@@ -154,9 +170,22 @@ export default function App() {
   }, [refreshAuth]);
 
   useEffect(() => {
-    checkForOtaUpdate();
+    checkForOtaUpdate('cold-start');
     bootstrap();
   }, [bootstrap]);
+
+  // When an LP re-opens the app from background, pull the latest OTA so they
+  // don't stay on a 2-day-old production bundle.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      const prev = appStateRef.current;
+      appStateRef.current = next;
+      if (prev.match(/inactive|background/) && next === 'active') {
+        checkForOtaUpdate('foreground');
+      }
+    });
+    return () => sub.remove();
+  }, []);
 
   const handleLoggedIn = useCallback((user) => {
     setLpMode(false);   // always start in admin view after fresh login
