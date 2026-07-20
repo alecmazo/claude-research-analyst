@@ -6342,7 +6342,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui88-20260720-agentic-grok-stall"
+WEB_BUILD_VERSION = "ui89-20260720-grok-agentic-parity"
 
 
 @app.get("/api/build")
@@ -21946,8 +21946,9 @@ def _agentic_openai_client(provider: str):
     """
     from openai import OpenAI
     p = (provider or "").lower()
-    # httpx timeout via openai SDK: float = connect+read budget for the call
-    _to = 120.0
+    # httpx timeout via openai SDK: float = connect+read budget for the call.
+    # Grok final write-ups can be long (12k tokens) — 180s; others 120s.
+    _to = 180.0 if p == "grok" else 120.0
     if p == "grok":
         return OpenAI(
             api_key=analyst.get_grok_api_key(),
@@ -22029,16 +22030,78 @@ def _agentic_verify_any(provider: str, client, model: str, question: str,
         return {"ok": None, "verdict": "unchecked", "flags": []}
 
 
+def _agentic_non_claude_system_addon(mode: str, max_steps: int, model: str) -> str:
+    """Extra system instructions for Grok/DeepSeek/Kimi — same tools & discipline
+    as Claude, but coached to batch tools and write a full native-quality answer.
+
+    Without this, Grok often burns 1 tool/round and hits wall-clock with a thin
+    forced wrap-up instead of a competitive Grok 4.5 conclusion.
+    """
+    eng = "Grok 4.5" if "grok" in (model or "").lower() else "this engine"
+    if mode == "strategist":
+        return (
+            f"\n\nENGINE: {eng} with the IDENTICAL tool set and evidence rules as Claude. "
+            f"You have at most {max_steps} tool rounds.\n"
+            "• Batch aggressively: multi-ticker get_quote, parallel tool_calls in ONE step "
+            "(read several saved reports / financials / news together).\n"
+            "• Do not re-read every report if 4–6 key names already ground the story.\n"
+            "• When evidence is enough, STOP tools and write the FULL 6-section IC dossier "
+            f"in one reply — a decisive {eng} investment-committee conclusion with cited numbers, "
+            "not a stub or 'timed out' note.\n"
+            "• Never invent prices/multiples/returns — only tool evidence."
+        )
+    return (
+        f"\n\nENGINE: {eng} with the IDENTICAL tool set, tool discipline, and evidence "
+        f"standards as Claude Opus on this desk. You have at most {max_steps} tool rounds.\n"
+        "• Call MULTIPLE tools in parallel in a single step whenever possible "
+        "(e.g. get_quote for several tickers + read_saved_report + get_financials together).\n"
+        "• Prefer batch get_quote('A,B,C') over one ticker per round.\n"
+        "• Gather what you need in the first few rounds, then write a COMPLETE final answer: "
+        "lead with your conclusion, then evidence with specific numbers from tools.\n"
+        f"• Your answer must be a full {eng} senior-analyst write-up — competitive in depth "
+        "to Claude on this desk — not a partial wrap-up or timeout apology.\n"
+        "• When recommending a target allocation, still include the ```sleeve JSON block.\n"
+        "• Never invent prices, multiples, ratings, sectors, or returns."
+    )
+
+
+def _agentic_final_write_prompt(mode: str, model: str, *, reason: str = "budget") -> str:
+    """High-quality no-tools final prompt — Grok must still produce its own full conclusion."""
+    eng = "Grok 4.5" if "grok" in (model or "").lower() else "your model"
+    why = {
+        "budget": "You have used (or nearly used) your tool budget.",
+        "timeout": "A model call timed out mid-loop; do not wait for more tools.",
+        "step_limit": "You hit the step limit.",
+        "wall": "Wall-clock is nearly up; finish from evidence already gathered.",
+    }.get(reason, "Finish now.")
+    if mode == "strategist":
+        return (
+            f"{why} Using ONLY tool results already above, write the COMPLETE "
+            f"investment-committee dossier as {eng}: all required sections, specific "
+            "numbers from tools, decisive recommendations. No more tools. "
+            "Do not mention timeouts, budgets, or incomplete work."
+        )
+    return (
+        f"{why} Using ONLY tool results already above, write a COMPLETE final research "
+        f"answer as {eng} (DGA Capital senior analyst): lead with the conclusion, then "
+        "evidence with cited tool numbers (prices, margins, YTD, holdings). Match the "
+        "depth expected of Claude on this desk, but the judgment and phrasing are yours. "
+        "If a target allocation is warranted, include the ```sleeve JSON block. "
+        "No more tools. Do not mention timeouts, budgets, or incomplete work."
+    )
+
+
 def _run_agentic_analysis(job_id: str, question: str,
                            system_override: str | None = None,
                            tools: list | None = None) -> None:
     """Background worker: tool-use loop (Claude or OpenAI-compat engines).
 
-    Provider comes from Settings → Models task route (agentic | strategist):
-    claude · grok · kimi (Kimi K3) · deepseek.
+    Provider comes from Settings → Models task route (agentic | strategist) or
+    per-run card override: claude · grok · deepseek.
 
-    On step-limit exhaustion we force one final no-tools synthesis pass so
-    Grok/Kimi/DeepSeek strategist runs don't hard-fail after tooling (SUP_d754f5b2).
+    Grok/DeepSeek use the SAME tool schemas and default system prompt as Claude;
+    they get an engine-specific batching/quality appendix so they finish with a
+    full native conclusion (not a thin forced stub).
     """
     import anthropic as _anthropic
     _tools = tools if tools is not None else _AGENTIC_TOOLS
@@ -22060,16 +22123,9 @@ def _run_agentic_analysis(job_id: str, question: str,
          provider=provider, model=model, max_steps=max_steps)
     try:
         system = system_override or _AGENTIC_SYSTEM_DEFAULT
-        # Nudge multi-engine hosts to batch tools — they burn rounds faster than Claude.
-        if mode == "strategist" and provider != "claude":
-            system = (
-                system
-                + f"\n\nSTEP BUDGET: you have at most {max_steps} tool rounds. "
-                "Batch aggressively (multi-ticker get_quote, parallel tools). "
-                "After you have enough evidence, STOP calling tools and write the "
-                "full 6-section dossier in one reply. Do not re-read every report "
-                "if 4–6 key names already ground the concentration/EV story."
-            )
+        # Same tools for every host; non-Claude gets batching + full-answer coaching
+        if provider != "claude":
+            system = system + _agentic_non_claude_system_addon(mode, max_steps, model or "")
         total_cost = 0.0
         tool_log: list[dict] = []
 
@@ -22079,18 +22135,18 @@ def _run_agentic_analysis(job_id: str, question: str,
             final = (final or "").strip()
             if not final:
                 final = (
-                    "(Model hit the tool-step budget without writing a dossier. "
-                    f"Tools run: {len(tool_log)}. Re-run or switch engine in Settings.)"
+                    f"(No written answer after {len(tool_log)} tool call(s). "
+                    "Re-run or try Claude for this question.)"
                 )
             _set(stage="verifying",
                  label=("🔍 Verifying claims…"
-                        + (" (synthesized after step budget)" if forced else "")),
+                        + (" (final write-up pass)" if forced else "")),
                  steps=steps_done, tool_calls=tool_log[:],
                  cost_usd=round(total_cost, 4))
             verification = _agentic_verify_any(
                 provider, client_for_verify, model, question, final, tool_log)
             done_label = (
-                "✓ Analysis complete (synthesized after step budget)"
+                "✓ Analysis complete (final write-up after tool budget)"
                 if forced else "✓ Analysis complete"
             )
             _set(stage="done", status="done", label=done_label,
@@ -22175,49 +22231,58 @@ def _run_agentic_analysis(job_id: str, question: str,
             return
 
         # ── OpenAI-compat tool loop (Grok / Kimi K3 / DeepSeek) ────────
+        # Same tool schemas as Claude (converted). Goal: full native conclusion,
+        # not a thin forced stub. Per-call timeout still guards hangs; wall clock
+        # only kicks in late so Grok has room to match Claude-depth research.
         oai = _agentic_openai_client(provider)
         oai_tools = _agentic_tools_openai(_tools)
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": question},
         ]
-        # Wall-clock budget so Grok can't tool-loop past the UI 10-min cap.
-        # Strategist gets a bit more; plain analyst must finish sooner.
-        _wall_s = 480.0 if mode == "strategist" else 360.0  # 8 min / 6 min
+        # Generous wall so Grok can complete competitively; force only near end.
+        # Strategist: 12 min · Analyst: 10 min. Soft force at 90% elapsed.
+        _wall_s = 720.0 if mode == "strategist" else 600.0
         _loop_t0 = time.time()
+        _oai_temp = 1.0 if provider in ("kimi", "volume") else 0.3
+        _max_out = 12000 if provider == "grok" else 8000
+
+        def _oai_final_write(msgs, reason: str):
+            """One no-tools completion with quality final prompt."""
+            return oai.chat.completions.create(
+                model=model, temperature=_oai_temp, max_tokens=_max_out,
+                messages=msgs + [{
+                    "role": "user",
+                    "content": _agentic_final_write_prompt(mode, model or "", reason=reason),
+                }],
+            )
+
         for step in range(max_steps):
             _elapsed = time.time() - _loop_t0
-            # Force write-up when near wall or on last step (need some tool evidence)
             last_round = step >= max_steps - 1
-            if (not last_round) and tool_log and _elapsed >= (_wall_s * 0.75):
+            # Only force late — give Grok room to gather evidence like Claude
+            if (not last_round) and tool_log and _elapsed >= (_wall_s * 0.90):
                 last_round = True
-                _set(stage="thinking",
-                     label=f"{provider} · wrapping up (time budget)…",
-                     steps=step, tool_calls=tool_log[:], cost_usd=round(total_cost, 4),
-                     provider=provider, model=model)
             _set(stage="thinking",
-                 label=f"{provider} · reasoning (step {step+1}/{max_steps})…",
+                 label=(
+                     f"{provider} · final write-up ({model})…"
+                     if last_round and tool_log
+                     else f"{provider} · reasoning (step {step+1}/{max_steps})…"
+                 ),
                  steps=step, tool_calls=tool_log[:], cost_usd=round(total_cost, 4),
                  provider=provider, model=model)
-            # Kimi K3 only allows temperature=1 (Moonshot API 400 otherwise)
-            _oai_temp = 1.0 if provider in ("kimi", "volume") else 0.3
             create_kw = dict(
                 model=model, messages=messages,
-                temperature=_oai_temp, max_tokens=8000,
+                temperature=_oai_temp, max_tokens=_max_out,
             )
             if last_round and tool_log:
-                # Force written dossier — no more tools (fixes Grok step-limit fail)
-                messages_force = messages + [{
+                create_kw["messages"] = messages + [{
                     "role": "user",
-                    "content": (
-                        "STOP calling tools. Using only the tool results already "
-                        "above, write the COMPLETE investment-committee dossier now "
-                        "(all required sections). Be specific with numbers you "
-                        "already gathered."
+                    "content": _agentic_final_write_prompt(
+                        mode, model or "",
+                        reason="wall" if _elapsed >= (_wall_s * 0.90) else "budget",
                     ),
                 }]
-                create_kw["messages"] = messages_force
-                # Omit tools / tool_choice none for hosts that require it
                 create_kw["tool_choice"] = "none"
             else:
                 create_kw["tools"] = oai_tools
@@ -22225,7 +22290,6 @@ def _run_agentic_analysis(job_id: str, question: str,
             try:
                 resp = oai.chat.completions.create(**create_kw)
             except Exception as _oe:
-                # Some hosts reject tool_choice="none" — retry bare
                 if last_round and "tool" in str(_oe).lower():
                     create_kw.pop("tool_choice", None)
                     create_kw.pop("tools", None)
@@ -22235,27 +22299,24 @@ def _run_agentic_analysis(job_id: str, question: str,
                     or "timed out" in str(_oe).lower()
                     or "DeadlineExceeded" in str(_oe)
                 ):
-                    # Hung mid-loop: synthesize from whatever tools already ran
                     print(f"⚠️ [agentic {provider}] call timeout at step {step+1}; "
-                          f"forcing write-up ({len(tool_log)} tools)", flush=True)
+                          f"full final write-up ({len(tool_log)} tools)", flush=True)
                     try:
-                        synth = oai.chat.completions.create(
-                            model=model, temperature=_oai_temp, max_tokens=8000,
-                            messages=messages + [{
-                                "role": "user",
-                                "content": (
-                                    "The previous model call timed out. Using ONLY the "
-                                    "tool results already above, write the complete final "
-                                    "answer now. No more tools."
-                                ),
-                            }],
-                        )
+                        synth = _oai_final_write(messages, "timeout")
                         final = (
                             (synth.choices[0].message.content or "").strip()
                             if synth.choices else ""
                         )
-                        _finish(final or "(Timed out gathering more evidence — partial answer.)",
-                                step + 1, oai, forced=True)
+                        try:
+                            u2 = synth.usage
+                            total_cost += _agentic_estimate_cost(
+                                provider, model,
+                                int(getattr(u2, "prompt_tokens", 0) or 0),
+                                int(getattr(u2, "completion_tokens", 0) or 0),
+                            )
+                        except Exception:
+                            pass
+                        _finish(final, step + 1, oai, forced=True)
                         return
                     except Exception as _se:
                         raise RuntimeError(
@@ -22279,19 +22340,9 @@ def _run_agentic_analysis(job_id: str, question: str,
             tcalls = getattr(msg, "tool_calls", None) or []
             if not tcalls or last_round:
                 final = (msg.content or "").strip()
-                # If model still tried tools on last round with empty content, synthesize
                 if last_round and not final and tcalls:
                     try:
-                        synth = oai.chat.completions.create(
-                            model=model, temperature=_oai_temp, max_tokens=8000,
-                            messages=messages + [{
-                                "role": "user",
-                                "content": (
-                                    "Write the complete final dossier from tool "
-                                    "results already in the conversation. No tools."
-                                ),
-                            }],
-                        )
+                        synth = _oai_final_write(messages, "budget")
                         final = (
                             (synth.choices[0].message.content or "").strip()
                             if synth.choices else ""
@@ -22327,6 +22378,9 @@ def _run_agentic_analysis(job_id: str, question: str,
                     for tc in tcalls
                 ],
             })
+            # Parallelize independent tools in this step (Claude also returns
+            # multi-tool blocks; sequential I/O was wasting Grok's budget).
+            _parsed_calls = []
             for tc in tcalls:
                 raw_args = tc.function.arguments or "{}"
                 try:
@@ -22335,6 +22389,9 @@ def _run_agentic_analysis(job_id: str, question: str,
                     args = {}
                 if not isinstance(args, dict):
                     args = {}
+                _parsed_calls.append((tc, args))
+            if len(_parsed_calls) == 1:
+                tc, args = _parsed_calls[0]
                 label = f"{tc.function.name}({json.dumps(args, default=str)[:60]})"
                 tool_log.append({"tool": tc.function.name, "input": args})
                 _set(stage="tool", label=f"🔧 {label}",
@@ -22346,26 +22403,58 @@ def _run_agentic_analysis(job_id: str, question: str,
                     "tool_call_id": tc.id,
                     "content": out if isinstance(out, str) else json.dumps(out, default=str),
                 })
+            else:
+                names = [tc.function.name for tc, _ in _parsed_calls]
+                _pending_log = [
+                    {"tool": tc.function.name, "input": args}
+                    for tc, args in _parsed_calls
+                ]
+                _set(stage="tool",
+                     label=f"🔧 {len(_parsed_calls)} tools in parallel: {', '.join(names)[:80]}",
+                     steps=step, tool_calls=tool_log[:] + _pending_log,
+                     cost_usd=round(total_cost, 4))
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                _results = {}
+                with ThreadPoolExecutor(max_workers=min(6, len(_parsed_calls))) as _pool:
+                    _futs = {
+                        _pool.submit(_agentic_exec_tool, tc.function.name, args): tc.id
+                        for tc, args in _parsed_calls
+                    }
+                    for fut in as_completed(_futs):
+                        tid = _futs[fut]
+                        try:
+                            _results[tid] = fut.result()
+                        except Exception as _te:
+                            _results[tid] = f"Tool error: {_te!s:.200}"
+                # Preserve request order in tool_log + message appends
+                for tc, args in _parsed_calls:
+                    tool_log.append({"tool": tc.function.name, "input": args})
+                    out = _results.get(tc.id, "")
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": out if isinstance(out, str) else json.dumps(out, default=str),
+                    })
+                _set(stage="tool", label=f"🔧 parallel tools done ({len(_parsed_calls)})",
+                     steps=step, tool_calls=tool_log[:], cost_usd=round(total_cost, 4))
 
-        # Exhausted steps without a write-up — try one last forced answer
+        # Exhausted steps without a write-up — full quality final pass
         if tool_log:
             try:
-                synth = oai.chat.completions.create(
-                    model=model,
-                    temperature=1.0 if provider in ("kimi", "volume") else 0.3,
-                    max_tokens=8000,
-                    messages=messages + [{
-                        "role": "user",
-                        "content": (
-                            "You hit the tool-step limit. Write the COMPLETE final "
-                            "answer now from tool results already above. No tools."
-                        ),
-                    }],
-                )
+                synth = _oai_final_write(messages, "step_limit")
                 final = (
                     (synth.choices[0].message.content or "").strip()
                     if synth.choices else ""
                 )
+                try:
+                    u2 = synth.usage
+                    total_cost += _agentic_estimate_cost(
+                        provider, model,
+                        int(getattr(u2, "prompt_tokens", 0) or 0),
+                        int(getattr(u2, "completion_tokens", 0) or 0),
+                    )
+                except Exception:
+                    pass
                 _finish(final, max_steps, oai, forced=True)
                 return
             except Exception as _fe:

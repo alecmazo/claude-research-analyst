@@ -4660,12 +4660,12 @@
         const d0 = await r0.json();
         if (!d0.ok) throw new Error(d0.error || 'Failed to start');
         const jobId = d0.job_id;
-        // Poll until terminal. Soft warn at 8 min; hard stop at 15 min with a
-        // final status fetch (Grok used to look "stalled" at the old 10‑min cut).
+        // Poll until terminal. Soft warn at 9 min; hard stop at 14 min.
+        // Server Grok wall is ~10 min analyst / 12 min strategist — give room.
         let _softWarned = false;
         pollTimer = setInterval(async () => {
           const elapsed = Date.now() - t0;
-          if (elapsed > 900000) {   // 15-min hard cap
+          if (elapsed > 840000) {   // 14-min hard cap
             try {
               const rf = await window.dgaFetch('/api/research/agentic/' + encodeURIComponent(jobId));
               const df = await rf.json();
@@ -4695,12 +4695,11 @@
               btn.disabled = false; btn.textContent = '🤖 Analyze';
             } else {
               renderProgress(d, elapsed);
-              if (!_softWarned && elapsed > 480000) {
+              if (!_softWarned && elapsed > 540000) {
                 _softWarned = true;
-                // Keep polling — just surface that heavy Grok runs can take a few more minutes
                 try {
                   window.toast && window.toast(
-                    'Still working (' + Math.round(elapsed / 60000) + 'm) — server will force a write-up if needed',
+                    'Still working (' + Math.round(elapsed / 60000) + 'm) — gathering tools then full write-up',
                     { type: 'info', ttl: 5000 }
                   );
                 } catch (_) {}
