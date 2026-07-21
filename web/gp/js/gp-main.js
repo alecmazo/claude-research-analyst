@@ -4436,45 +4436,60 @@
       }
     }
 
-    // Fallback: open a print window with the same rich format (Save as PDF).
+    // Fallback: print window matching the polished server PDF letterhead.
     function _openAnalystPrintWindow(question, answerHTML, stamp) {
       const q = esc(question || '');
       if (!stamp) { try { stamp = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }); } catch (e) { stamp = ''; } }
       const w = window.open('', '_blank', 'width=900,height=1100');
       if (!w) { alert('Pop-up blocked — allow pop-ups to print.'); return; }
       w.document.write(
-        '<!doctype html><html><head><meta charset="utf-8"><title>DGA Capital — AI Analyst</title>' +
+        '<!doctype html><html><head><meta charset="utf-8"><title>DGA Capital — Research Note</title>' +
         '<style>' +
-        '@page{size:Letter;margin:0.7in}' +
+        '@page{size:Letter;margin:0.65in 0.7in 0.8in}' +
         '*{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}' +
         'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:11pt;line-height:1.55;color:#0A1628;max-width:7.1in;margin:0 auto;-webkit-font-smoothing:antialiased}' +
-        '.lh{display:flex;justify-content:space-between;align-items:flex-end;gap:12pt;font-size:8.5pt;letter-spacing:1.5px;color:#5BB8D4;border-bottom:2.5pt solid #0A1628;padding-bottom:7pt;margin-bottom:16pt;text-transform:uppercase}' +
-        '.lh b{color:#0A1628;font-weight:800;letter-spacing:1px}' +
-        '.lh .stamp{letter-spacing:0.4px;color:#64748b;font-weight:400;text-transform:none;white-space:nowrap}' +
-        '.q{font-weight:700;font-size:12pt;line-height:1.4;color:#0A1628;margin:0 0 16pt;padding:10pt 12pt;background:#f1f5f9;border-left:3pt solid #5BB8D4;border-radius:3px}' +
+        '.mast{display:flex;justify-content:space-between;align-items:center;background:#0A1628;color:#fff;padding:14pt 16pt}' +
+        '.mast .brand{font-weight:800;font-size:13pt;letter-spacing:1.2px}' +
+        '.mast .doc{color:#5BB8D4;font-size:8.5pt;font-weight:800;letter-spacing:0.9px;text-transform:uppercase;margin-top:3px}' +
+        '.mast .meta{text-align:right;font-size:8.5pt;color:#94a3b8;line-height:1.45}' +
+        '.mast .meta .conf{color:#5BB8D4;font-weight:800;letter-spacing:0.6px;font-size:8pt;text-transform:uppercase}' +
+        '.accent{height:4px;background:#5BB8D4;margin:0 0 16pt}' +
+        '.q{margin:0 0 16pt;display:flex;background:#F0F9FC;border-radius:4px;overflow:hidden}' +
+        '.q .bar{width:5px;background:#5BB8D4;flex:none}' +
+        '.q .body{padding:11pt 14pt}' +
+        '.q .label{font-size:8pt;font-weight:800;color:#5BB8D4;letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px}' +
+        '.q .text{font-weight:700;font-size:11.5pt;line-height:1.4;color:#0A1628}' +
+        '.body-label{font-size:8pt;font-weight:800;color:#94a3b8;letter-spacing:0.9px;text-transform:uppercase;margin:0 0 8pt}' +
         '.md-rendered p{margin:0 0 9pt}' +
         '.md-rendered .md-h{font-weight:800;color:#0A1628;line-height:1.3}' +
-        '.md-rendered .md-h1,.md-rendered .md-h2{font-size:13.5pt;margin:16pt 0 7pt;padding-bottom:3pt;border-bottom:1px solid #e2e8f0}' +
-        '.md-rendered .md-h3,.md-rendered .md-h4{font-size:11.5pt;color:#334155;margin:13pt 0 5pt}' +
+        '.md-rendered .md-h1{font-size:15pt;margin:4pt 0 9pt;padding-bottom:5pt;border-bottom:2.5px solid #5BB8D4}' +
+        '.md-rendered .md-h2{font-size:12.5pt;margin:16pt 0 7pt;padding-bottom:3pt;border-bottom:1px solid #cbd5e1}' +
+        '.md-rendered .md-h3,.md-rendered .md-h4{font-size:11pt;color:#1e3a5f;margin:13pt 0 5pt}' +
         '.md-rendered ul.md-list,.md-rendered ol.md-list{margin:6pt 0 11pt;padding-left:20pt}' +
-        '.md-rendered li{margin:3pt 0}' +
+        '.md-rendered li{margin:3.5pt 0}' +
         '.md-rendered strong{font-weight:700;color:#0A1628}' +
-        '.md-rendered em{font-style:italic}' +
-        '.md-rendered code{font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:0.85em;background:#f1f5f9;padding:1px 5px;border-radius:4px;color:#0A1628}' +
+        '.md-rendered em{font-style:italic;color:#334155}' +
+        '.md-rendered code{font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:0.85em;background:#eef2f7;padding:1px 5px;border-radius:4px;color:#0f2744}' +
         '.md-rendered .md-hr{border:none;border-top:1px solid #cbd5e1;margin:13pt 0}' +
-        '.md-rendered a{color:#0A1628;text-decoration:underline}' +
-        '.md-rendered table.md-table{border-collapse:collapse;width:100%;margin:11pt 0 14pt;font-size:9pt;line-height:1.4}' +
+        '.md-rendered a{color:#0A6B8A;text-decoration:underline}' +
+        '.md-rendered table.md-table{border-collapse:collapse;width:100%;margin:11pt 0 14pt;font-size:9pt;line-height:1.4;border:1px solid #cbd5e1}' +
         '.md-rendered table.md-table th{background:#0A1628;color:#fff;text-align:left;padding:6pt 9pt;font-weight:700;font-size:8pt;letter-spacing:0.4px;text-transform:uppercase}' +
         '.md-rendered table.md-table td{padding:5pt 9pt;border-bottom:1px solid #e2e8f0;vertical-align:top;color:#0A1628}' +
         '.md-rendered table.md-table tr:nth-child(even) td{background:#f8fafc}' +
         '.md-rendered table.md-table tr{page-break-inside:avoid}' +
         '.md-rendered thead{display:table-header-group}' +
+        '.ft{margin-top:22pt;padding-top:8pt;border-top:1px solid #e2e8f0;font-size:8pt;color:#94a3b8;text-align:center}' +
+        '.ft b{color:#0A1628}.ft .c{color:#5BB8D4;font-weight:700}' +
         '</style></head><body onload="window.print()">' +
-        '<div class="lh"><b>DGA Capital · AI Analyst</b>' +
-          (stamp ? '<span class="stamp">Confidential · ' + esc(stamp) + '</span>' : '<span class="stamp">Confidential</span>') +
-        '</div>' +
-        (q ? '<div class="q">' + q + '</div>' : '') +
+        '<div class="mast"><div><div class="brand">DGA CAPITAL</div><div class="doc">Research Note</div></div>' +
+          '<div class="meta"><div class="conf">Confidential</div>' +
+          (stamp ? '<div>' + esc(stamp) + '</div>' : '') +
+          '<div>DGA Capital</div></div></div>' +
+        '<div class="accent"></div>' +
+        (q ? '<div class="q"><div class="bar"></div><div class="body"><div class="label">Question</div><div class="text">' + q + '</div></div></div>' : '') +
+        '<div class="body-label">Analysis</div>' +
         '<div class="md-rendered">' + answerHTML + '</div>' +
+        '<div class="ft"><b>DGA Capital</b> · <span class="c">Confidential</span> — for the intended recipient only · Not investment advice</div>' +
         '</body></html>');
       w.document.close();
     }

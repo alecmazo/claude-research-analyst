@@ -6342,7 +6342,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui92-20260720-ayi-loan-inkind"
+WEB_BUILD_VERSION = "ui93-20260720-agentic-pdf-polish"
 
 
 @app.get("/api/build")
@@ -23787,12 +23787,11 @@ def _fix_md_table_widths(html: str) -> str:
 
 def _dga_research_pdf_html(title: str, question: str, answer_html: str,
                            stamp: str = "") -> str:
-    """Wrap client-rendered `.md-rendered` HTML in the DGA Capital PDF template.
+    """Wrap client-rendered `.md-rendered` HTML in a polished DGA Capital PDF.
 
-    CSS is written for xhtml2pdf (pure-Python, builds on reportlab — no native
-    libraries, so it renders on Railway where WeasyPrint's pango/cairo are not
-    installed). The subset used here (tables, borders, backgrounds, @frame
-    footer, pagenumber) renders essentially identical to the on-screen View."""
+    Institutional letterhead for agentic saved-analysis / email PDFs.
+    CSS is written for xhtml2pdf (reportlab) — tables only for layout, no flex.
+    """
     import html as _html
     from datetime import datetime as _dt
     if not stamp:
@@ -23800,81 +23799,191 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
             stamp = _dt.now().strftime("%B %d, %Y · %-I:%M %p")
         except Exception:
             stamp = _dt.now().strftime("%B %d, %Y")
-    # Subtitle next to the logo. The AI Analyst PDFs/emails show the logo ONLY
-    # (no "Analyst" label, per request); other docs (e.g. the Portfolio
-    # Strategist's "Investment Committee Review") keep their subtitle.
-    sub_raw = (title or "")
-    if sub_raw.strip().lower() in ("ai analyst", "analyst", ""):
-        sub_raw = ""
-    title_e = _html.escape(sub_raw)
+    # Doc-type label under the wordmark. Bare "Analyst" becomes "Research Note".
+    raw_title = (title or "").strip()
+    if raw_title.lower() in ("ai analyst", "analyst", ""):
+        doc_label = "Research Note"
+        show_doc_type = True
+    else:
+        doc_label = raw_title
+        show_doc_type = True
+    title_e = _html.escape(doc_label)
     q_e     = _html.escape(question or "")
+    stamp_e = _html.escape(stamp)
     logo    = _dga_logo_data_uri()
+    # Navy #0A1628 · Cyan #5BB8D4 · Slate neutrals — matches desk chrome
     css = """
       @font-face { font-family: "DejaVuSans"; src: url(DejaVuSans.ttf); }
       @font-face { font-family: "DejaVuSans"; src: url(DejaVuSans-Bold.ttf); font-weight: bold; }
       @font-face { font-family: "DejaVuSans"; src: url(DejaVuSans-Oblique.ttf); font-style: italic; }
       @font-face { font-family: "DejaVuSans"; src: url(DejaVuSans-BoldOblique.ttf); font-weight: bold; font-style: italic; }
-      @page { size: letter; margin: 1.6cm 1.5cm 2.1cm;
-        @frame footer_frame { -pdf-frame-content: footerContent;
-                              bottom: 1cm; margin-left: 1.5cm; margin-right: 1.5cm; height: 1cm; } }
-      body { font-family: "DejaVuSans"; font-size: 8.5pt; line-height: 1.5; color: #0A1628; }
-      table.lh { width: 100%; border-bottom: 2px solid #0A1628; margin-bottom: 12pt; }
-      table.lh td { padding-bottom: 7pt; vertical-align: middle; }
-      .sub { color: #5BB8D4; font-size: 8pt; font-weight: bold; }
-      .stamp { text-align: right; font-size: 7pt; color: #64748b; }
-      .q { font-weight: bold; font-size: 8.5pt; color: #0A1628; margin-bottom: 12pt;
-           padding: 8pt 10pt; background-color: #f1f5f9; border-left: 3pt solid #5BB8D4; }
-      .md-rendered .md-h { font-weight: bold; color: #0A1628; }
-      .md-rendered .md-h1, .md-rendered .md-h2 { font-size: 10.5pt; margin-top: 13pt;
-           margin-bottom: 4pt; border-bottom: 1px solid #e2e8f0; padding-bottom: 2pt; }
-      .md-rendered .md-h3, .md-rendered .md-h4 { font-size: 9pt; color: #334155;
-           margin-top: 10pt; margin-bottom: 4pt; }
-      .md-rendered p { margin-top: 0; margin-bottom: 7pt; }
-      .md-rendered ul.md-list, .md-rendered ol.md-list { margin-top: 4pt; margin-bottom: 8pt; }
-      .md-rendered li { margin-bottom: 3pt; }
+      @page {
+        size: letter;
+        margin: 1.35cm 1.45cm 2.15cm 1.45cm;
+        @frame footer_frame {
+          -pdf-frame-content: footerContent;
+          bottom: 0.75cm; margin-left: 1.45cm; margin-right: 1.45cm; height: 1.15cm;
+        }
+      }
+      body {
+        font-family: "DejaVuSans"; font-size: 9pt; line-height: 1.55;
+        color: #0A1628;
+      }
+      /* ── Masthead ─────────────────────────────────────────── */
+      table.mast {
+        width: 100%; border: none; margin: 0 0 0 0;
+        background-color: #0A1628;
+      }
+      table.mast td { border: none; vertical-align: middle; padding: 11pt 12pt; }
+      .mast-wordmark {
+        font-size: 11pt; font-weight: bold; color: #ffffff;
+        letter-spacing: 1.2pt;
+      }
+      .mast-doc {
+        font-size: 7.5pt; font-weight: bold; color: #5BB8D4;
+        letter-spacing: 0.9pt; text-transform: uppercase;
+      }
+      .mast-meta {
+        text-align: right; font-size: 7pt; color: #94a3b8; line-height: 1.45;
+      }
+      .mast-meta .conf {
+        color: #5BB8D4; font-weight: bold; letter-spacing: 0.6pt;
+        font-size: 6.5pt; text-transform: uppercase;
+      }
+      /* cyan accent bar under masthead */
+      table.accent { width: 100%; border: none; margin: 0 0 14pt 0; }
+      table.accent td {
+        border: none; padding: 0; height: 3.5pt;
+        background-color: #5BB8D4; font-size: 1pt; line-height: 1pt;
+      }
+      /* ── Question callout ─────────────────────────────────── */
+      table.qbox {
+        width: 100%; border: none; margin: 0 0 14pt 0;
+        background-color: #F0F9FC;
+      }
+      table.qbox td.qbar {
+        border: none; width: 4.5pt; background-color: #5BB8D4;
+        font-size: 1pt; padding: 0;
+      }
+      table.qbox td.qbody {
+        border: none; padding: 9pt 12pt 9pt 11pt; vertical-align: top;
+      }
+      .qlabel {
+        font-size: 6.5pt; font-weight: bold; color: #5BB8D4;
+        letter-spacing: 0.8pt; text-transform: uppercase; margin-bottom: 3pt;
+      }
+      .qtext {
+        font-size: 9pt; font-weight: bold; color: #0A1628; line-height: 1.4;
+      }
+      /* ── Body prose ───────────────────────────────────────── */
+      .body-label {
+        font-size: 6.5pt; font-weight: bold; color: #94a3b8;
+        letter-spacing: 0.9pt; text-transform: uppercase;
+        margin: 2pt 0 6pt 0;
+      }
+      .md-rendered .md-h { font-weight: bold; color: #0A1628; page-break-after: avoid; }
+      .md-rendered .md-h1 {
+        font-size: 13pt; margin-top: 2pt; margin-bottom: 8pt;
+        color: #0A1628; letter-spacing: -0.2pt;
+        border-bottom: 1.5pt solid #5BB8D4; padding-bottom: 4pt;
+      }
+      .md-rendered .md-h2 {
+        font-size: 11pt; margin-top: 14pt; margin-bottom: 5pt;
+        color: #0A1628; border-bottom: 0.75pt solid #cbd5e1; padding-bottom: 3pt;
+      }
+      .md-rendered .md-h3, .md-rendered .md-h4 {
+        font-size: 9.5pt; color: #1e3a5f; margin-top: 11pt; margin-bottom: 4pt;
+      }
+      .md-rendered p { margin-top: 0; margin-bottom: 7.5pt; }
+      .md-rendered ul.md-list, .md-rendered ol.md-list {
+        margin-top: 3pt; margin-bottom: 9pt; padding-left: 14pt;
+      }
+      .md-rendered li { margin-bottom: 3.5pt; }
       .md-rendered strong { font-weight: bold; color: #0A1628; }
-      .md-rendered em { font-style: italic; }
-      .md-rendered code { font-family: Courier; background-color: #f1f5f9; font-size: 7.5pt; }
-      .md-rendered hr.md-hr { border: 0; border-top: 1px solid #cbd5e1; margin-top: 10pt; margin-bottom: 10pt; }
-      .md-rendered a { color: #0A1628; }
-      .md-rendered table.md-table { width: 100%; margin-top: 7pt; margin-bottom: 11pt;
-           font-size: 8pt; }
-      .md-rendered table.md-table th { background-color: #0A1628; color: #ffffff;
-           text-align: left; padding: 5pt 8pt; font-weight: bold; font-size: 7pt; }
-      .md-rendered table.md-table td { padding: 4pt 8pt; border-bottom: 1px solid #e2e8f0;
-           color: #0A1628; }
-      #footerContent { font-size: 6.5pt; color: #94a3b8; text-align: center; }
+      .md-rendered em { font-style: italic; color: #334155; }
+      .md-rendered code {
+        font-family: Courier; background-color: #eef2f7; font-size: 7.5pt;
+        color: #0f2744;
+      }
+      .md-rendered hr.md-hr {
+        border: 0; border-top: 0.75pt solid #cbd5e1;
+        margin-top: 11pt; margin-bottom: 11pt;
+      }
+      .md-rendered a { color: #0A6B8A; text-decoration: underline; }
+      .md-rendered table.md-table {
+        width: 100%; margin-top: 8pt; margin-bottom: 12pt;
+        font-size: 7.5pt; border: 0.5pt solid #cbd5e1;
+        -pdf-keep-with-next: false;
+      }
+      .md-rendered table.md-table th {
+        background-color: #0A1628; color: #ffffff;
+        text-align: left; padding: 5.5pt 7pt; font-weight: bold;
+        font-size: 6.5pt; letter-spacing: 0.4pt; text-transform: uppercase;
+      }
+      .md-rendered table.md-table td {
+        padding: 4.5pt 7pt; border-bottom: 0.4pt solid #e2e8f0;
+        color: #0A1628; vertical-align: top;
+      }
+      /* ── Footer ───────────────────────────────────────────── */
+      #footerContent {
+        font-size: 6.5pt; color: #94a3b8; text-align: center;
+        border-top: 0.6pt solid #e2e8f0; padding-top: 5pt;
+      }
+      #footerContent .fnavy { color: #0A1628; font-weight: bold; }
+      #footerContent .fcyan { color: #5BB8D4; font-weight: bold; }
     """
-    # Logo + subtitle in a nested table so the "· Analyst" label sits vertically
-    # CENTERED against the logo (xhtml2pdf won't vertically align an inline image
-    # with adjacent text, which left the label dangling at the logo's bottom).
-    if logo and title_e:
-        # Fixed-width nested table (NOT full width — that's what spread the logo
-        # and label apart) so the label sits right beside the logo, centered.
-        brand_block = (
-            '<table style="width:188px;border:none;"><tr>'
-            f'<td style="border:none;padding:0;vertical-align:middle;width:86px;">'
-            f'<img src="{logo}" width="84" height="24" alt="DGA Capital" /></td>'
-            f'<td style="border:none;padding:0 0 1px 0;vertical-align:middle;">'
-            f'<span class="sub">&middot; {title_e}</span></td>'
-            '</tr></table>')
-    elif logo:
-        brand_block = f'<img src="{logo}" width="84" height="24" alt="DGA Capital" />'
+    if logo:
+        logo_cell = (
+            f'<img src="{logo}" width="92" height="26" alt="DGA Capital" />'
+        )
     else:
-        brand_block = '<span style="font-size:12pt;font-weight:bold;color:#0A1628;">DGA CAPITAL</span>'
-        if title_e:
-            brand_block += f' <span class="sub">&middot; {title_e}</span>'
-    head = (f'<table class="lh"><tr>'
-            f'<td style="vertical-align:middle;">{brand_block}</td>'
-            f'<td style="vertical-align:middle;"><div class="stamp">CONFIDENTIAL &middot; {_html.escape(stamp)}</div></td>'
-            f'</tr></table>')
-    qhtml = (f'<div class="q">{q_e}</div>') if q_e else ''
-    footer = ('<div id="footerContent">DGA Capital &middot; Confidential — for the intended '
-              'recipient only &middot; Page <pdf:pagenumber> of <pdf:pagecount></div>')
-    return (f'<!doctype html><html><head><meta charset="utf-8">'
-            f'<style>{css}</style></head><body>'
-            f'{footer}{head}{qhtml}<div class="md-rendered">{_fix_md_table_widths(answer_html or "")}</div>'
-            f'</body></html>')
+        logo_cell = '<span class="mast-wordmark">DGA CAPITAL</span>'
+    doc_type_html = (
+        f'<div class="mast-doc">{title_e}</div>' if show_doc_type and title_e else ""
+    )
+    head = (
+        f'<table class="mast"><tr>'
+        f'<td style="width:58%;">'
+        f'{logo_cell}{doc_type_html}'
+        f'</td>'
+        f'<td class="mast-meta">'
+        f'<div class="conf">Confidential</div>'
+        f'<div>{stamp_e}</div>'
+        f'<div>DGA Capital</div>'
+        f'</td>'
+        f'</tr></table>'
+        f'<table class="accent"><tr><td>&nbsp;</td></tr></table>'
+    )
+    if q_e:
+        qhtml = (
+            f'<table class="qbox"><tr>'
+            f'<td class="qbar">&nbsp;</td>'
+            f'<td class="qbody">'
+            f'<div class="qlabel">Question</div>'
+            f'<div class="qtext">{q_e}</div>'
+            f'</td></tr></table>'
+        )
+    else:
+        qhtml = ""
+    body_label = '<div class="body-label">Analysis</div>'
+    footer = (
+        '<div id="footerContent">'
+        '<span class="fnavy">DGA Capital</span>'
+        ' &nbsp;&middot;&nbsp; '
+        '<span class="fcyan">Confidential</span>'
+        ' — for the intended recipient only &nbsp;&middot;&nbsp; '
+        'Not investment advice &nbsp;&middot;&nbsp; '
+        'Page <pdf:pagenumber> of <pdf:pagecount>'
+        '</div>'
+    )
+    body = _fix_md_table_widths(answer_html or "")
+    return (
+        f'<!doctype html><html><head><meta charset="utf-8">'
+        f'<style>{css}</style></head><body>'
+        f'{footer}{head}{qhtml}{body_label}'
+        f'<div class="md-rendered">{body}</div>'
+        f'</body></html>'
+    )
 
 
 _FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "fonts")
@@ -23989,22 +24098,32 @@ def research_email_pdf(body: ResearchPdfRequest, request: Request):
     except Exception as e:
         raise HTTPException(500, f"PDF render failed: {e!s:.200}")
     import html as _html
-    # Drop the word "Analyst" from analyst emails; keep a real label (e.g. the
-    # Strategist's "Investment Committee Review") when present.
+    # Bare "Analyst" → Research Note for subject/body (matches PDF letterhead).
     _t = (body.title or "").strip()
-    doc_label = "" if _t.lower() in ("ai analyst", "analyst", "") else _t
-    subject = (body.subject or (f"DGA Capital — {doc_label}" if doc_label
-                                else "DGA Capital — Research Note")).strip()
-    lead = (f'Please find the attached <strong>{_html.escape(doc_label)}</strong> report from DGA Capital.'
-            if doc_label else 'Please find the attached research note from DGA Capital.')
-    q_line  = (f'<p style="color:#475569;font-size:14px;">{_html.escape(body.question)}</p>'
-               if body.question else '')
+    doc_label = (
+        "Research Note" if _t.lower() in ("ai analyst", "analyst", "") else _t
+    )
+    subject = (body.subject or f"DGA Capital — {doc_label}").strip()
+    q_esc = _html.escape(body.question) if body.question else ""
     email_html = (
         '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
-        'color:#0A1628;">'
-        f'<p>{lead}</p>' + q_line +
-        '<p style="color:#94a3b8;font-size:12px;margin-top:18px;">DGA Capital · Confidential — '
-        'for the intended recipient only. Not investment advice.</p></div>')
+        'color:#0A1628;max-width:560px;">'
+        '<div style="background:#0A1628;padding:16px 18px;border-radius:8px 8px 0 0;">'
+        '<div style="color:#fff;font-weight:800;font-size:15px;letter-spacing:0.6px;">DGA CAPITAL</div>'
+        f'<div style="color:#5BB8D4;font-size:11px;font-weight:700;letter-spacing:0.8px;'
+        f'text-transform:uppercase;margin-top:3px;">{_html.escape(doc_label)}</div>'
+        '</div>'
+        '<div style="border:1px solid #e2e8f0;border-top:3px solid #5BB8D4;'
+        'padding:16px 18px;border-radius:0 0 8px 8px;">'
+        f'<p style="margin:0 0 12px;font-size:14px;line-height:1.5;">'
+        f'Please find the attached <strong>{_html.escape(doc_label)}</strong> from DGA Capital.</p>'
+        + (f'<div style="background:#F0F9FC;border-left:3px solid #5BB8D4;padding:10px 12px;'
+           f'margin:0 0 14px;font-size:13px;font-weight:600;line-height:1.4;">{q_esc}</div>'
+           if q_esc else '')
+        + '<p style="color:#94a3b8;font-size:11px;margin:0;line-height:1.45;">'
+        'DGA Capital · Confidential — for the intended recipient only. '
+        'Not investment advice.</p></div></div>'
+    )
     res = _send_email_with_pdf_attachment(
         to_addr, subject, email_html, pdf, _research_pdf_filename(body))
     if not res.get("ok"):
