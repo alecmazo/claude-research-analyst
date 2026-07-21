@@ -6342,7 +6342,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui94-20260720-pdf-light-mast"
+WEB_BUILD_VERSION = "ui95-20260720-pdf-logo-bigger"
 
 
 @app.get("/api/build")
@@ -23934,9 +23934,9 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
       #footerContent .fcyan { color: #5BB8D4; font-weight: bold; }
     """
     if logo:
-        # Compact wordmark — ~½ prior mast height (padding + logo)
+        # Larger wordmark on light mast; keep tight padding so header stays compact
         logo_cell = (
-            f'<img src="{logo}" width="72" height="20" alt="DGA Capital" />'
+            f'<img src="{logo}" width="120" height="34" alt="DGA Capital" />'
         )
     else:
         logo_cell = '<span class="mast-wordmark">DGA CAPITAL</span>'
