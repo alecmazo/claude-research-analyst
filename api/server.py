@@ -6342,7 +6342,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui95-20260720-pdf-logo-bigger"
+WEB_BUILD_VERSION = "ui96-20260720-inkind-loan-narrow"
 
 
 @app.get("/api/build")
@@ -30407,12 +30407,38 @@ _SNAP_FLOW_TYPES  = {"CONTRIBUTION", "DEPOSIT", "WITHDRAWAL", "TRANSFER",
                      "TRANSFER_IN", "TRANSFER_OUT", "FUNDING", "ACATS",
                      "ACATS_TRANSFER", "ACATS_TRANSFER_IN", "ACATS_TRANSFER_OUT",
                      "IN_KIND", "IN_KIND_TRANSFER"}
-# SnapTrade/Fidelity sometimes mis-labels in-kind share inserts as LOAN
-# (EM-DEF AYI 2026-07-10: type=LOAN, desc="RECEIVED FROM YOU ACUITY INC. (AYI)",
-# units=1147, amount=$382k). Detect those separately — never treat pure cash
-# loans without units as equity inserts.
+# SnapTrade/Fidelity sometimes mis-labels true external in-kind share inserts
+# as LOAN (EM-DEF AYI 2026-07-10: type=LOAN,
+# desc="RECEIVED FROM YOU ACUITY INC. (AYI)", units=1147, amount=$382k).
+# Only those — never bare LOAN+units+symbol (AL-DEF IBRX/BKLN securities
+# lending & ordinary bookkeeping were wrongly turned into YTD cash-flow lines).
 _SNAP_MISLABEL_XFER_TYPES = {"LOAN", "JOURNAL", "ADJUSTMENT", "REORG",
                              "REORGANIZATION", "CORPORATE_ACTION"}
+# Description language that marks a personal/custodial share move (in-kind).
+# Require these for LOAN/JOURNAL etc. — do NOT use bare "RECEIVED FROM"
+# (too broad) or units+symbol alone.
+_SNAP_INKIND_DESC_KW = (
+    "RECEIVED FROM YOU",   # Fidelity external insert (AYI)
+    "DELIVERED TO YOU",
+    "DELIVERED FROM YOU",
+    "IN KIND",
+    "IN-KIND",
+    "TRANSFERRED FROM",
+    "TRANSFERRED TO",
+    "ACATS",
+    "JOURNALED SHARES",
+    "JOURNALED TO",
+    "JOURNALED FROM",
+)
+# Securities-lending bookkeeping — type=LOAN with units, NOT an equity insert.
+_SNAP_SECLEND_DESC_KW = (
+    "YOU LOANED",
+    "LOAN RETURNED",
+    "SECURITIES LOANED",
+    "SECURITIES LENDING",
+    "LENT SECURITIES",
+    "STOCK LOAN",
+)
 # Income/expense buckets for the automatic monthly balance records.
 _SNAP_DIV_TYPES   = {"DIVIDEND", "CASH_DIVIDEND"}
 _SNAP_INT_TYPES   = {"INTEREST"}
@@ -30424,8 +30450,10 @@ def _snap_is_inkind_equity_insert(type_: str | None, units, amount,
                                  symbol: str | None = None) -> bool:
     """True when a row is an equity share insert/out (in-kind) for YTD math.
 
-    Handles both normal TRANSFER* types and Fidelity/SnapTrade mislabels
-    (LOAN + RECEIVED FROM YOU + units + marked cash amount).
+    - Explicit TRANSFER* / ACATS / IN_KIND types with share units → yes.
+    - Mislabel LOAN/JOURNAL only when description shows personal transfer
+      language (e.g. RECEIVED FROM YOU). Bare LOAN+units+symbol is NOT enough
+      (securities lending, Fidelity loan bookkeeping on long holds like BKLN).
     """
     t = (type_ or "").upper().strip()
     d = (description or "").upper()
@@ -30439,21 +30467,21 @@ def _snap_is_inkind_equity_insert(type_: str | None, units, amount,
         amt = 0.0
     if u < 1e-9:
         return False
+    # Never treat securities-lending legs as portfolio cash flows
+    if any(kw in d for kw in _SNAP_SECLEND_DESC_KW):
+        return False
+    # Real transfer/ACATS types with units are in-kind share moves
     if t in _SNAP_FLOW_TYPES:
         return True
-    # Explicit in-kind language in the description
-    _desc_hit = any(kw in d for kw in (
-        "RECEIVED FROM YOU", "RECEIVED FROM", "IN KIND", "IN-KIND",
-        "TRANSFERRED FROM", "TRANSFERRED TO", "ACATS",
-    ))
+    _desc_hit = any(kw in d for kw in _SNAP_INKIND_DESC_KW)
+    if not _desc_hit:
+        return False
+    # Mislabel types (LOAN, JOURNAL, …): need explicit transfer language +
+    # units (amount optional — some pure unit journals ship amount=0)
     if t in _SNAP_MISLABEL_XFER_TYPES:
-        # LOAN with share units + a large cash mark = in-kind equity insert
-        if abs(amt) > 1e-6 and (symbol or _desc_hit):
-            return True
-        if _desc_hit:
-            return True
-    # Description alone (any type) with units + cash mark
-    if _desc_hit and abs(amt) > 1e-6 and symbol:
+        return True
+    # Any other type with explicit in-kind language + marked cash value + symbol
+    if abs(amt) > 1e-6 and symbol:
         return True
     return False
 
