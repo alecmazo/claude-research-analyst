@@ -6342,7 +6342,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui91-20260720-pulse-age-utc"
+WEB_BUILD_VERSION = "ui92-20260720-ayi-loan-inkind"
 
 
 @app.get("/api/build")
@@ -30287,10 +30287,55 @@ _SNAP_FLOW_TYPES  = {"CONTRIBUTION", "DEPOSIT", "WITHDRAWAL", "TRANSFER",
                      "TRANSFER_IN", "TRANSFER_OUT", "FUNDING", "ACATS",
                      "ACATS_TRANSFER", "ACATS_TRANSFER_IN", "ACATS_TRANSFER_OUT",
                      "IN_KIND", "IN_KIND_TRANSFER"}
+# SnapTrade/Fidelity sometimes mis-labels in-kind share inserts as LOAN
+# (EM-DEF AYI 2026-07-10: type=LOAN, desc="RECEIVED FROM YOU ACUITY INC. (AYI)",
+# units=1147, amount=$382k). Detect those separately — never treat pure cash
+# loans without units as equity inserts.
+_SNAP_MISLABEL_XFER_TYPES = {"LOAN", "JOURNAL", "ADJUSTMENT", "REORG",
+                             "REORGANIZATION", "CORPORATE_ACTION"}
 # Income/expense buckets for the automatic monthly balance records.
 _SNAP_DIV_TYPES   = {"DIVIDEND", "CASH_DIVIDEND"}
 _SNAP_INT_TYPES   = {"INTEREST"}
 _SNAP_FEE_TYPES   = {"FEE", "MANAGEMENT_FEE", "ADMINISTRATIVE_FEE"}
+
+
+def _snap_is_inkind_equity_insert(type_: str | None, units, amount,
+                                 description: str | None = None,
+                                 symbol: str | None = None) -> bool:
+    """True when a row is an equity share insert/out (in-kind) for YTD math.
+
+    Handles both normal TRANSFER* types and Fidelity/SnapTrade mislabels
+    (LOAN + RECEIVED FROM YOU + units + marked cash amount).
+    """
+    t = (type_ or "").upper().strip()
+    d = (description or "").upper()
+    try:
+        u = abs(float(units) if units is not None else 0.0)
+    except (TypeError, ValueError):
+        u = 0.0
+    try:
+        amt = float(amount) if amount is not None else 0.0
+    except (TypeError, ValueError):
+        amt = 0.0
+    if u < 1e-9:
+        return False
+    if t in _SNAP_FLOW_TYPES:
+        return True
+    # Explicit in-kind language in the description
+    _desc_hit = any(kw in d for kw in (
+        "RECEIVED FROM YOU", "RECEIVED FROM", "IN KIND", "IN-KIND",
+        "TRANSFERRED FROM", "TRANSFERRED TO", "ACATS",
+    ))
+    if t in _SNAP_MISLABEL_XFER_TYPES:
+        # LOAN with share units + a large cash mark = in-kind equity insert
+        if abs(amt) > 1e-6 and (symbol or _desc_hit):
+            return True
+        if _desc_hit:
+            return True
+    # Description alone (any type) with units + cash mark
+    if _desc_hit and abs(amt) > 1e-6 and symbol:
+        return True
+    return False
 
 
 def _snap_activity_cash_value(units, price, amount) -> float:
@@ -30561,12 +30606,14 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         SIGNED (sells negative) — |units| with direction from TYPE; option
         rows stay out (assignment SHARE legs arrive as plain SELLs); rows
         missing units/price credit cost/proceeds from |amount|. TRANSFER rows
-        WITH units are in-kind share moves at the transfer's marked value."""
+        WITH units are in-kind share moves at the transfer's marked value.
+        LOAN + RECEIVED FROM YOU (Fidelity/SnapTrade) is also an in-kind insert."""
         t = (r["type"] or "").upper()
         u   = float(r["units"] or 0)
         px  = float(r["price"] or 0)
         amt = float(r["amount"] or 0)
-        opt = r["opt"]
+        desc = (r.get("description") or r.get("desc") or "") if isinstance(r, dict) else ""
+        opt = r["opt"] if "opt" in r else r.get("opt")
         if isinstance(opt, str):
             try:
                 opt = json.loads(opt)
@@ -30576,19 +30623,29 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
             return
         u_abs = abs(u)
         gross = (u_abs * px) if (u_abs and px) else abs(amt)
-        if t in _SNAP_FLOW_TYPES:
+        _is_xfer = _snap_is_inkind_equity_insert(
+            t, u, amt, description=desc, symbol=r.get("symbol") if isinstance(r, dict) else None
+        ) or t in _SNAP_FLOW_TYPES
+        if _is_xfer:
             # Transfers move SHARES + a marked value. Value = |amount| when set,
             # else |units|×|price| (SnapTrade often sends amount:0 for pure
             # in-kind). EXTERNAL unmatched transfer-IN is treated as cash-in
             # + same-day buy at that value — no pre-entry YTD credit.
             if u_abs > 1e-9:
                 val = _snap_activity_cash_value(u, px, amt)
-                side = "in" if u > 0 else "out"
-                e["net_units"] += u_abs if u > 0 else -u_abs
+                # Direction: units sign, else amount sign, else description
+                if abs(u) > 1e-12:
+                    side = "in" if u > 0 else "out"
+                elif abs(amt) > 1e-12:
+                    side = "in" if amt > 0 else "out"
+                else:
+                    d_up = desc.upper()
+                    side = "out" if ("TRANSFERRED TO" in d_up or "TRANSFER OUT" in d_up) else "in"
+                e["net_units"] += u_abs if side == "in" else -u_abs
                 e[f"xfer_{side}_units"] = e.get(f"xfer_{side}_units", 0.0) + u_abs
                 if val > 0:
                     e[f"xfer_{side}_val"] = e.get(f"xfer_{side}_val", 0.0) + val
-                    e["xfer_net_val"] = e.get("xfer_net_val", 0.0) + (val if u > 0 else -val)
+                    e["xfer_net_val"] = e.get("xfer_net_val", 0.0) + (val if side == "in" else -val)
                 else:
                     e[f"xfer_{side}_unval"] = e.get(f"xfer_{side}_unval", 0.0) + u_abs
                 e["had_unit_transfer"] = True
@@ -30615,7 +30672,8 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
 
     cur.execute("""
         SELECT a.symbol, a.type, a.units, a.price, a.amount,
-               a.raw_json -> 'option_symbol' AS opt
+               a.raw_json -> 'option_symbol' AS opt,
+               COALESCE(a.description, a.raw_json->>'description', '') AS description
           FROM snaptrade_activities a
           JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
          WHERE sa.fund_id = %s AND a.trade_date >= %s AND a.symbol IS NOT NULL
@@ -30625,7 +30683,9 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         sym = (r["symbol"] or "").strip()
         if not sym:
             continue
-        _apply_row(trades.setdefault(sym, _new_agg()), r)
+        # RealDictCursor rows support key access; pass dict for description
+        row = dict(r) if not isinstance(r, dict) else r
+        _apply_row(trades.setdefault(sym, _new_agg()), row)
 
     # CROSS-ACCOUNT LEG MATCH: an in-kind transfer between Alec's OWN linked
     # accounts is consolidation, not new money — but the fix must be scoped
@@ -31056,7 +31116,9 @@ def _snaptrade_rebuild_balance_history(cur, fund_id: str) -> dict | None:
     # jumps with zero flow inflate TWRR/MWRR (EM-DEF AYI case).
     cur.execute("""
         SELECT date_trunc('month', trade_date)::date AS mo, type,
-               units, price, amount, COALESCE(ABS(COALESCE(fee,0)),0) AS fee
+               units, price, amount, COALESCE(ABS(COALESCE(fee,0)),0) AS fee,
+               COALESCE(description, raw_json->>'description', '') AS description,
+               symbol
           FROM snaptrade_activities
          WHERE account_id = ANY(%s) AND trade_date IS NOT NULL
     """, (acct_ids,))
@@ -31069,10 +31131,16 @@ def _snaptrade_rebuild_balance_history(cur, fund_id: str) -> dict | None:
                                            "dividends": 0.0, "interest": 0.0, "fees": 0.0})
         t = (r["type"] or "").upper()
         b["fees"] += float(r["fee"] or 0)
-        if t in _SNAP_FLOW_TYPES:
-            u = float(r["units"] or 0)
-            px = float(r["price"] or 0)
-            raw_amt = float(r["amount"] or 0)
+        u = float(r["units"] or 0)
+        px = float(r["price"] or 0)
+        raw_amt = float(r["amount"] or 0)
+        desc = r.get("description") or ""
+        _is_flow = (
+            t in _SNAP_FLOW_TYPES
+            or _snap_is_inkind_equity_insert(t, u, raw_amt, description=desc,
+                                            symbol=r.get("symbol"))
+        )
+        if _is_flow:
             val = _snap_activity_cash_value(u, px, raw_amt)
             # Direction: prefer amount sign; for pure unit transfers use unit sign
             # (units > 0 = shares in = deposit; units < 0 = shares out = withdrawal)
@@ -31211,18 +31279,49 @@ def _snaptrade_rebuild_balance_history(cur, fund_id: str) -> dict | None:
             if prev.get(k) is not None:
                 overview[k] = prev[k]
     if has_acts:
+        # Include LOAN/RECEIVED-FROM-YOU equity inserts as deposit flows
+        # (same class as TRANSFER_IN) so the UI cash-flow list matches YTD math.
         cur.execute("""
-            SELECT trade_date, type, symbol, amount FROM snaptrade_activities
-             WHERE account_id = ANY(%s) AND type = ANY(%s)
+            SELECT trade_date, type, symbol, amount, units, price,
+                   COALESCE(description, raw_json->>'description', '') AS description
+              FROM snaptrade_activities
+             WHERE account_id = ANY(%s)
                AND EXTRACT(YEAR FROM trade_date) = %s
              ORDER BY trade_date DESC
-        """, (acct_ids, list(_SNAP_FLOW_TYPES), yr))
-        overview["flows"] = [
-            {"date": r["trade_date"].isoformat() if r["trade_date"] else None,
-             "action": (r["type"] or "").replace("_", " ").title(),
-             "symbol": r["symbol"],
-             "amount": float(r["amount"]) if r["amount"] is not None else None}
-            for r in cur.fetchall()]
+        """, (acct_ids, yr))
+        _flow_rows = []
+        for r in cur.fetchall():
+            t = (r["type"] or "").upper()
+            u = float(r["units"] or 0)
+            amt = float(r["amount"]) if r["amount"] is not None else 0.0
+            if not (
+                t in _SNAP_FLOW_TYPES
+                or _snap_is_inkind_equity_insert(
+                    t, u, amt, description=r.get("description"), symbol=r.get("symbol")
+                )
+            ):
+                continue
+            val = _snap_activity_cash_value(u, r.get("price"), amt)
+            if abs(amt) > 1e-9:
+                signed = amt
+            elif abs(u) > 1e-9:
+                signed = val if u > 0 else -val
+            else:
+                signed = val
+            if abs(signed) < 1e-9 and abs(val) < 1e-9:
+                continue
+            action = (r["type"] or "").replace("_", " ").title()
+            if _snap_is_inkind_equity_insert(
+                t, u, amt, description=r.get("description"), symbol=r.get("symbol")
+            ) and t not in _SNAP_FLOW_TYPES:
+                action = "In-kind equity insert" if signed >= 0 else "In-kind equity out"
+            _flow_rows.append({
+                "date": r["trade_date"].isoformat() if r["trade_date"] else None,
+                "action": action,
+                "symbol": r["symbol"],
+                "amount": round(signed if abs(signed) > 1e-9 else (val if signed >= 0 else -val), 2),
+            })
+        overview["flows"] = _flow_rows
     elif prev and prev.get("flows") is not None:
         overview["flows"] = prev["flows"]
 
