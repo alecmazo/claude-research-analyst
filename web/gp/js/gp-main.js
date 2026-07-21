@@ -4448,12 +4448,12 @@
         '@page{size:Letter;margin:0.65in 0.7in 0.8in}' +
         '*{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}' +
         'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:11pt;line-height:1.55;color:#0A1628;max-width:7.1in;margin:0 auto;-webkit-font-smoothing:antialiased}' +
-        '.mast{display:flex;justify-content:space-between;align-items:center;background:#0A1628;color:#fff;padding:14pt 16pt}' +
-        '.mast .brand{font-weight:800;font-size:13pt;letter-spacing:1.2px}' +
-        '.mast .doc{color:#5BB8D4;font-size:8.5pt;font-weight:800;letter-spacing:0.9px;text-transform:uppercase;margin-top:3px}' +
-        '.mast .meta{text-align:right;font-size:8.5pt;color:#94a3b8;line-height:1.45}' +
-        '.mast .meta .conf{color:#5BB8D4;font-weight:800;letter-spacing:0.6px;font-size:8pt;text-transform:uppercase}' +
-        '.accent{height:4px;background:#5BB8D4;margin:0 0 16pt}' +
+        '.mast{display:flex;justify-content:space-between;align-items:center;background:#fff;color:#0A1628;padding:7pt 10pt;border-bottom:none}' +
+        '.mast .brand{font-weight:800;font-size:11pt;letter-spacing:1px;color:#0A1628}' +
+        '.mast .doc{color:#5BB8D4;font-size:7.5pt;font-weight:800;letter-spacing:0.8px;text-transform:uppercase;margin-top:1px}' +
+        '.mast .meta{text-align:right;font-size:8pt;color:#64748b;line-height:1.3}' +
+        '.mast .meta .conf{color:#0A6B8A;font-weight:800;letter-spacing:0.5px;font-size:7pt;text-transform:uppercase}' +
+        '.accent{height:2.5px;background:#5BB8D4;margin:0 0 12pt}' +
         '.q{margin:0 0 16pt;display:flex;background:#F0F9FC;border-radius:4px;overflow:hidden}' +
         '.q .bar{width:5px;background:#5BB8D4;flex:none}' +
         '.q .body{padding:11pt 14pt}' +
@@ -4484,7 +4484,7 @@
         '<div class="mast"><div><div class="brand">DGA CAPITAL</div><div class="doc">Research Note</div></div>' +
           '<div class="meta"><div class="conf">Confidential</div>' +
           (stamp ? '<div>' + esc(stamp) + '</div>' : '') +
-          '<div>DGA Capital</div></div></div>' +
+          '</div></div>' +
         '<div class="accent"></div>' +
         (q ? '<div class="q"><div class="bar"></div><div class="body"><div class="label">Question</div><div class="text">' + q + '</div></div></div>' : '') +
         '<div class="body-label">Analysis</div>' +

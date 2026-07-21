@@ -6342,7 +6342,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui93-20260720-agentic-pdf-polish"
+WEB_BUILD_VERSION = "ui94-20260720-pdf-light-mast"
 
 
 @app.get("/api/build")
@@ -23829,31 +23829,32 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
         font-family: "DejaVuSans"; font-size: 9pt; line-height: 1.55;
         color: #0A1628;
       }
-      /* ── Masthead ─────────────────────────────────────────── */
+      /* ── Masthead (light — dark DGA wordmark needs contrast) ─ */
       table.mast {
         width: 100%; border: none; margin: 0 0 0 0;
-        background-color: #0A1628;
+        background-color: #ffffff;
       }
-      table.mast td { border: none; vertical-align: middle; padding: 11pt 12pt; }
+      table.mast td { border: none; vertical-align: middle; padding: 5pt 8pt; }
       .mast-wordmark {
-        font-size: 11pt; font-weight: bold; color: #ffffff;
-        letter-spacing: 1.2pt;
+        font-size: 10pt; font-weight: bold; color: #0A1628;
+        letter-spacing: 1.0pt;
       }
       .mast-doc {
-        font-size: 7.5pt; font-weight: bold; color: #5BB8D4;
-        letter-spacing: 0.9pt; text-transform: uppercase;
+        font-size: 6.5pt; font-weight: bold; color: #5BB8D4;
+        letter-spacing: 0.8pt; text-transform: uppercase;
+        margin-top: 1pt;
       }
       .mast-meta {
-        text-align: right; font-size: 7pt; color: #94a3b8; line-height: 1.45;
+        text-align: right; font-size: 6.5pt; color: #64748b; line-height: 1.3;
       }
       .mast-meta .conf {
-        color: #5BB8D4; font-weight: bold; letter-spacing: 0.6pt;
-        font-size: 6.5pt; text-transform: uppercase;
+        color: #0A6B8A; font-weight: bold; letter-spacing: 0.5pt;
+        font-size: 6pt; text-transform: uppercase;
       }
       /* cyan accent bar under masthead */
-      table.accent { width: 100%; border: none; margin: 0 0 14pt 0; }
+      table.accent { width: 100%; border: none; margin: 0 0 10pt 0; }
       table.accent td {
-        border: none; padding: 0; height: 3.5pt;
+        border: none; padding: 0; height: 2pt;
         background-color: #5BB8D4; font-size: 1pt; line-height: 1pt;
       }
       /* ── Question callout ─────────────────────────────────── */
@@ -23933,8 +23934,9 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
       #footerContent .fcyan { color: #5BB8D4; font-weight: bold; }
     """
     if logo:
+        # Compact wordmark — ~½ prior mast height (padding + logo)
         logo_cell = (
-            f'<img src="{logo}" width="92" height="26" alt="DGA Capital" />'
+            f'<img src="{logo}" width="72" height="20" alt="DGA Capital" />'
         )
     else:
         logo_cell = '<span class="mast-wordmark">DGA CAPITAL</span>'
@@ -23949,7 +23951,6 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
         f'<td class="mast-meta">'
         f'<div class="conf">Confidential</div>'
         f'<div>{stamp_e}</div>'
-        f'<div>DGA Capital</div>'
         f'</td>'
         f'</tr></table>'
         f'<table class="accent"><tr><td>&nbsp;</td></tr></table>'
